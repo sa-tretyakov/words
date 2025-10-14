@@ -6,7 +6,7 @@
     {
       "chipFamily": "ESP32",
       "parts": [
-        { "path": "./build/esp32/words.bootloader.bin", "offset": 4096 },
+        { "path": "./build/esp32/words.ino.bootloader.bin", "offset": 4096 },
         { "path": "./build/esp32/words.ino.partitions.bin", "offset": 32768 },
         { "path": "./build/esp32/words.boot_app0.bin", "offset": 57344 },
         { "path": "./build/esp32/words.ino.esp32.bin", "offset": 65536 },
