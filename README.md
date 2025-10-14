@@ -9,4 +9,4 @@ Words — язык и интерактивная среда выполнения
 
 ### Перейдите на веб-установщик и следуйте инструкциям.
 
-## [https://github.com/sa-tretyakov/words/](https://github.com/sa-tretyakov/words/)
+## [https://sa-tretyakov.github.io/words/](https://sa-tretyakov.github.io/words/)
