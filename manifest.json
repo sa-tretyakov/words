@@ -1,0 +1,17 @@
+{
+  "name": "Words",
+  "version": "1.0",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "./build/esp32/words.bootloader.bin", "offset": 4096 },
+        { "path": "./build/esp32/words.ino.partitions.bin", "offset": 32768 },
+        { "path": "./build/esp32/words.boot_app0.bin", "offset": 57344 },
+        { "path": "./build/esp32/words.ino.esp32.bin", "offset": 65536 },
+        { "path": "./build/esp32/words.spiffs.bin", "offset": 3211264 }
+      ]
+    }
+  ]
+}
