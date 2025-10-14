@@ -1,0 +1,23 @@
+var x = 42
+const pi = 3.1415926
+print x
+print pi
+
+cont sensor
+var temp = 25
+var hum = 60
+
+cont global
+use sensor
+print temp
+print hum
+
+print json
+
+print 100
+print "Hello from literal!"
+
+body x
+body sensor
+`
+print "All tests passed!"
