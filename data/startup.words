@@ -9,9 +9,9 @@ z = 255u8i
 
 var str
 str = "Helo Words"
-
 cont config
 . str
+. CRLF
 load config.save.json
 
 context 0
@@ -27,16 +27,28 @@ var pinout0Led
 pinout0Led = 2
 pinMode pinout0Led OUTPUT
 var msg
-var count
-count = 0
 msg = " tuggle "
 : tuggleLed
 pinout0 = not pinout0
 digitalWrite pinout0Led pinout0
 ;
 +Task "tuggleLed" 100
+var count
+count = 10
+: test
+count = count + 2
+print count
+print CRLF
+;
+
 var arg
 : cube
   arg = 
   arg * arg * arg
 ;
+var v
+v = 0
+: vibor 
+v = v +
+;
+

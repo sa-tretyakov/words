@@ -52,6 +52,7 @@ void printDictionary(uint16_t addr) {
     ptr = nextPtr;
   }
 }
+
 bool addMarkerWord(const char* name) {
   size_t nameLen = strlen(name);
   if (nameLen == 0 || nameLen > 255) return false;
@@ -77,8 +78,6 @@ bool addMarkerWord(const char* name) {
   return true;
 }
 
-
-
 void pushMarker(const char* name) {
   if (!name) return;
   size_t len = strlen(name);
@@ -89,6 +88,7 @@ void pushMarker(const char* name) {
   stack[stackTop++] = (uint8_t)len;
   stack[stackTop++] = TYPE_MARKER;
 }
+
 bool addInternalWordWithData(const char* name, const uint8_t* data, uint16_t dataSize, void (*func)()) {
   if (!name || !func) return false;
   size_t nameLen = strlen(name);
@@ -133,8 +133,6 @@ bool addInternalWordWithData(const char* name, const uint8_t* data, uint16_t dat
   dictLen = nextOffset;
   return true;
 }
-
-
 
 void varWord(uint16_t callerAddr) {
   if (stackTop < 2) return;

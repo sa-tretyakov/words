@@ -33,8 +33,6 @@ void charWord(uint16_t addr) {
   stack[stackTop++] = TYPE_STRING;
 }
 
-
-
 bool valueToUint8(uint8_t type, uint8_t len, const uint8_t* data, uint8_t* out) {
   int32_t val;
   switch (type) {
@@ -190,7 +188,6 @@ void pushMarkerFunc(uint16_t addr) {
   stack[stackTop++] = TYPE_MARKER;
 }
 
-
 void dropTop(uint16_t addr) {
   if (stackTop < 2) return;
   uint8_t len = stack[stackTop - 2];
@@ -198,6 +195,7 @@ void dropTop(uint16_t addr) {
   if (len > stackTop - 2) return;
   stackTop = stackTop - 2 - len;
 }
+
 void printTop(uint16_t addr) {
   if (stackTop < 2) {
     Serial.print("<empty>");
@@ -271,8 +269,6 @@ void printTop(uint16_t addr) {
   dropTop(0);
 }
 
-
-
 void dumpDataPool(uint16_t offset, uint16_t len) {
   if (offset + len > DATA_POOL_SIZE) {
     len = DATA_POOL_SIZE - offset;
@@ -288,6 +284,7 @@ void dumpDataPool(uint16_t offset, uint16_t len) {
   if (len % 16 != 0) Serial.println();
   Serial.println();
 }
+
 void dumpDataPoolWord(uint16_t addr) {
   Serial.printf("dataPool (used %u/%u):\n", dataPoolPtr, DATA_POOL_SIZE);
   for (uint16_t i = 0; i < dataPoolPtr; i++) {

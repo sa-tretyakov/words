@@ -50,6 +50,7 @@ void addTaskWord(uint16_t addr) {
   }
   Serial.println("⚠️ +Task: full");
 }
+
 void removeTaskWord(uint16_t addr) {
   uint8_t nameType, nameLen;
   const uint8_t* nameData;

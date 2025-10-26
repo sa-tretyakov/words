@@ -202,15 +202,12 @@ void jsonWord(uint16_t addr) {
   jsonOutput->print("}");
 }
 
-
 void jsonToSerialWord(uint16_t addr) {
   jsonOutput = &Serial;
   if (jsonFile) {
     jsonFile.close();
   }
 }
-
-
 
 void jsonToFile(uint16_t addr) {
   // Имя файла должно быть на стеке

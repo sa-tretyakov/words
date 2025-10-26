@@ -6,7 +6,6 @@ bool popPin(uint8_t* outPin) {
   return valueToUint8(pinType, pinLen, pinData, outPin);
 }
 
-
 void pinModeWord(uint16_t addr) {
   uint8_t pin;
   if (!popPin(&pin)) {
@@ -105,7 +104,6 @@ void analogWriteWord(uint16_t addr) {
 
   ::analogWrite(pin, value);
 }
-
 
 void digitalReadWord(uint16_t addr) {
   uint8_t pin;

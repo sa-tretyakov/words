@@ -51,6 +51,7 @@ bool compareResult(int cmp, uint8_t op) {
     default: return false;
   }
 }
+
 bool peekStackTop(uint8_t* outType, uint8_t* outLen, const uint8_t** outData) {
   if (stackTop < 2) return false;
   *outLen = stack[stackTop - 2];
@@ -59,6 +60,7 @@ bool peekStackTop(uint8_t* outType, uint8_t* outLen, const uint8_t** outData) {
   *outData = &stack[stackTop - 2 - *outLen];
   return true;
 }
+
 bool readVariableValue(uint16_t addr, uint8_t* outType, uint8_t* outLen, const uint8_t** outData) {
   uint8_t nameLen = dictionary[addr + 2];
   uint32_t poolRef =
@@ -74,6 +76,7 @@ bool readVariableValue(uint16_t addr, uint8_t* outType, uint8_t* outLen, const u
   *outData = &dataPool[poolRef + 2];
   return true;
 }
+
 void pushValue(const uint8_t* data, uint8_t len, uint8_t type) {
   if (isStackOverflow(len + 2)) { handleStackOverflow(); return; }
   memcpy(&stack[stackTop], data, len);
@@ -288,6 +291,7 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
     pushValue(Data, Len, Type);
   }
 }
+
 void applyCompareOp(uint16_t addr, uint8_t op) {
   uint8_t argType, argLen;
   const uint8_t* argData;

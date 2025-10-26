@@ -29,6 +29,7 @@ bool popFilename(char* outPath, size_t outSize) {
   dropTop(0);
   return true;
 }
+
 void listFilesWord(uint16_t addr) {
   Serial.println("FS files:");
   File root = FILESYSTEM.open("/");
