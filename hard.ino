@@ -95,7 +95,18 @@ void mychoiceFunc(uint16_t addr) {
     uint8_t nameLen = dictionary[addr + 2];
     uint8_t storage = dictionary[addr + 3 + nameLen];
     uint8_t storageType = storage & 0x7F;
-
+  if (addr == ADDR_TMP_LIT) {
+    if (tempLiteralSize >= 2) {
+      uint8_t type = tempLiteralData[0];
+      uint8_t len = tempLiteralData[1];
+      if (tempLiteralSize >= 2 + len) {
+        pushValue(&tempLiteralData[2], len, type);
+        return;
+      }
+    }
+    pushInt(0); // fallback
+    return;
+  }
     if (storageType == STORAGE_CONT) {
       const uint8_t* valData = &dictionary[addr + 3 + nameLen + 2];
       pushValue(valData, 4, TYPE_INT);

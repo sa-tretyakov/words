@@ -29,6 +29,12 @@ uint8_t currentContext = 0; // текущий контекст (0 = global)
 int32_t maxCont = 0;
 bool compiling = false;        // флаг компиляции
 uint16_t compileTarget = 0;    // смещение в словаре для текущего слова
+// Буфер для временного литерала
+uint8_t tempLiteralData[256]; // тип(1) + длина(1) + данные(254)
+uint16_t tempLiteralSize = 0;
+
+// Адрес временного слова (фиксируем при старте)
+uint16_t ADDR_TMP_LIT = 0;
 // ========================
 // Настройки
 // ========================
@@ -267,6 +273,7 @@ uint16_t popUInt16() {
   memcpy(&value, &stack[stackTop], 2);
   return value;
 }
+
 bool isValidNumber(const String& s, bool& hasDot) {
   if (s.length() == 0) return false;
   hasDot = false;
@@ -289,6 +296,7 @@ bool isValidNumber(const String& s, bool& hasDot) {
   }
   return hasDigit;
 }
+
 // ========================
 // Печать стека
 // ========================
@@ -423,6 +431,7 @@ void printStackCompact() {
   }
   Serial.println(']');
 }
+
 void printBytes(const uint8_t* data, size_t len) {
   for (size_t i = 0; i < len; i++) {
     if (i > 0) Serial.print(" ");
@@ -430,9 +439,6 @@ void printBytes(const uint8_t* data, size_t len) {
     Serial.print(data[i], HEX);
   }
 }
-
-
-
 
 // ========================
 // Парсинг и выполнение строки
@@ -501,7 +507,7 @@ void setup() {
     return;
   }
 
-
+  tmpLit();
   // Служебные слова (storage = 0x80)
   addInternalWord(".", printTop);
   addInternalWord("print", printTop);
@@ -562,7 +568,7 @@ addInternalWord("CRLF", [](uint16_t) { pushString("\r\n"); });
   Serial.println("Words>");
   // Выполняем инициализацию одной строкой
   String tmp = "load startup.words"; // 0 = maxCont";
-  executeLine(tmp);
+  //executeLine(tmp);
   printStackCompact();
 
 

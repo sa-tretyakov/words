@@ -1,3 +1,32 @@
+void tmpLit() {
+  // Создаём временное слово "tmpLit"
+  uint8_t name[] = {'t', 'm', 'p', 'L', 'i', 't'};
+  uint8_t nameLen = 6;
+  size_t recordSize = 2 + 1 + nameLen + 1 + 1 + 4 + 4; // next+len+name+storage+context+poolRef(не используется)+funcPtr
+
+  if (dictLen + recordSize <= DICT_SIZE) {
+    uint8_t* pos = &dictionary[dictLen];
+    uint16_t next = dictLen + recordSize;
+
+    pos[0] = (next >> 0) & 0xFF;
+    pos[1] = (next >> 8) & 0xFF;
+    pos[2] = nameLen;
+    memcpy(&pos[3], name, nameLen);
+    pos[3 + nameLen] = 0x80 | STORAGE_POOLED; // internal + pooled
+    pos[3 + nameLen + 1] = 0; // context
+
+    // poolRef не используется — данные в tempLiteralData
+    uint32_t poolRef = 0xFFFFFFFF;
+    memcpy(&pos[3 + nameLen + 2], &poolRef, 4);
+
+    uint32_t funcAddr = (uint32_t)mychoiceFunc;
+    memcpy(&pos[3 + nameLen + 2 + 4], &funcAddr, 4);
+
+    ADDR_TMP_LIT = dictLen;
+    dictLen = next;
+  }
+}
+
 void notWord(uint16_t addr) {
   // Поддерживаемые типы
   if (stackTop < 2) return;
@@ -78,7 +107,10 @@ bool readVariableValue(uint16_t addr, uint8_t* outType, uint8_t* outLen, const u
 }
 
 void pushValue(const uint8_t* data, uint8_t len, uint8_t type) {
-  if (isStackOverflow(len + 2)) { handleStackOverflow(); return; }
+  if (isStackOverflow(len + 2)) {
+    handleStackOverflow();
+    return;
+  }
   memcpy(&stack[stackTop], data, len);
   stackTop += len;
   stack[stackTop++] = len;
@@ -165,38 +197,38 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
     dropTop(0);
     switch (op) {
       case OP_ADD: {
-        if ((b > 0 && a > INT8_MAX - b) || (b < 0 && a < INT8_MIN - b)) {
-          pushInt((int32_t)a + (int32_t)b);
-        } else {
-          pushInt8(a + b);
+          if ((b > 0 && a > INT8_MAX - b) || (b < 0 && a < INT8_MIN - b)) {
+            pushInt((int32_t)a + (int32_t)b);
+          } else {
+            pushInt8(a + b);
+          }
+          break;
         }
-        break;
-      }
       case OP_SUB: {
-        if ((b > 0 && a < INT8_MIN + b) || (b < 0 && a > INT8_MAX + b)) {
-          pushInt((int32_t)a - (int32_t)b);
-        } else {
-          pushInt8(a - b);
+          if ((b > 0 && a < INT8_MIN + b) || (b < 0 && a > INT8_MAX + b)) {
+            pushInt((int32_t)a - (int32_t)b);
+          } else {
+            pushInt8(a - b);
+          }
+          break;
         }
-        break;
-      }
       case OP_MUL: {
-        int32_t res = (int32_t)a * (int32_t)b;
-        if (res >= INT8_MIN && res <= INT8_MAX) {
-          pushInt8((int8_t)res);
-        } else {
-          pushInt(res);
+          int32_t res = (int32_t)a * (int32_t)b;
+          if (res >= INT8_MIN && res <= INT8_MAX) {
+            pushInt8((int8_t)res);
+          } else {
+            pushInt(res);
+          }
+          break;
         }
-        break;
-      }
       case OP_DIV: {
-        if (b != 0) {
-          pushInt8(a / b);
-        } else {
-          pushInt8(0);
+          if (b != 0) {
+            pushInt8(a / b);
+          } else {
+            pushInt8(0);
+          }
+          break;
         }
-        break;
-      }
     }
     return;
   }
@@ -208,38 +240,38 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
     dropTop(0);
     switch (op) {
       case OP_ADD: {
-        if (a > UINT8_MAX - b) {
-          pushInt((int32_t)a + (int32_t)b);
-        } else {
-          pushUInt8(a + b);
+          if (a > UINT8_MAX - b) {
+            pushInt((int32_t)a + (int32_t)b);
+          } else {
+            pushUInt8(a + b);
+          }
+          break;
         }
-        break;
-      }
       case OP_SUB: {
-        if (a < b) {
-          pushInt((int32_t)a - (int32_t)b);
-        } else {
-          pushUInt8(a - b);
+          if (a < b) {
+            pushInt((int32_t)a - (int32_t)b);
+          } else {
+            pushUInt8(a - b);
+          }
+          break;
         }
-        break;
-      }
       case OP_MUL: {
-        uint32_t res = (uint32_t)a * (uint32_t)b;
-        if (res <= UINT8_MAX) {
-          pushUInt8((uint8_t)res);
-        } else {
-          pushInt((int32_t)res);
+          uint32_t res = (uint32_t)a * (uint32_t)b;
+          if (res <= UINT8_MAX) {
+            pushUInt8((uint8_t)res);
+          } else {
+            pushInt((int32_t)res);
+          }
+          break;
         }
-        break;
-      }
       case OP_DIV: {
-        if (b != 0) {
-          pushUInt8(a / b);
-        } else {
-          pushUInt8(0);
+          if (b != 0) {
+            pushUInt8(a / b);
+          } else {
+            pushUInt8(0);
+          }
+          break;
         }
-        break;
-      }
     }
     return;
   }

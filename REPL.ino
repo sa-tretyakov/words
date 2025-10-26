@@ -144,39 +144,39 @@ void executeLine(String& line) {
             int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
             memcpy(data, &v, 4);
           } else {
-                       switch (forcedType) {
+            switch (forcedType) {
               case TYPE_INT8: {
-                type = TYPE_INT8; len = 1;
-                data[0] = (val < INT8_MIN) ? INT8_MIN : (val > INT8_MAX) ? INT8_MAX : (int8_t)val;
-                break;
-              }
+                  type = TYPE_INT8; len = 1;
+                  data[0] = (val < INT8_MIN) ? INT8_MIN : (val > INT8_MAX) ? INT8_MAX : (int8_t)val;
+                  break;
+                }
               case TYPE_UINT8: {
-                type = TYPE_UINT8; len = 1;
-                data[0] = (val < 0) ? 0 : (val > UINT8_MAX) ? UINT8_MAX : (uint8_t)val;
-                break;
-              }
+                  type = TYPE_UINT8; len = 1;
+                  data[0] = (val < 0) ? 0 : (val > UINT8_MAX) ? UINT8_MAX : (uint8_t)val;
+                  break;
+                }
               case TYPE_INT16: {
-                type = TYPE_INT16; len = 2;
-                int16_t v16 = (val < INT16_MIN) ? INT16_MIN : (val > INT16_MAX) ? INT16_MAX : (int16_t)val;
-                memcpy(data, &v16, 2);
-                break;
-              }
+                  type = TYPE_INT16; len = 2;
+                  int16_t v16 = (val < INT16_MIN) ? INT16_MIN : (val > INT16_MAX) ? INT16_MAX : (int16_t)val;
+                  memcpy(data, &v16, 2);
+                  break;
+                }
               case TYPE_UINT16: {
-                type = TYPE_UINT16; len = 2;
-                uint16_t u16 = (val < 0) ? 0 : (val > UINT16_MAX) ? UINT16_MAX : (uint16_t)val;
-                memcpy(data, &u16, 2);
-                break;
-              }
+                  type = TYPE_UINT16; len = 2;
+                  uint16_t u16 = (val < 0) ? 0 : (val > UINT16_MAX) ? UINT16_MAX : (uint16_t)val;
+                  memcpy(data, &u16, 2);
+                  break;
+                }
               case TYPE_INT: {
-                type = TYPE_INT; len = 4;
-                int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-                memcpy(data, &v32, 4);
-                break;
-              }
+                  type = TYPE_INT; len = 4;
+                  int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+                  memcpy(data, &v32, 4);
+                  break;
+                }
               default: {
-                Serial.printf("⚠️ Internal error: %s\n", tokenOrig.c_str());
-                continue;
-              }
+                  Serial.printf("⚠️ Internal error: %s\n", tokenOrig.c_str());
+                  continue;
+                }
             }
           }
         }
@@ -274,7 +274,13 @@ void executeLine(String& line) {
 
     if (token.startsWith("\"") && token.endsWith("\"") && token.length() >= 2) {
       String strContent = token.substring(1, token.length() - 1);
-      pushString(strContent.c_str());
+      size_t len = strContent.length();
+      if (len > 255) {
+        Serial.println("⚠️ Строка слишком длинная");
+      } else {
+        storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)strContent.c_str(), (uint8_t)len, TYPE_STRING);
+        executeAt(ADDR_TMP_LIT);
+      }
     }
     else if (token.equalsIgnoreCase("low")) {
       pushBool(false);
@@ -322,40 +328,60 @@ void executeLine(String& line) {
           continue;
         }
         float f = token.toFloat();
-        pushFloat(f);
+        storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)&f, 4, TYPE_FLOAT);
+        executeAt(ADDR_TMP_LIT);
       } else {
+        // === Обработка целых чисел ===
         long val = atol(token.c_str());
+        uint8_t type;
+        uint8_t len;
+        uint8_t data[4];
+
         if (forcedType == TYPE_UNDEFINED) {
-          if (val < INT32_MIN) val = INT32_MIN;
-          if (val > INT32_MAX) val = INT32_MAX;
-          pushInt((int32_t)val);
+          type = TYPE_INT;
+          len = 4;
+          int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+          memcpy(data, &v, 4);
         } else {
           switch (forcedType) {
-            case TYPE_INT8:
-              if (val < INT8_MIN || val > INT8_MAX) val = val < INT8_MIN ? INT8_MIN : INT8_MAX;
-              pushInt8((int8_t)val);
-              break;
-            case TYPE_UINT8:
-              if (val < 0 || val > UINT8_MAX) val = val < 0 ? 0 : UINT8_MAX;
-              pushUInt8((uint8_t)val);
-              break;
-            case TYPE_INT16:
-              if (val < INT16_MIN || val > INT16_MAX) val = val < INT16_MIN ? INT16_MIN : INT16_MAX;
-              pushInt16((int16_t)val);
-              break;
-            case TYPE_UINT16:
-              if (val < 0 || val > UINT16_MAX) val = val < 0 ? 0 : UINT16_MAX;
-              pushUInt16((uint16_t)val);
-              break;
-            case TYPE_INT:
-              if (val < INT32_MIN || val > INT32_MAX) val = val < INT32_MIN ? INT32_MIN : INT32_MAX;
-              pushInt((int32_t)val);
-              break;
-            default:
-              Serial.printf("⚠️ Internal error parsing: %s\n", tokenOrig.c_str());
-              break;
+            case TYPE_INT8: {
+                type = TYPE_INT8; len = 1;
+                data[0] = (val < INT8_MIN) ? INT8_MIN : (val > INT8_MAX) ? INT8_MAX : (int8_t)val;
+                break;
+              }
+            case TYPE_UINT8: {
+                type = TYPE_UINT8; len = 1;
+                data[0] = (val < 0) ? 0 : (val > UINT8_MAX) ? UINT8_MAX : (uint8_t)val;
+                break;
+              }
+            case TYPE_INT16: {
+                type = TYPE_INT16; len = 2;
+                int16_t v16 = (val < INT16_MIN) ? INT16_MIN : (val > INT16_MAX) ? INT16_MAX : (int16_t)val;
+                memcpy(data, &v16, 2);
+                break;
+              }
+            case TYPE_UINT16: {
+                type = TYPE_UINT16; len = 2;
+                uint16_t u16 = (val < 0) ? 0 : (val > UINT16_MAX) ? UINT16_MAX : (uint16_t)val;
+                memcpy(data, &u16, 2);
+                break;
+              }
+            case TYPE_INT: {
+                type = TYPE_INT; len = 4;
+                int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+                memcpy(data, &v32, 4);
+                break;
+              }
+            default: {
+                Serial.printf("⚠️ Internal error parsing: %s\n", tokenOrig.c_str());
+                continue;
+              }
           }
         }
+
+        // === ЗАПИСЬ В TMP_LIT И ВЫПОЛНЕНИЕ ===
+        storeValueToVariable(ADDR_TMP_LIT, data, len, type);
+        executeAt(ADDR_TMP_LIT);
       }
     }
   }
