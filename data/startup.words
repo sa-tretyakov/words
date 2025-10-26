@@ -1,23 +1,42 @@
-var x = 42
-const pi = 3.1415926
-print x
-print pi
+const pi
+pi = 3.1415926
+var x
+x = 42
+var y
+y = 3.3
+var z
+z = 255u8i
 
-cont sensor
-var temp = 25
-var hum = 60
+var str
+str = "Helo Words"
 
-cont global
-use sensor
-print temp
-print hum
+cont config
+. str
+load config.save.json
 
-print json
+context 0
+var prompt
+prompt = "startup.words is loaded "
+. prompt + CRLF
+prompt = "Ok>" 
+. prompt + CRLF
 
-print 100
-print "Hello from literal!"
-
-body x
-body sensor
-`
-print "All tests passed!"
+var pinout0
+pinout0 = 0u8
+var pinout0Led
+pinout0Led = 2
+pinMode pinout0Led OUTPUT
+var msg
+var count
+count = 0
+msg = " tuggle "
+: tuggleLed
+pinout0 = not pinout0
+digitalWrite pinout0Led pinout0
+;
++Task "tuggleLed" 100
+var arg
+: cube
+  arg = 
+  arg * arg * arg
+;

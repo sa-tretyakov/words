@@ -20,11 +20,29 @@ pinMode led OUTPUT
 : triger
 ! statLed
 digitalWrite led statLed
+->
 ;
+addTick 500 "triger"
 
-
-
+var timeTick. = 2000
+: 2000s
+timeTick. = timeTick. - 100
+. timeTick.
+->
+;
+: startTime
+addTick 500 "2000s"
+;
+var tach = 0
+pinMode tach INPUT_PULLUP
+: read
+. digitalRead tach
+;
 /*
+addTick 50 "read"
+delTick "read"
+
+
 var CR = ""
 var LF = ""
 var CRLF = ""
