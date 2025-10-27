@@ -7,6 +7,7 @@ y = 3.3
 var z
 z = 255u8i
 
+
 var str
 str = "Helo Words"
 cont config
@@ -36,7 +37,7 @@ digitalWrite pinout0Led pinout0
 var count
 count = 10
 : test
-count = count + 2
+count += 2
 print count
 print CRLF
 ;
@@ -49,6 +50,30 @@ var arg
 var v
 v = 0
 : vibor 
-v = v +
+v +=
 ;
+
+
+var pinTrig
+pinTrig = 12u8
+var pinEcho
+pinEcho = 13u8
+var imp
+imp = 10
+var timeWite
+timeWite = 30000
+var distance
+distance = 0
+pinMode pinTrig OUTPUT
+pinMode pinEcho INPUT
+
+: sonar 
+digitalWrite pinTrig LOW
+delayMicroseconds imp
+digitalWrite pinTrig HIGH
+pulseIn pinEcho HIGH timeWite
+distance /= 58
+print distance
+;
+
 

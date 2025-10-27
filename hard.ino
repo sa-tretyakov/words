@@ -1,3 +1,39 @@
+void delayMicrosecondsFunc(uint16_t addr) {
+  // Читаем количество микросекунд
+  if (stackTop < 2) {
+    Serial.println("⚠️ delayMicroseconds: value expected");
+    return;
+  }
+
+  uint32_t us = 0;
+  uint8_t type = stack[stackTop - 1];
+
+  if (type == TYPE_INT) {
+    us = (uint32_t)popInt();
+  } else if (type == TYPE_UINT16) {
+    us = (uint32_t)popUInt16();
+  } else if (type == TYPE_UINT8) {
+    us = (uint32_t)popUInt8();
+  } else if (type == TYPE_INT16) {
+    int16_t v = popInt16();
+    us = (v < 0) ? 0 : (uint32_t)v;
+  } else if (type == TYPE_INT8) {
+    int8_t v = popInt8();
+    us = (v < 0) ? 0 : (uint32_t)v;
+  } else {
+    Serial.println("⚠️ delayMicroseconds: integer expected");
+    // Удаляем неизвестный тип
+    uint8_t len, t;
+    popMetadata(len, t);
+    if (len <= stackTop) stackTop -= len;
+    return;
+  }
+
+  // Ограничиваем до максимума (16-битное значение для ESP32)
+  if (us > 65535) us = 65535;
+
+  ::delayMicroseconds((unsigned int)us);
+}
 void charWord(uint16_t addr) {
   uint8_t type, len;
   const uint8_t* data;
@@ -95,18 +131,7 @@ void mychoiceFunc(uint16_t addr) {
     uint8_t nameLen = dictionary[addr + 2];
     uint8_t storage = dictionary[addr + 3 + nameLen];
     uint8_t storageType = storage & 0x7F;
-  if (addr == ADDR_TMP_LIT) {
-    if (tempLiteralSize >= 2) {
-      uint8_t type = tempLiteralData[0];
-      uint8_t len = tempLiteralData[1];
-      if (tempLiteralSize >= 2 + len) {
-        pushValue(&tempLiteralData[2], len, type);
-        return;
-      }
-    }
-    pushInt(0); // fallback
-    return;
-  }
+
     if (storageType == STORAGE_CONT) {
       const uint8_t* valData = &dictionary[addr + 3 + nameLen + 2];
       pushValue(valData, 4, TYPE_INT);
@@ -120,6 +145,8 @@ void mychoiceFunc(uint16_t addr) {
   }
 
   // 4. Обработка маркеров
+
+  // Простое присваивание
   if (Len == 1 && Data[0] == '=') {
     dropTop(0);
     if (peekStackTop(&Type, &Len, &Data)) {
@@ -152,7 +179,7 @@ void mychoiceFunc(uint16_t addr) {
     return;
   }
 
-  // Арифметика
+  // Арифметика (бинарные операции без присваивания)
   if (Len == 1 && Data[0] == '+') { dropTop(0); applyBinaryOp(addr, OP_ADD); return; }
   if (Len == 1 && Data[0] == '-') { dropTop(0); applyBinaryOp(addr, OP_SUB); return; }
   if (Len == 1 && Data[0] == '*') { dropTop(0); applyBinaryOp(addr, OP_MUL); return; }
@@ -166,7 +193,64 @@ void mychoiceFunc(uint16_t addr) {
   if (Len == 2 && Data[0] == '<' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_LE); return; }
   if (Len == 2 && Data[0] == '>' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_GE); return; }
 
-  // Неизвестный маркер — читаем значение
+  // Составное присваивание: +=, -=, *=, /=
+  if (Len == 2 && Data[0] == '+' && Data[1] == '=') {
+    dropTop(0);
+    if (!peekStackTop(&Type, &Len, &Data)) {
+      Serial.println("⚠️ +=: missing right-hand value");
+      return;
+    }
+    applyBinaryOp(addr, OP_ADD);
+    if (peekStackTop(&Type, &Len, &Data)) {
+      storeValueToVariable(addr, Data, Len, Type);
+      dropTop(0);
+    }
+    return;
+  }
+
+  if (Len == 2 && Data[0] == '-' && Data[1] == '=') {
+    dropTop(0);
+    if (!peekStackTop(&Type, &Len, &Data)) {
+      Serial.println("⚠️ -=: missing right-hand value");
+      return;
+    }
+    applyBinaryOp(addr, OP_SUB);
+    if (peekStackTop(&Type, &Len, &Data)) {
+      storeValueToVariable(addr, Data, Len, Type);
+      dropTop(0);
+    }
+    return;
+  }
+
+  if (Len == 2 && Data[0] == '*' && Data[1] == '=') {
+    dropTop(0);
+    if (!peekStackTop(&Type, &Len, &Data)) {
+      Serial.println("⚠️ *=: missing right-hand value");
+      return;
+    }
+    applyBinaryOp(addr, OP_MUL);
+    if (peekStackTop(&Type, &Len, &Data)) {
+      storeValueToVariable(addr, Data, Len, Type);
+      dropTop(0);
+    }
+    return;
+  }
+
+  if (Len == 2 && Data[0] == '/' && Data[1] == '=') {
+    dropTop(0);
+    if (!peekStackTop(&Type, &Len, &Data)) {
+      Serial.println("⚠️ /=: missing right-hand value");
+      return;
+    }
+    applyBinaryOp(addr, OP_DIV);
+    if (peekStackTop(&Type, &Len, &Data)) {
+      storeValueToVariable(addr, Data, Len, Type);
+      dropTop(0);
+    }
+    return;
+  }
+
+  // Неизвестный маркер — читаем значение переменной
   uint8_t nameLen = dictionary[addr + 2];
   uint8_t storage = dictionary[addr + 3 + nameLen];
   uint8_t storageType = storage & 0x7F;

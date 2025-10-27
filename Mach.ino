@@ -178,42 +178,42 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
   // === int32 ===
   if (argType == TYPE_INT && varType == TYPE_INT && argLen == 4 && varLen == 4) {
     int32_t a, b;
-    memcpy(&a, argData, 4);
-    memcpy(&b, varData, 4);
+    memcpy(&a, argData, 4);   // правый операнд (со стека)
+    memcpy(&b, varData, 4);   // левый операнд (значение переменной)
     dropTop(0);
     switch (op) {
-      case OP_ADD: pushInt(a + b); break;
-      case OP_SUB: pushInt(a - b); break;
-      case OP_MUL: pushInt(a * b); break;
-      case OP_DIV: pushInt(b != 0 ? a / b : 0); break;
+      case OP_ADD: pushInt(b + a); break;
+      case OP_SUB: pushInt(b - a); break;
+      case OP_MUL: pushInt(b * a); break;
+      case OP_DIV: pushInt(a != 0 ? b / a : 0); break;
     }
     return;
   }
 
   // === int8 ===
   if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
-    int8_t a = (int8_t)argData[0];
-    int8_t b = (int8_t)varData[0];
+    int8_t a = (int8_t)argData[0];   // правый
+    int8_t b = (int8_t)varData[0];   // левый
     dropTop(0);
     switch (op) {
       case OP_ADD: {
           if ((b > 0 && a > INT8_MAX - b) || (b < 0 && a < INT8_MIN - b)) {
-            pushInt((int32_t)a + (int32_t)b);
+            pushInt((int32_t)b + (int32_t)a);
           } else {
-            pushInt8(a + b);
+            pushInt8(b + a);
           }
           break;
         }
       case OP_SUB: {
-          if ((b > 0 && a < INT8_MIN + b) || (b < 0 && a > INT8_MAX + b)) {
-            pushInt((int32_t)a - (int32_t)b);
+          if ((a > 0 && b < INT8_MIN + a) || (a < 0 && b > INT8_MAX + a)) {
+            pushInt((int32_t)b - (int32_t)a);
           } else {
-            pushInt8(a - b);
+            pushInt8(b - a);
           }
           break;
         }
       case OP_MUL: {
-          int32_t res = (int32_t)a * (int32_t)b;
+          int32_t res = (int32_t)b * (int32_t)a;
           if (res >= INT8_MIN && res <= INT8_MAX) {
             pushInt8((int8_t)res);
           } else {
@@ -222,8 +222,8 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
           break;
         }
       case OP_DIV: {
-          if (b != 0) {
-            pushInt8(a / b);
+          if (a != 0) {
+            pushInt8(b / a);
           } else {
             pushInt8(0);
           }
@@ -235,28 +235,28 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
 
   // === uint8 ===
   if (argType == TYPE_UINT8 && varType == TYPE_UINT8 && argLen == 1 && varLen == 1) {
-    uint8_t a = argData[0];
-    uint8_t b = varData[0];
+    uint8_t a = argData[0];   // правый
+    uint8_t b = varData[0];   // левый
     dropTop(0);
     switch (op) {
       case OP_ADD: {
-          if (a > UINT8_MAX - b) {
-            pushInt((int32_t)a + (int32_t)b);
+          if (b > UINT8_MAX - a) {
+            pushInt((int32_t)b + (int32_t)a);
           } else {
-            pushUInt8(a + b);
+            pushUInt8(b + a);
           }
           break;
         }
       case OP_SUB: {
-          if (a < b) {
-            pushInt((int32_t)a - (int32_t)b);
+          if (b < a) {
+            pushInt((int32_t)b - (int32_t)a);
           } else {
-            pushUInt8(a - b);
+            pushUInt8(b - a);
           }
           break;
         }
       case OP_MUL: {
-          uint32_t res = (uint32_t)a * (uint32_t)b;
+          uint32_t res = (uint32_t)b * (uint32_t)a;
           if (res <= UINT8_MAX) {
             pushUInt8((uint8_t)res);
           } else {
@@ -265,8 +265,8 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
           break;
         }
       case OP_DIV: {
-          if (b != 0) {
-            pushUInt8(a / b);
+          if (a != 0) {
+            pushUInt8(b / a);
           } else {
             pushUInt8(0);
           }
@@ -279,14 +279,14 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
   // === float ===
   if (argType == TYPE_FLOAT && varType == TYPE_FLOAT && argLen == 4 && varLen == 4) {
     float a, b;
-    memcpy(&a, argData, 4);
-    memcpy(&b, varData, 4);
+    memcpy(&a, argData, 4);   // правый
+    memcpy(&b, varData, 4);   // левый
     dropTop(0);
     switch (op) {
-      case OP_ADD: pushFloat(a + b); break;
-      case OP_SUB: pushFloat(a - b); break;
-      case OP_MUL: pushFloat(a * b); break;
-      case OP_DIV: pushFloat(b != 0.0f ? a / b : 0.0f); break;
+      case OP_ADD: pushFloat(b + a); break;
+      case OP_SUB: pushFloat(b - a); break;
+      case OP_MUL: pushFloat(b * a); break;
+      case OP_DIV: pushFloat(a != 0.0f ? b / a : 0.0f); break;
     }
     return;
   }
@@ -297,10 +297,10 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
     if (newLen > 255) newLen = 255;
 
     uint8_t result[255];
-    memcpy(result, varData, varLen);
+    memcpy(result, varData, varLen);               // левый: значение переменной
     uint8_t secondPart = (newLen > varLen) ? (newLen - varLen) : 0;
     if (secondPart > argLen) secondPart = argLen;
-    memcpy(result + varLen, argData, secondPart);
+    memcpy(result + varLen, argData, secondPart);  // правый: со стека
 
     dropTop(0);
     pushValue(result, newLen, TYPE_STRING);
@@ -309,10 +309,10 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
 
   // === bool (только сложение) ===
   if (op == OP_ADD && argType == TYPE_BOOL && varType == TYPE_BOOL && argLen == 1 && varLen == 1) {
-    int32_t a = argData[0] ? 1 : 0;
-    int32_t b = varData[0] ? 1 : 0;
+    int32_t a = argData[0] ? 1 : 0;   // правый
+    int32_t b = varData[0] ? 1 : 0;   // левый
     dropTop(0);
-    pushInt(a + b);
+    pushInt(b + a);
     return;
   }
 

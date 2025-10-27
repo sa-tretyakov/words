@@ -282,12 +282,12 @@ void executeLine(String& line) {
         executeAt(ADDR_TMP_LIT);
       }
     }
-    else if (token.equalsIgnoreCase("low")) {
-      pushBool(false);
-    }
-    else if (token.equalsIgnoreCase("high")) {
-      pushBool(true);
-    }
+//    else if (token.equalsIgnoreCase("low")) {
+//      pushBool(false);
+//    }
+//    else if (token.equalsIgnoreCase("high")) {
+//      pushBool(true);
+//    }
     else {
       String tokenOrig = token;
       ValueType forcedType = TYPE_UNDEFINED;

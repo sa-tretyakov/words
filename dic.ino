@@ -89,51 +89,6 @@ void pushMarker(const char* name) {
   stack[stackTop++] = TYPE_MARKER;
 }
 
-bool addInternalWordWithData(const char* name, const uint8_t* data, uint16_t dataSize, void (*func)()) {
-  if (!name || !func) return false;
-  size_t nameLen = strlen(name);
-  if (nameLen == 0 || nameLen > 255) return false;
-
-  size_t recordSize = 2 + 1 + nameLen + 1 + 2 + dataSize + 4;
-  if (dictLen + recordSize > DICT_SIZE) return false;
-
-  uint8_t* pos = &dictionary[dictLen];
-  uint16_t nextOffset = dictLen + recordSize;
-
-  // nextOffset
-  pos[0] = (nextOffset >> 0) & 0xFF;
-  pos[1] = (nextOffset >> 8) & 0xFF;
-
-  // nameLen
-  pos[2] = (uint8_t)nameLen;
-
-  // name
-  memcpy(&pos[3], name, nameLen);
-
-  // storage = 0x80
-  pos[3 + nameLen] = 0x80;
-
-  // dataSize
-  pos[3 + nameLen + 1 + 0] = (dataSize >> 0) & 0xFF;
-  pos[3 + nameLen + 1 + 1] = (dataSize >> 8) & 0xFF;
-
-  // данные
-  if (dataSize > 0 && data) {
-    memcpy(&pos[3 + nameLen + 1 + 2], data, dataSize);
-  }
-
-  // funcPtr
-  uint32_t addr = (uint32_t)func;
-  size_t funcPos = 3 + nameLen + 1 + 2 + dataSize;
-  pos[funcPos + 0] = (addr >> 0) & 0xFF;
-  pos[funcPos + 1] = (addr >> 8) & 0xFF;
-  pos[funcPos + 2] = (addr >> 16) & 0xFF;
-  pos[funcPos + 3] = (addr >> 24) & 0xFF;
-
-  dictLen = nextOffset;
-  return true;
-}
-
 void varWord(uint16_t callerAddr) {
   if (stackTop < 2) return;
   uint8_t topLen = stack[stackTop - 2];
@@ -208,6 +163,9 @@ void constWord(uint16_t addr) {
 }
 
 bool addInternalWord(const char* name, WordFunc func) {
+  return addInternalWord(name, func, 0);
+  }
+bool addInternalWord(const char* name, WordFunc func, uint8_t context) {
   size_t nameLen = strlen(name);
   if (nameLen == 0 || nameLen > 255) return false;
 
@@ -223,7 +181,7 @@ bool addInternalWord(const char* name, WordFunc func) {
   pos[2] = (uint8_t)nameLen;
   memcpy(pos + 3, name, nameLen);
   pos[3 + nameLen] = 0x80 | STORAGE_EMBEDDED; // storage = 0x80
-  pos[3 + nameLen + 1] = 0; // ← ЭТОТ БАЙТ — КОНТЕКСТ (был пропущен)
+  pos[3 + nameLen + 1] = context; // ← ЭТОТ БАЙТ — КОНТЕКСТ (был пропущен)
 
   uint32_t addr = (uint32_t)func;
   memcpy(pos + 3 + nameLen + 2, &addr, 4); // funcPtr после context

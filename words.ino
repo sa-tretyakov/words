@@ -29,10 +29,7 @@ uint8_t currentContext = 0; // текущий контекст (0 = global)
 int32_t maxCont = 0;
 bool compiling = false;        // флаг компиляции
 uint16_t compileTarget = 0;    // смещение в словаре для текущего слова
-// Буфер для временного литерала
-uint8_t tempLiteralData[256]; // тип(1) + длина(1) + данные(254)
-uint16_t tempLiteralSize = 0;
-
+String cachedScanResult = "";
 // Адрес временного слова (фиксируем при старте)
 uint16_t ADDR_TMP_LIT = 0;
 // ========================
@@ -228,6 +225,19 @@ const char* popString() {
   if (type != TYPE_STRING) handleStackUnderflow();
   stackTop -= len;
   return reinterpret_cast<const char*>(&stack[stackTop]);
+}
+
+// Безопасно извлекает строку из стека как String
+// Возвращает true при успехе, false — при ошибке
+bool popStringFromStack(String& out) {
+  if (stackTop < 2 || stack[stackTop - 1] != TYPE_STRING) {
+    return false;
+  }
+  uint8_t len = stack[stackTop - 2];
+  const uint8_t* data = &stack[stackTop - 2 - len];
+  out = String((char*)data, len);
+  dropTop(0);
+  return true;
 }
 
 bool popBool() {
@@ -519,8 +529,10 @@ void setup() {
   addInternalWord("const", constWord);
   addInternalWord("cont", contWord);
   addInternalWord("context", contextWord);
+  addInternalWord("ctx", contextWord);
   addInternalWord("not", notWord);
   addInternalWord("pool", dumpDataPoolWord);
+  addInternalWord("delayMicroseconds", delayMicrosecondsFunc);
   addInternalWord("dir", listFilesWord);
   addInternalWord("ls", listFilesWord);
   addInternalWord("cat", catWord);
@@ -540,13 +552,19 @@ void setup() {
   addMarkerWord("-");
   addMarkerWord("*");
   addMarkerWord("/");
+  addMarkerWord("+=");
+  addMarkerWord("-=");
+  addMarkerWord("*=");
+  addMarkerWord("/=");
+
   addMarkerWord("==");
   addMarkerWord("!=");
   addMarkerWord("<");
   addMarkerWord(">");
   addMarkerWord("<=");
   addMarkerWord(">=");
-
+addInternalWord("LOW", [](uint16_t) {pushUInt8(LOW);});
+addInternalWord("HIGH", [](uint16_t) {pushUInt8(HIGH);});
 addInternalWord("INPUT", [](uint16_t) {pushUInt8(INPUT);});
 addInternalWord("OUTPUT", [](uint16_t) {pushUInt8(OUTPUT);});
 addInternalWord("INPUT_PULLUP", [](uint16_t) {pushUInt8(INPUT_PULLUP);});
@@ -554,21 +572,22 @@ addInternalWord("CR", [](uint16_t) { pushString("\r"); });
 addInternalWord("LF", [](uint16_t) { pushString("\n"); });
 addInternalWord("CRLF", [](uint16_t) { pushString("\r\n"); });
     
-  // Слова GPIO
-  addInternalWord("pinMode", pinModeWord);
-  addInternalWord("digitalWrite", digitalWriteWord);
-  addInternalWord("analogWrite", analogWriteWord);
-  addInternalWord("digitalRead", digitalReadWord);
-  addInternalWord("analogRead", analogReadWord);
-  addInternalWord("amv", amvWord);
+pinsInit();
 
   addInternalWord("json>serial", jsonToSerialWord);
   addInternalWord("json>file", jsonToFile);
+  wifiInit();
   currentContext = 0;
   Serial.println("Words>");
   // Выполняем инициализацию одной строкой
   String tmp = "load startup.words"; // 0 = maxCont";
-  //executeLine(tmp);
+  executeLine(tmp);
+//  tmp = ": help";
+//  executeLine(tmp);
+//  tmp = "type \"help.txt\"";
+//  executeLine(tmp);
+//  tmp = ";";
+//  executeLine(tmp);
   printStackCompact();
 
 

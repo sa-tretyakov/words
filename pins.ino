@@ -1,3 +1,14 @@
+void pinsInit() {
+  // Слова GPIO
+  addInternalWord("pinMode", pinModeWord);
+  addInternalWord("digitalWrite", digitalWriteWord);
+  addInternalWord("analogWrite", analogWriteWord);
+  addInternalWord("digitalRead", digitalReadWord);
+  addInternalWord("analogRead", analogReadWord);
+  addInternalWord("amv", amvWord);
+  addInternalWord("pulseIn", pulseInFunc);
+    
+  }
 bool popPin(uint8_t* outPin) {
   uint8_t pinType, pinLen;
   const uint8_t* pinData;
@@ -143,4 +154,51 @@ void amvWord(uint16_t addr) {
     // На ESP32 analogReadMilliVolts даёт до ~3300, так что это безопасно
     pushInt(INT32_MAX);
   }
+}
+
+void pulseInFunc(uint16_t addr) {
+  // Синтаксис: pulseIn pin state timeout
+  // Стек перед вызовом: [timeout][state][pin] → верх = pin
+printStackCompact();
+  // 1. pin
+  uint8_t pin;
+  if (!popPin(&pin)) {
+    Serial.println("⚠️ pulseIn: invalid pin");
+    pushInt(0);
+    return;
+  }
+
+  // 2. state (должен быть 0 или 1)
+  if (stackTop < 2) {
+    Serial.println("⚠️ pulseIn: state expected");
+    pushInt(0);
+    return;
+  }
+  uint8_t state = 0;
+  uint8_t stType = stack[stackTop - 1];
+  if (stType == TYPE_BOOL) {
+    state = popBool() ? 1 : 0;
+  } else if (stType == TYPE_UINT8) {
+    state = popUInt8();
+  } else if (stType == TYPE_INT) {
+    state = (popInt() != 0) ? 1 : 0;
+  } else {
+    Serial.println("⚠️ pulseIn: state must be 0 or 1");
+    uint8_t len, type; popMetadata(len, type); stackTop -= len;
+    pushInt(0);
+    return;
+  }
+  if (state > 1) state = 1;
+
+  // 3. timeout
+  if (stackTop < 2) {
+    Serial.println("⚠️ pulseIn: timeout expected");
+    pushInt(0);
+    return;
+  }
+  int32_t timeout = popInt();
+
+  // Выполняем
+  unsigned long duration = ::pulseIn(pin, state, (unsigned long)timeout);
+  pushInt((int32_t)duration);
 }
