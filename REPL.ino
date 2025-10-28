@@ -281,11 +281,32 @@ void executeLineTokens(String& line) {
           uint8_t data[4];
 
           if (forcedType == TYPE_UNDEFINED) {
-            type = TYPE_INT;
-            len = 4;
-            int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-            memcpy(data, &v, 4);
+            // Автоматический выбор типа
+            if (isHex) {
+              if (val >= 0 && val <= UINT8_MAX) {
+                type = TYPE_UINT8;
+                len = 1;
+                data[0] = (uint8_t)val;
+              } else if (val >= 0 && val <= UINT16_MAX) {
+                type = TYPE_UINT16;
+                len = 2;
+                uint16_t v16 = (uint16_t)val;
+                memcpy(data, &v16, 2);
+              } else {
+                type = TYPE_INT;
+                len = 4;
+                int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+                memcpy(data, &v32, 4);
+              }
+            } else {
+              // Десятичные → int32
+              type = TYPE_INT;
+              len = 4;
+              int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+              memcpy(data, &v, 4);
+            }
           } else {
+            // Явный тип через суффикс
             switch (forcedType) {
               case TYPE_INT8: {
                   type = TYPE_INT8; len = 1;
@@ -454,7 +475,7 @@ void executeLineTokens(String& line) {
         storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)&f, 4, TYPE_FLOAT);
         executeAt(ADDR_TMP_LIT);
       } else {
-        // ЦЕЛЫЕ ЧИСЛА С HEX
+        // ЦЕЛЫЕ ЧИСЛА С HEX И АВТОТИПОМ
         long val;
         if (isHex) {
           val = strtol(token.c_str(), nullptr, 16);
@@ -467,11 +488,31 @@ void executeLineTokens(String& line) {
         uint8_t data[4];
 
         if (forcedType == TYPE_UNDEFINED) {
-          type = TYPE_INT;
-          len = 4;
-          int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-          memcpy(data, &v, 4);
+          if (isHex) {
+            if (val >= 0 && val <= UINT8_MAX) {
+              type = TYPE_UINT8;
+              len = 1;
+              data[0] = (uint8_t)val;
+            } else if (val >= 0 && val <= UINT16_MAX) {
+              type = TYPE_UINT16;
+              len = 2;
+              uint16_t v16 = (uint16_t)val;
+              memcpy(data, &v16, 2);
+            } else {
+              type = TYPE_INT;
+              len = 4;
+              int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+              memcpy(data, &v32, 4);
+            }
+          } else {
+            // Десятичные числа → int32
+            type = TYPE_INT;
+            len = 4;
+            int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+            memcpy(data, &v, 4);
+          }
         } else {
+          // Явный тип через суффикс
           switch (forcedType) {
             case TYPE_INT8: {
                 type = TYPE_INT8; len = 1;
@@ -514,6 +555,7 @@ void executeLineTokens(String& line) {
     }
   }
 }
+
 
 void bodyWord(uint16_t addr) {
   // Читаем строку со стека
