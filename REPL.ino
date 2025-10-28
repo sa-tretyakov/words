@@ -1,3 +1,27 @@
+bool isValidNumber(const String& s, bool& hasDot) {
+  if (s.length() == 0) return false;
+  hasDot = false;
+  bool hasDigit = false;
+  int start = 0;
+  if (s[0] == '+' || s[0] == '-') {
+    start = 1;
+    if (s.length() == 1) return false;
+  }
+  for (int i = start; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '.') {
+      if (hasDot) return false;
+      hasDot = true;
+    } else if (isdigit(c)) {
+      hasDigit = true;
+    } else {
+      return false;
+    }
+  }
+  return hasDigit;
+}
+
+
 void executeAt(uint16_t addr) {
   if (addr + 2 >= DICT_SIZE) return;
   uint8_t nameLen = dictionary[addr + 2];
@@ -39,15 +63,76 @@ void executeAt(uint16_t addr) {
 }
 
 void executeLine(String& line) {
-  // Поддержка прямого JSON: { ... }
-  if (line.startsWith("{")) {
-    if (line.endsWith("}")) {
-      loadJson(line.c_str());
-      return;
+  // Обработка многострочного комментария (продолжение)
+  if (insideMultilineComment) {
+    size_t endPos = line.indexOf("*/");
+    if (endPos == -1) {
+      return; // всё в комментарии
+    }
+    String remainder = line.substring(endPos + 2);
+    insideMultilineComment = false;
+    if (remainder.length() > 0) {
+      executeLine(remainder);
     }
     return;
   }
 
+  // Удаляем однострочные комментарии // (только если не в строке)
+  // Простая реализация: ищем // и обрезаем, если до него чётное число кавычек
+  int quoteCount = 0;
+  size_t slashSlashPos = -1;
+  for (size_t i = 0; i < line.length(); i++) {
+    if (line[i] == '"') {
+      quoteCount++;
+    } else if (i + 1 < line.length() && line[i] == '/' && line[i + 1] == '/') {
+      if (quoteCount % 2 == 0) { // вне строки
+        slashSlashPos = i;
+        break;
+      }
+    }
+  }
+  if (slashSlashPos != -1) {
+    line = line.substring(0, slashSlashPos);
+  }
+
+  // Проверка JSON (только если строка не пустая)
+  if (line.length() > 0 && line.startsWith("{")) {
+    if (line.endsWith("}")) {
+      loadJson(line.c_str());
+      return;
+    }
+  }
+
+  // Обработка /* ... */
+  size_t startPos = 0;
+  while (startPos < line.length()) {
+    size_t commentStart = line.indexOf("/*", startPos);
+    if (commentStart == -1) {
+      String fragment = line.substring(startPos);
+      if (fragment.length() > 0) {
+        executeLineTokens(fragment);
+      }
+      return;
+    }
+
+    if (commentStart > startPos) {
+      String fragment = line.substring(startPos, commentStart);
+      executeLineTokens(fragment);
+    }
+
+    size_t commentEnd = line.indexOf("*/", commentStart + 2);
+    if (commentEnd == -1) {
+      insideMultilineComment = true;
+      return;
+    }
+
+    startPos = commentEnd + 2;
+  }
+}
+
+
+
+void executeLineTokens(String& line) {
   const int MAX_TOKENS = 32;
   String tokens[MAX_TOKENS];
   int tokenCount = 0;
@@ -282,12 +367,12 @@ void executeLine(String& line) {
         executeAt(ADDR_TMP_LIT);
       }
     }
-//    else if (token.equalsIgnoreCase("low")) {
-//      pushBool(false);
-//    }
-//    else if (token.equalsIgnoreCase("high")) {
-//      pushBool(true);
-//    }
+    //    else if (token.equalsIgnoreCase("low")) {
+    //      pushBool(false);
+    //    }
+    //    else if (token.equalsIgnoreCase("high")) {
+    //      pushBool(true);
+    //    }
     else {
       String tokenOrig = token;
       ValueType forcedType = TYPE_UNDEFINED;

@@ -1,0 +1,37 @@
+/*
+Файловая система в Words — работа с SPIFFS/LittleFS/SD.
+
+Основные слова:
+  dir / ls          — список файлов
+  cat имя           — вывести содержимое файла
+  load имя          — выполнить файл как скрипт
+  json>file "имя"   — перенаправить вывод json в файл
+  json              — вывести переменные текущего контекста в JSON
+
+Поддерживаемые ФС: SPIFFS, LittleFS, FFat, SD (настраивается в начале скетча).
+*/
+
+// Посмотрим, что есть в файловой системе
+print "Файлы:" CRLF
+dir
+
+// Создадим конфигурацию и сохраним в JSON
+context 0
+var deviceName
+deviceName = "MySensor"
+var version
+version = 1
+
+// Сохраняем в файл config.json
+json>file "config.json"
+json
+json>serial  // возвращаем вывод в Serial
+
+print "Конфиг сохранён в config.json" CRLF
+
+// Прочитаем его обратно
+print "Содержимое config.json:" CRLF
+cat "config.json"
+
+// Пример загрузки скрипта (если есть)
+// load startup.words

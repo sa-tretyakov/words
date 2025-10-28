@@ -150,7 +150,7 @@ void constWord(uint16_t addr) {
   pos[2] = topLen;
   memcpy(&pos[3], name, topLen);
   pos[3 + topLen] = 0x80 | STORAGE_CONST; // = 0x83
-  pos[3 + topLen + 1] = 0; // context
+  pos[3 + topLen + 1] = currentContext; // context
 
   uint32_t poolRef = 0xFFFFFFFF; // ← именно так
   memcpy(&pos[3 + topLen + 2], &poolRef, 4);

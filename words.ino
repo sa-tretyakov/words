@@ -30,6 +30,7 @@ int32_t maxCont = 0;
 bool compiling = false;        // флаг компиляции
 uint16_t compileTarget = 0;    // смещение в словаре для текущего слова
 String cachedScanResult = "";
+bool insideMultilineComment = false;  // Комменты
 // Адрес временного слова (фиксируем при старте)
 uint16_t ADDR_TMP_LIT = 0;
 // ========================
@@ -256,6 +257,50 @@ int8_t popInt8() {
   return static_cast<int8_t>(stack[stackTop]);
 }
 
+// Пытается извлечь значение со стека и преобразовать его к uint8_t
+// Поддерживает: uint8, int8, uint16, int16, int32
+// Возвращает true при успехе, false — при ошибке или выходе за [0..255]
+bool popAsUInt8(uint8_t* out) {
+  if (stackTop < 2) return false;
+
+  uint8_t type = stack[stackTop - 1];
+  uint8_t len = stack[stackTop - 2];
+
+  if (len > stackTop - 2) return false;
+  const uint8_t* data = &stack[stackTop - 2 - len];
+
+  int32_t val = 0;
+
+  switch (type) {
+    case TYPE_UINT8:
+      if (len == 1) { val = data[0]; }
+      else return false;
+      break;
+    case TYPE_INT8:
+      if (len == 1) { val = (int8_t)data[0]; }
+      else return false;
+      break;
+    case TYPE_UINT16:
+      if (len == 2) { uint16_t v; memcpy(&v, data, 2); val = v; }
+      else return false;
+      break;
+    case TYPE_INT16:
+      if (len == 2) { int16_t v; memcpy(&v, data, 2); val = v; }
+      else return false;
+      break;
+    case TYPE_INT:
+      if (len == 4) { memcpy(&val, data, 4); }
+      else return false;
+      break;
+    default:
+      return false;
+  }
+
+  if (val < 0 || val > 255) return false;
+  *out = (uint8_t)val;
+  dropTop(0);
+  return true;
+}
 uint8_t popUInt8() {
   uint8_t len, type;
   popMetadata(len, type);
@@ -284,28 +329,6 @@ uint16_t popUInt16() {
   return value;
 }
 
-bool isValidNumber(const String& s, bool& hasDot) {
-  if (s.length() == 0) return false;
-  hasDot = false;
-  bool hasDigit = false;
-  int start = 0;
-  if (s[0] == '+' || s[0] == '-') {
-    start = 1;
-    if (s.length() == 1) return false;
-  }
-  for (int i = start; i < s.length(); i++) {
-    char c = s[i];
-    if (c == '.') {
-      if (hasDot) return false;
-      hasDot = true;
-    } else if (isdigit(c)) {
-      hasDigit = true;
-    } else {
-      return false;
-    }
-  }
-  return hasDigit;
-}
 
 // ========================
 // Печать стека
@@ -573,7 +596,7 @@ addInternalWord("LF", [](uint16_t) { pushString("\n"); });
 addInternalWord("CRLF", [](uint16_t) { pushString("\r\n"); });
     
 pinsInit();
-
+i2cInit();
   addInternalWord("json>serial", jsonToSerialWord);
   addInternalWord("json>file", jsonToFile);
   wifiInit();

@@ -1,0 +1,60 @@
+/*
+GPIO в Words — управление цифровыми и аналоговыми пинами.
+
+Основные слова:
+  pinMode pin режим        — настройка режима пина
+  digitalWrite pin значение — запись HIGH/LOW
+  digitalRead pin          — чтение (возвращает true/false)
+  analogWrite pin значение — ШИМ (0–1023)
+  analogRead pin           — аналоговое чтение (0–4095)
+  amv pin                  — чтение в милливольтах (ESP32)
+
+Режимы: INPUT, OUTPUT, INPUT_PULLUP
+Значения: HIGH / true / 1, LOW / false / 0
+*/
+
+// Настройка LED на пине 2
+var ledPin
+ledPin = 2u8
+pinMode ledPin OUTPUT
+
+// Мигание LED
+: blink
+  digitalWrite ledPin HIGH
+  delay 500
+  digitalWrite ledPin LOW
+  delay 500
+;
+
++Task "blink" 1000  // мигать раз в секунду
+
+// Аналоговый вход (если подключён потенциометр к пину 34)
+var analogPin
+analogPin = 34u8
+pinMode analogPin INPUT  // на ESP32 INPUT достаточно
+
+: readAnalog
+  var val
+  val = analogRead analogPin
+  print "ADC: " val CRLF
+  var mv
+  mv = amv analogPin
+  print "Напряжение: " mv " mV" CRLF
+;
+
++Task "readAnalog" 2000  // читать каждые 2 сек
+
+// Пример ШИМ на пине 18 (только на ШИМ-пинах!)
+var pwmPin
+pwmPin = 18u8
+pinMode pwmPin OUTPUT
+
+var duty
+duty = 512  // 50% скважность
+
+: setPwm
+  analogWrite pwmPin duty
+;
+
+setPwm
+print "ШИМ запущен на пине 18" CRLF

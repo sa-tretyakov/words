@@ -1,27 +1,3 @@
-const pi
-pi = 3.1415926
-var x
-x = 42
-var y
-y = 3.3
-var z
-z = 255u8i
-
-
-var str
-str = "Helo Words"
-cont config
-. str
-. CRLF
-load config.save.json
-
-context 0
-var prompt
-prompt = "startup.words is loaded "
-. prompt + CRLF
-prompt = "Ok>" 
-. prompt + CRLF
-
 var pinout0
 pinout0 = 0u8
 var pinout0Led
@@ -34,46 +10,21 @@ pinout0 = not pinout0
 digitalWrite pinout0Led pinout0
 ;
 +Task "tuggleLed" 100
-var count
-count = 10
-: test
-count += 2
-print count
-print CRLF
-;
 
-var arg
-: cube
-  arg = 
-  arg * arg * arg
-;
-var v
-v = 0
-: vibor 
-v +=
-;
+cont i2c
+// Для TM1650
+const I2C_ADDR
+I2C_ADDR = 36u8  // 0x24
 
+const CMD_DISPLAY_ON
+CMD_DISPLAY_ON = 143u8  // 0x8F
 
-var pinTrig
-pinTrig = 12u8
-var pinEcho
-pinEcho = 13u8
-var imp
-imp = 10
-var timeWite
-timeWite = 30000
-var distance
-distance = 0
-pinMode pinTrig OUTPUT
-pinMode pinEcho INPUT
+const SEG_0
+SEG_0 = 63u8  // 0x3F
 
-: sonar 
-digitalWrite pinTrig LOW
-delayMicroseconds imp
-digitalWrite pinTrig HIGH
-pulseIn pinEcho HIGH timeWite
-distance /= 58
-print distance
-;
+// . i2cBegin
+// . i2cWrite I2C_ADDR 1u8 CMD_DISPLAY_ON
+// i2cWriteReg I2C_ADDR SEG_0 0u8
+
 
 

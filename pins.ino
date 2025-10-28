@@ -159,7 +159,6 @@ void amvWord(uint16_t addr) {
 void pulseInFunc(uint16_t addr) {
   // Синтаксис: pulseIn pin state timeout
   // Стек перед вызовом: [timeout][state][pin] → верх = pin
-printStackCompact();
   // 1. pin
   uint8_t pin;
   if (!popPin(&pin)) {

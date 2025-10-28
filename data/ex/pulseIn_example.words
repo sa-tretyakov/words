@@ -1,0 +1,58 @@
+/*
+Запустить пример можно командой
+load ex/pulseIn_example.words
+
+pulseIn — измеряет длительность импульса на цифровом пине.
+
+Синтаксис:
+  pulseIn pin state timeout
+
+Аргументы:
+  pin      — номер пина (целое число, например: 14u8)
+  state    — ожидаемый уровень: HIGH/true/1 или LOW/false/0
+  timeout  — макс. время ожидания в микросекундах (целое число)
+
+Возвращает:
+  Длительность импульса в микросекундах (целое число).
+  Возвращает 0, если импульс не обнаружен.
+
+Применение: ультразвуковой датчик HC-SR04.
+*/
+
+// Настройка пинов
+var pinTrig
+pinTrig = 13u8
+var pinEcho
+pinEcho = 14u8
+
+// Параметры импульса
+var imp
+imp = 10          // Длительность триггера (мкс)
+var timeWite
+timeWite = 30000  // Таймаут эха (30 мс ≈ 5 метров)
+
+// Рабочие переменные
+var distance
+distance = 0
+var mod
+mod = 58          // Коэффициент перевода: мкс → см
+
+// Инициализация GPIO
+pinMode pinTrig OUTPUT
+pinMode pinEcho INPUT
+
+/*
+Слово sonar — выполняет одно измерение расстояния
+и печатает результат в сантиметрах.
+*/
+: sonar 
+  digitalWrite pinTrig LOW
+  delayMicroseconds imp
+  digitalWrite pinTrig HIGH
+  distance = pulseIn pinEcho HIGH timeWite
+  print distance / mod
+  print CRLF
+;
+
+// Запуск измерений каждые 100 мс
++Task "sonar" 100

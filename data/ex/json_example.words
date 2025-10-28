@@ -1,0 +1,48 @@
+/*
+JSON в Words — обмен данными и конфигурацией.
+
+Возможности:
+  - Загрузка JSON как скрипта: load { "x": 42 }
+  - Экспорт переменных: json
+  - Сохранение в файл: json>file "имя"
+
+Поддерживаемые типы:
+  - числа (int, float)
+  - строки
+  - true / false → high / low
+*/
+
+// Прямая загрузка JSON
+load { "sensorId": "TEMP-01", "threshold": 25.5, "enabled": true }
+
+// Проверим
+print "sensorId: " sensorId CRLF
+print "threshold: " threshold CRLF
+print "enabled: " enabled CRLF
+
+// Экспорт в Serial
+print "Текущий контекст в JSON:" CRLF
+json
+print CRLF
+
+// Сохранение в файл
+json>file "state.json"
+json
+json>serial
+
+print "Состояние сохранено в state.json" CRLF
+
+// Пример: фильтрация по контексту
+cont config
+var apiUrl
+apiUrl = "http://api.example.com/data"
+
+context 0
+print "Только контекст 0:" CRLF
+json
+print CRLF
+
+context config
+print "Контекст config:" CRLF
+json
+print CRLF

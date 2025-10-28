@@ -13,10 +13,8 @@ void wifiInit() {
   addInternalWord("ipAp", ipApFunc,254);
   addInternalWord("scan", scanFunc,254);
   addInternalWord("wifiOff", wifiOffFunc, 254);
-
-
-
 }
+
 void modeStaApFunc(uint16_t addr) {
   WiFi.mode(WIFI_MODE_APSTA);
   // Опционально: можно положить результат (например, true) на стек
