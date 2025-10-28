@@ -1,12 +1,41 @@
-bool isValidNumber(const String& s, bool& hasDot) {
+bool isValidNumber(const String& s, bool& hasDot, bool& isHex) {
   if (s.length() == 0) return false;
   hasDot = false;
+  isHex = false;
   bool hasDigit = false;
   int start = 0;
+
+  // Обработка знака
   if (s[0] == '+' || s[0] == '-') {
     start = 1;
-    if (s.length() == 1) return false;
+    if (start >= s.length()) return false;
   }
+
+  // Проверка на шестнадцатеричный формат: 0x или 0X
+  if (s.length() >= (size_t)(start + 3) && 
+      s[start] == '0' && 
+      (s[start + 1] == 'x' || s[start + 1] == 'X')) {
+    isHex = true;
+    start += 2; // пропускаем "0x"
+    if (start >= s.length()) return false;
+    for (int i = start; i < s.length(); i++) {
+      char c = s[i];
+      if (!isxdigit(c)) {
+        // Проверяем суффиксы типов
+        String suffix = s.substring(i);
+        if (suffix == "u8" || suffix == "i8" || 
+            suffix == "u16" || suffix == "i16" || 
+            suffix == "i32") {
+          return true;
+        }
+        return false;
+      }
+      hasDigit = true;
+    }
+    return hasDigit;
+  }
+
+  // Десятичные числа
   for (int i = start; i < s.length(); i++) {
     char c = s[i];
     if (c == '.') {
@@ -15,12 +44,18 @@ bool isValidNumber(const String& s, bool& hasDot) {
     } else if (isdigit(c)) {
       hasDigit = true;
     } else {
+      // Проверяем суффиксы типов
+      String suffix = s.substring(i);
+      if (suffix == "u8" || suffix == "i8" || 
+          suffix == "u16" || suffix == "i16" || 
+          suffix == "i32") {
+        return true;
+      }
       return false;
     }
   }
   return hasDigit;
 }
-
 
 void executeAt(uint16_t addr) {
   if (addr + 2 >= DICT_SIZE) return;
@@ -130,8 +165,6 @@ void executeLine(String& line) {
   }
 }
 
-
-
 void executeLineTokens(String& line) {
   const int MAX_TOKENS = 32;
   String tokens[MAX_TOKENS];
@@ -165,7 +198,6 @@ void executeLineTokens(String& line) {
 
   // === РЕЖИМ КОМПИЛЯЦИИ ===
   if (compiling) {
-    // Проверяем: есть ли ";" в токенах?
     for (int i = 0; i < tokenCount; i++) {
       if (tokens[i] == ";") {
         compiling = false;
@@ -173,15 +205,13 @@ void executeLineTokens(String& line) {
       }
     }
 
-    // Компилируем СПРАВА НАЛЕВО (как выполняется строка)
     for (int i = tokenCount - 1; i >= 0; i--) {
       String& token = tokens[i];
-
-      // === ПОПЫТКА РАЗОБРАТЬ КАК ЧИСЛО ===
       String tokenOrig = token;
       String tempToken = token;
       ValueType forcedType = TYPE_UNDEFINED;
       bool hasDot = false;
+      bool isHex = false;
       bool isNumber = false;
 
       // Обработка суффиксов
@@ -203,26 +233,53 @@ void executeLineTokens(String& line) {
       }
 
       if (tempToken.length() > 0) {
-        isNumber = isValidNumber(tempToken, hasDot);
+        isNumber = isValidNumber(tempToken, hasDot, isHex);
       }
 
       if (isNumber) {
-        // === КОМПИЛЯЦИЯ ЛИТЕРАЛА ===
-        uint8_t type;
-        uint8_t len;
-        uint8_t data[4];
-
         if (hasDot) {
+          // FLOAT
           if (forcedType != TYPE_UNDEFINED) {
             Serial.printf("⚠️ Float literals cannot have type suffixes: %s\n", tokenOrig.c_str());
             continue;
           }
           float f = tempToken.toFloat();
-          type = TYPE_FLOAT;
-          len = 4;
+          uint8_t type = TYPE_FLOAT;
+          uint8_t len = 4;
+          uint8_t data[4];
           memcpy(data, &f, 4);
+
+          uint16_t bodyEnd = dictLen;
+          if (bodyEnd + 2 + 1 + 1 + len + 2 > DICT_SIZE) {
+            Serial.println("⚠️ Dictionary full during compile");
+            continue;
+          }
+
+          dictionary[bodyEnd] = dictionary[bodyEnd - 2];
+          dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
+          dictionary[bodyEnd - 2] = 0xFF;
+          dictionary[bodyEnd - 1] = 0xFF;
+          dictionary[bodyEnd] = len;
+          dictionary[bodyEnd + 1] = type;
+          memcpy(&dictionary[bodyEnd + 2], data, len);
+
+          uint16_t newNext = bodyEnd + 2 + len + 2;
+          dictionary[compileTarget] = (newNext >> 0) & 0xFF;
+          dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
+          dictLen = newNext;
         } else {
-          long val = atol(tempToken.c_str());
+          // ЦЕЛЫЕ ЧИСЛА (включая HEX)
+          long val;
+          if (isHex) {
+            val = strtol(tempToken.c_str(), nullptr, 16);
+          } else {
+            val = atol(tempToken.c_str());
+          }
+
+          uint8_t type;
+          uint8_t len;
+          uint8_t data[4];
+
           if (forcedType == TYPE_UNDEFINED) {
             type = TYPE_INT;
             len = 4;
@@ -264,36 +321,28 @@ void executeLineTokens(String& line) {
                 }
             }
           }
+
+          uint16_t bodyEnd = dictLen;
+          if (bodyEnd + 2 + 1 + 1 + len + 2 > DICT_SIZE) {
+            Serial.println("⚠️ Dictionary full during compile");
+            continue;
+          }
+
+          dictionary[bodyEnd] = dictionary[bodyEnd - 2];
+          dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
+          dictionary[bodyEnd - 2] = 0xFF;
+          dictionary[bodyEnd - 1] = 0xFF;
+          dictionary[bodyEnd] = len;
+          dictionary[bodyEnd + 1] = type;
+          memcpy(&dictionary[bodyEnd + 2], data, len);
+
+          uint16_t newNext = bodyEnd + 2 + len + 2;
+          dictionary[compileTarget] = (newNext >> 0) & 0xFF;
+          dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
+          dictLen = newNext;
         }
-
-        // Добавляем литерал в тело
-        uint16_t bodyEnd = dictLen;
-        if (bodyEnd + 2 + 1 + 1 + len + 2 > DICT_SIZE) {
-          Serial.println("⚠️ Dictionary full during compile");
-          continue;
-        }
-
-        // Сдвигаем завершающие 00 00
-        dictionary[bodyEnd] = dictionary[bodyEnd - 2];
-        dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
-
-        // Маркер литерала 0xFFFF
-        dictionary[bodyEnd - 2] = 0xFF;
-        dictionary[bodyEnd - 1] = 0xFF;
-
-        // len, type, данные
-        dictionary[bodyEnd] = len;
-        dictionary[bodyEnd + 1] = type;
-        memcpy(&dictionary[bodyEnd + 2], data, len);
-
-        // Обновляем nextOffset
-        uint16_t newNext = bodyEnd + 2 + len + 2; // +2 для len и type
-        dictionary[compileTarget] = (newNext >> 0) & 0xFF;
-        dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
-        dictLen = newNext;
-
       } else {
-        // === ОБЫЧНЫЙ ПОИСК СЛОВА ===
+        // ОБЫЧНЫЙ ПОИСК СЛОВА
         uint16_t ptr = 0;
         bool found = false;
         while (ptr < dictLen) {
@@ -315,7 +364,6 @@ void executeLineTokens(String& line) {
             if (match) {
               uint16_t nameLenTarget = dictionary[compileTarget + 2];
               uint16_t headerSize = 2 + 1 + nameLenTarget + 1 + 1;
-              uint16_t bodyStart = compileTarget + headerSize;
               uint16_t bodyEnd = dictLen;
 
               if (bodyEnd + 2 > DICT_SIZE) {
@@ -324,15 +372,11 @@ void executeLineTokens(String& line) {
                 break;
               }
 
-              // Сдвигаем завершающие 00 00
               dictionary[bodyEnd] = dictionary[bodyEnd - 2];
               dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
-
-              // Записываем смещение
               dictionary[bodyEnd - 2] = (ptr >> 0) & 0xFF;
               dictionary[bodyEnd - 1] = (ptr >> 8) & 0xFF;
 
-              // Обновляем nextOffset
               uint16_t newNext = bodyEnd + 2;
               dictionary[compileTarget] = (newNext >> 0) & 0xFF;
               dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
@@ -353,7 +397,7 @@ void executeLineTokens(String& line) {
     return;
   }
 
-  // === ОБЫЧНЫЙ РЕЖИМ (СПРАВА НАЛЕВО) ===
+  // === ОБЫЧНЫЙ РЕЖИМ ===
   for (int i = tokenCount - 1; i >= 0; i--) {
     String& token = tokens[i];
 
@@ -366,14 +410,7 @@ void executeLineTokens(String& line) {
         storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)strContent.c_str(), (uint8_t)len, TYPE_STRING);
         executeAt(ADDR_TMP_LIT);
       }
-    }
-    //    else if (token.equalsIgnoreCase("low")) {
-    //      pushBool(false);
-    //    }
-    //    else if (token.equalsIgnoreCase("high")) {
-    //      pushBool(true);
-    //    }
-    else {
+    } else {
       String tokenOrig = token;
       ValueType forcedType = TYPE_UNDEFINED;
 
@@ -399,8 +436,9 @@ void executeLineTokens(String& line) {
         continue;
       }
 
-      bool hasDot;
-      bool isNumber = isValidNumber(token, hasDot);
+      bool hasDot = false;
+      bool isHex = false;
+      bool isNumber = isValidNumber(token, hasDot, isHex);
 
       if (!isNumber) {
         lookupAndExecute(tokenOrig);
@@ -416,8 +454,14 @@ void executeLineTokens(String& line) {
         storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)&f, 4, TYPE_FLOAT);
         executeAt(ADDR_TMP_LIT);
       } else {
-        // === Обработка целых чисел ===
-        long val = atol(token.c_str());
+        // ЦЕЛЫЕ ЧИСЛА С HEX
+        long val;
+        if (isHex) {
+          val = strtol(token.c_str(), nullptr, 16);
+        } else {
+          val = atol(token.c_str());
+        }
+
         uint8_t type;
         uint8_t len;
         uint8_t data[4];
@@ -464,7 +508,6 @@ void executeLineTokens(String& line) {
           }
         }
 
-        // === ЗАПИСЬ В TMP_LIT И ВЫПОЛНЕНИЕ ===
         storeValueToVariable(ADDR_TMP_LIT, data, len, type);
         executeAt(ADDR_TMP_LIT);
       }
