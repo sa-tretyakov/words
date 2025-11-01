@@ -3,28 +3,47 @@ pinout0 = 0u8
 var pinout0Led
 pinout0Led = 2
 pinMode pinout0Led OUTPUT
-var msg
-msg = " tuggle "
 : tuggleLed
 pinout0 = not pinout0
 digitalWrite pinout0Led pinout0
 ;
-+Task "tuggleLed" 100
-
-cont i2c
-// Для TM1650
-const I2C_ADDR
-I2C_ADDR = 36u8  // 0x24
-
-const CMD_DISPLAY_ON
-CMD_DISPLAY_ON = 143u8  // 0x8F
-
-const SEG_0
-SEG_0 = 63u8  // 0x3F
-
-// . i2cBegin
-// . i2cWrite I2C_ADDR 1u8 CMD_DISPLAY_ON
-// i2cWriteReg I2C_ADDR SEG_0 0u8
++task "tuggleLed" 100
 
 
+var x var y
+x = 2 y = 1
+
+: choice
+if x == y
+print x
+;
+
+
+var buf
+buf = array 10u8
+
+// Запись
+buf [ 0 ] = 0xAA
+buf [ 3 ] = 0x55
+buf [ 5 ] = 0x5A
+buf [ 7 ] = 0xA5
+buf [ 9 ] = 0xFF
+
+/*
+// Чтение
+print buf [ 3 ]  // → 42
+
+// Работает с разными типами
+var nums
+nums = array 5i16
+nums [ 0 ] = 1000
+print nums [ 0 ]  // → 1000
+*/
+
+var i
+
+: whileTest
+i = 5u8 + 6u8
+print i
+;
 

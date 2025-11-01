@@ -2,7 +2,7 @@ void tmpLit() {
   // Создаём временное слово "tmpLit"
   uint8_t name[] = {'t', 'm', 'p', 'L', 'i', 't'};
   uint8_t nameLen = 6;
-  size_t recordSize = 2 + 1 + nameLen + 1 + 1 + 4 + 4; // next+len+name+storage+context+poolRef(не используется)+funcPtr
+  size_t recordSize = 2 + 1 + nameLen + 1 + 1 + 4 + 4; // next+len+name+storage+context+poolRef+funcPtr
 
   if (dictLen + recordSize <= DICT_SIZE) {
     uint8_t* pos = &dictionary[dictLen];
@@ -15,8 +15,14 @@ void tmpLit() {
     pos[3 + nameLen] = 0x80 | STORAGE_POOLED; // internal + pooled
     pos[3 + nameLen + 1] = 0; // context
 
-    // poolRef не используется — данные в tempLiteralData
+    // === СРАЗУ ВЫДЕЛЯЕМ МЕСТО В dataPool (256 байт) ===
     uint32_t poolRef = 0xFFFFFFFF;
+    if (dataPoolPtr + 256 <= DATA_POOL_SIZE) {
+      poolRef = dataPoolPtr;
+      dataPoolPtr += 256; // резервируем блок
+    } else {
+      Serial.println("⚠️ dataPool full for tmpLit");
+    }
     memcpy(&pos[3 + nameLen + 2], &poolRef, 4);
 
     uint32_t funcAddr = (uint32_t)mychoiceFunc;
@@ -118,7 +124,6 @@ void pushValue(const uint8_t* data, uint8_t len, uint8_t type) {
 }
 
 void storeValueToVariable(uint16_t addr, const uint8_t* data, uint8_t len, uint8_t type) {
-  // Читаем текущий poolRef
   uint8_t nameLen = dictionary[addr + 2];
   uint32_t oldPoolRef =
     dictionary[addr + 3 + nameLen + 2 + 0] |
@@ -126,18 +131,45 @@ void storeValueToVariable(uint16_t addr, const uint8_t* data, uint8_t len, uint8
     (dictionary[addr + 3 + nameLen + 2 + 2] << 16) |
     (dictionary[addr + 3 + nameLen + 2 + 3] << 24);
 
-  // Если уже инициализирована и тип совпадает — перезаписываем
+  // === Особая обработка для tmpLit: всегда перезаписываем в заранее выделенном блоке ===
+  if (addr == ADDR_TMP_LIT) {
+    // Убедимся, что блок выделен (при первом вызове)
+    if (oldPoolRef == 0xFFFFFFFF) {
+      // Выделяем блок максимального размера (256 байт)
+      if (dataPoolPtr + 256 > DATA_POOL_SIZE) {
+        Serial.println("⚠️ dataPool full for tmpLit");
+        return;
+      }
+      uint16_t newOffset = dataPoolPtr;
+      dataPoolPtr += 256;
+      // Обновляем poolRef в словаре
+      dictionary[addr + 3 + nameLen + 2 + 0] = (newOffset >> 0) & 0xFF;
+      dictionary[addr + 3 + nameLen + 2 + 1] = (newOffset >> 8) & 0xFF;
+      dictionary[addr + 3 + nameLen + 2 + 2] = 0;
+      dictionary[addr + 3 + nameLen + 2 + 3] = 0;
+      oldPoolRef = newOffset;
+    }
+
+    // Проверяем, что данных хватает
+    if (oldPoolRef + 2 + len <= DATA_POOL_SIZE) {
+      dataPool[oldPoolRef] = type;
+      dataPool[oldPoolRef + 1] = len;
+      memcpy(&dataPool[oldPoolRef + 2], data, len);
+    }
+    return;
+  }
+
+  // === Обычная логика для других переменных ===
   if (oldPoolRef != 0xFFFFFFFF && oldPoolRef < DATA_POOL_SIZE) {
     uint8_t oldType = dataPool[oldPoolRef];
     uint8_t oldLen = dataPool[oldPoolRef + 1];
     if (oldType == type && oldLen == len) {
-      // Перезаписываем данные
       memcpy(&dataPool[oldPoolRef + 2], data, len);
       return;
     }
   }
 
-  // Иначе — выделяем новое место
+  // Выделяем новое место
   uint16_t needed = 2 + len;
   if (dataPoolPtr + needed > DATA_POOL_SIZE) {
     Serial.println("⚠️ dataPool full");
@@ -150,12 +182,12 @@ void storeValueToVariable(uint16_t addr, const uint8_t* data, uint8_t len, uint8
   memcpy(&dataPool[dataPoolPtr], data, len);
   dataPoolPtr += len;
 
-  // Обновляем poolRef
   dictionary[addr + 3 + nameLen + 2 + 0] = (newOffset >> 0) & 0xFF;
   dictionary[addr + 3 + nameLen + 2 + 1] = (newOffset >> 8) & 0xFF;
-  dictionary[addr + 3 + nameLen + 2 + 2] = (newOffset >> 16) & 0xFF;
-  dictionary[addr + 3 + nameLen + 2 + 3] = (newOffset >> 24) & 0xFF;
+  dictionary[addr + 3 + nameLen + 2 + 2] = 0;
+  dictionary[addr + 3 + nameLen + 2 + 3] = 0;
 }
+
 
 void applyBinaryOp(uint16_t addr, uint8_t op) {
   uint8_t argType, argLen;

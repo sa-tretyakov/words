@@ -33,6 +33,9 @@ String cachedScanResult = "";
 bool insideMultilineComment = false;  // Комменты
 // Адрес временного слова (фиксируем при старте)
 uint16_t ADDR_TMP_LIT = 0;
+
+bool shouldJump = false;
+int32_t jumpOffset = 0;
 // ========================
 // Настройки
 // ========================
@@ -69,7 +72,8 @@ enum ValueType : uint8_t {
   TYPE_INT16 = 7,
   TYPE_UINT16 = 8,
   TYPE_MARKER = 9,
-  TYPE_NAME = 10
+  TYPE_NAME = 10,
+  TYPE_ARRAY = 11
 };
 // Арифметика
 #define OP_ADD 0
@@ -197,6 +201,70 @@ void pushUInt16(uint16_t value) {
   stack[stackTop++] = TYPE_UINT16;
 }
 
+// Проверяет, что на верхушке стека лежит маркер с заданным символом.
+// Если да — убирает его и возвращает true.
+// Иначе — возвращает false (стек не меняется).
+bool popMarkerIf(char expected) {
+  if (stackTop < 3) return false; // маркер = [data][len=1][type=MARKER]
+  if (stack[stackTop - 1] != TYPE_MARKER) return false;
+  if (stack[stackTop - 2] != 1) return false;
+  if (stack[stackTop - 3] != (uint8_t)expected) return false;
+  
+  dropTop(0); // убирает маркер
+  return true;
+}
+// Попытка извлечь любое целое число со стека и вернуть как int32_t
+// Возвращает true при успехе, false — при ошибке
+// Извлекает любое целое число со стека и возвращает как int32_t.
+// ВСЕГДА удаляет элемент со стека.
+// Возвращает true, если тип поддерживается, false — если нет (но стек очищен).
+bool popInt32FromAny(int32_t* out) {
+  if (stackTop < 2) {
+    return false;
+  }
+
+  uint8_t len = stack[stackTop - 2];
+  uint8_t type = stack[stackTop - 1];
+
+  // Проверяем, что данных достаточно
+  if (len > stackTop - 2) {
+    stackTop = 0; // аварийная очистка
+    *out = 0;
+    return false;
+  }
+
+  // Сохраняем указатель на данные
+  const uint8_t* data = &stack[stackTop - 2 - len];
+
+  // Удаляем элемент со стека ДО обработки (чтобы избежать утечек)
+  stackTop = stackTop - 2 - len;
+
+  // Преобразуем в int32_t
+  if (type == TYPE_INT && len == 4) {
+    memcpy(out, data, 4);
+    return true;
+  }
+  else if (type == TYPE_UINT8 && len == 1) {
+    *out = data[0];
+    return true;
+  }
+  else if (type == TYPE_INT8 && len == 1) {
+    *out = (int8_t)data[0];
+    return true;
+  }
+  else if (type == TYPE_UINT16 && len == 2) {
+    uint16_t v; memcpy(&v, data, 2); *out = v;
+    return true;
+  }
+  else if (type == TYPE_INT16 && len == 2) {
+    int16_t v; memcpy(&v, data, 2); *out = v;
+    return true;
+  }
+
+  // Неподдерживаемый тип — возвращаем 0
+  *out = 0;
+  return false;
+}
 // ========================
 // POP функции (для будущего использования)
 // ========================
@@ -431,6 +499,27 @@ void printStackCompact() {
           prefix = 'N';
           break;
         }
+              case TYPE_ARRAY: {
+          if (len >= 3) {
+            uint8_t elemType = stack[dataStart];
+            uint16_t count = stack[dataStart + 1] | (stack[dataStart + 2] << 8);
+            String typeStr;
+            switch (elemType) {
+              case TYPE_UINT8: typeStr = "u8"; break;
+              case TYPE_INT8:  typeStr = "i8"; break;
+              case TYPE_UINT16: typeStr = "u16"; break;
+              case TYPE_INT16:  typeStr = "i16"; break;
+              case TYPE_INT:    typeStr = "i32"; break;
+              default:          typeStr = "?";
+            }
+            repr = typeStr + "[" + String(count) + "]";
+            prefix = 'A';
+          } else {
+            repr = "?";
+            prefix = 'A';
+          }
+          break;
+        }
       case TYPE_MARKER: {
           repr = "";
           for (size_t i = 0; i < len; i++) {
@@ -552,6 +641,7 @@ void setup() {
   addInternalWord("const", constWord);
   addInternalWord("cont", contWord);
   addInternalWord("context", contextWord);
+  addInternalWord("array", arrayFunc);
   addInternalWord("ctx", contextWord);
   addInternalWord("not", notWord);
   addInternalWord("pool", dumpDataPoolWord);
@@ -565,8 +655,8 @@ void setup() {
   addInternalWord(":", colonWord);
   addInternalWord(";", semicolonWord);
   addInternalWord("body", bodyWord);
-  addInternalWord("+Task", addTaskWord);
-  addInternalWord("-Task", removeTaskWord);
+  addInternalWord("+task", addTaskWord);
+  addInternalWord("-task", removeTaskWord);
 
 
   // Маркеры (storage = 0x81)
@@ -586,6 +676,15 @@ void setup() {
   addMarkerWord(">");
   addMarkerWord("<=");
   addMarkerWord(">=");
+  addMarkerWord("[");
+  addMarkerWord("]");
+  addMarkerWord("if");
+  addMarkerWord("end");
+addMarkerWord("{");
+addMarkerWord("}");
+addMarkerWord("while"); // while — маркер, как if
+addInternalWord("goto", gotoFunc);
+  
 addInternalWord("LOW", [](uint16_t) {pushUInt8(LOW);});
 addInternalWord("HIGH", [](uint16_t) {pushUInt8(HIGH);});
 addInternalWord("INPUT", [](uint16_t) {pushUInt8(INPUT);});

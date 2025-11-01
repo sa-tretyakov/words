@@ -8,41 +8,50 @@ void printDictionary(uint16_t addr) {
 
     if (ptr + 3 > DICT_SIZE) break;
     uint8_t nameLen = dictionary[ptr + 2];
-    if (nameLen == 0 || ptr + 3 + nameLen + 2 > DICT_SIZE) break; // + storage + context
+    if (nameLen == 0 || ptr + 3 + nameLen + 2 > DICT_SIZE) break;
 
     uint8_t storage = dictionary[ptr + 3 + nameLen];
     uint8_t context  = dictionary[ptr + 3 + nameLen + 1];
 
+    // Печатаем адрес и длину имени
     Serial.printf("@%04X->%04X: [%02d]", ptr, nextPtr, nameLen);
 
+    // Печатаем имя как единое слово (без [ ] вокруг каждого символа)
+    Serial.print("");
     for (uint8_t i = 0; i < nameLen; i++) {
       char c = dictionary[ptr + 3 + i];
       if (c >= 32 && c <= 126) {
-        Serial.printf("[%c]", c);
+        Serial.print(c);
       } else {
-        Serial.printf("[\\x%02X]", (uint8_t)c);
+        Serial.printf("\\x%02X", (uint8_t)c);
       }
     }
 
+    // Печатаем тип
     Serial.print("[");
     if (storage & 0x80) {
-      Serial.print("I");
+      uint8_t stype = storage & 0x7F;
+      if (stype == STORAGE_EMBEDDED) Serial.print("C");
+      else if (stype == STORAGE_NAMED) Serial.print("N");
+      else if (stype == STORAGE_POOLED) Serial.print("V");
+      else if (stype == STORAGE_CONST) Serial.print("K");
+      else if (stype == STORAGE_CONT) Serial.print("T");
+      else Serial.print("I");
     } else {
-      if ((storage & 0x7F) == STORAGE_EMBEDDED) Serial.print("C");
-      else if ((storage & 0x7F) == STORAGE_NAMED) Serial.print("N");
-      else if ((storage & 0x7F) == STORAGE_POOLED) Serial.print("V");
-      else if ((storage & 0x7F) == STORAGE_CONST) Serial.print("K");
-      else if ((storage & 0x7F) == STORAGE_CONT) Serial.print("T");
+      if (storage == STORAGE_EMBEDDED) Serial.print("C");
+      else if (storage == STORAGE_NAMED) Serial.print("N");
+      else if (storage == STORAGE_POOLED) Serial.print("V");
+      else if (storage == STORAGE_CONST) Serial.print("K");
+      else if (storage == STORAGE_CONT) Serial.print("T");
       else Serial.print("?");
     }
     Serial.print("]");
 
-    // Печатаем context только если ≠ 0
-//    if (context != 0) {
-      Serial.printf("[%d]", context);
-//    }
+    // Печатаем контекст
+    Serial.printf("[%d]", context);
 
-    uint16_t restStart = ptr + 3 + nameLen + 2; // + storage + context
+    // Печатаем данные
+    uint16_t restStart = ptr + 3 + nameLen + 2;
     if (nextPtr > restStart) {
       Serial.print(" ");
       printBytes(&dictionary[restStart], nextPtr - restStart);
@@ -52,6 +61,70 @@ void printDictionary(uint16_t addr) {
     ptr = nextPtr;
   }
 }
+
+void arrayFunc(uint16_t addr) {
+  // Ожидаем на стеке одно значение: count с типом элемента (например, 5u8)
+  if (stackTop < 2) {
+    Serial.println("⚠️ array: expected count with type suffix (e.g. 5u8)");
+    // Кладём пустую заготовку (0 элементов)
+    uint8_t dummy[3] = {TYPE_UINT8, 0, 0};
+    pushValue(dummy, 3, TYPE_ARRAY);
+    return;
+  }
+
+  uint8_t valueLen = stack[stackTop - 2];
+  uint8_t valueType = stack[stackTop - 1];
+
+  // Поддерживаем только целочисленные типы как тип элемента
+  if (valueType != TYPE_UINT8 && valueType != TYPE_INT8 &&
+      valueType != TYPE_UINT16 && valueType != TYPE_INT16 &&
+      valueType != TYPE_INT) {
+    Serial.println("⚠️ array: element type must be u8, i8, u16, i16, or i32");
+    uint8_t dummy[3] = {TYPE_UINT8, 0, 0};
+    pushValue(dummy, 3, TYPE_ARRAY);
+    dropTop(0);
+    return;
+  }
+
+  // Читаем количество элементов (всегда беззнаковое)
+  uint16_t count = 0;
+  if (valueType == TYPE_UINT8) {
+    count = popUInt8();
+  } else if (valueType == TYPE_INT8) {
+    int8_t v = popInt8();
+    count = (v < 0) ? 0 : (uint16_t)v;
+  } else if (valueType == TYPE_UINT16) {
+    count = popUInt16();
+  } else if (valueType == TYPE_INT16) {
+    int16_t v = popInt16();
+    count = (v < 0) ? 0 : (uint16_t)v;
+  } else if (valueType == TYPE_INT) {
+    int32_t v = popInt();
+    if (v < 0) v = 0;
+    if (v > 65535) v = 65535;
+    count = (uint16_t)v;
+  }
+
+  // Ограничиваем разумным максимумом (можно изменить)
+  if (count == 0) {
+    Serial.println("⚠️ array: count must be > 0");
+    count = 1;
+  }
+  if (count > 1024) {
+    Serial.println("⚠️ array: count too large (max 1024)");
+    count = 1024;
+  }
+
+  // Формируем заготовку: [elemType][count_L][count_H]
+  uint8_t arrayStub[3];
+  arrayStub[0] = valueType;               // тип элемента
+  arrayStub[1] = (uint8_t)(count & 0xFF); // младший байт
+  arrayStub[2] = (uint8_t)(count >> 8);   // старший байт
+
+  // Кладём на стек как TYPE_ARRAY (длина = 3)
+  pushValue(arrayStub, 3, TYPE_ARRAY);
+}
+
 
 bool addMarkerWord(const char* name) {
   size_t nameLen = strlen(name);

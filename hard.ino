@@ -34,6 +34,7 @@ void delayMicrosecondsFunc(uint16_t addr) {
 
   ::delayMicroseconds((unsigned int)us);
 }
+
 void charWord(uint16_t addr) {
   uint8_t type, len;
   const uint8_t* data;
@@ -98,172 +99,6 @@ bool valueToUint8(uint8_t type, uint8_t len, const uint8_t* data, uint8_t* out) 
   if (val < 0 || val > 255) return false;
   *out = (uint8_t)val;
   return true;
-}
-
-void mychoiceFunc(uint16_t addr) {
-  // 1. Если стек пуст — читаем значение
-  if (stackTop == 0) {
-    uint8_t nameLen = dictionary[addr + 2];
-    uint8_t storage = dictionary[addr + 3 + nameLen];
-    uint8_t storageType = storage & 0x7F;
-
-    if (storageType == STORAGE_CONT) {
-      const uint8_t* valData = &dictionary[addr + 3 + nameLen + 2];
-      pushValue(valData, 4, TYPE_INT);
-    }
-    else if (storageType == STORAGE_CONST || storageType == STORAGE_POOLED) {
-      uint8_t Type, Len;
-      const uint8_t* Data;
-      if (readVariableValue(addr, &Type, &Len, &Data)) {
-        pushValue(Data, Len, Type);
-      }
-    }
-    return;
-  }
-
-  // 2. Читаем вершину стека
-  uint8_t Type, Len;
-  const uint8_t* Data;
-  if (!peekStackTop(&Type, &Len, &Data)) return;
-
-  // 3. Если не маркер — читаем значение
-  if (Type != TYPE_MARKER) {
-    uint8_t nameLen = dictionary[addr + 2];
-    uint8_t storage = dictionary[addr + 3 + nameLen];
-    uint8_t storageType = storage & 0x7F;
-
-    if (storageType == STORAGE_CONT) {
-      const uint8_t* valData = &dictionary[addr + 3 + nameLen + 2];
-      pushValue(valData, 4, TYPE_INT);
-    }
-    else if (storageType == STORAGE_CONST || storageType == STORAGE_POOLED) {
-      if (readVariableValue(addr, &Type, &Len, &Data)) {
-        pushValue(Data, Len, Type);
-      }
-    }
-    return;
-  }
-
-  // 4. Обработка маркеров
-
-  // Простое присваивание
-  if (Len == 1 && Data[0] == '=') {
-    dropTop(0);
-    if (peekStackTop(&Type, &Len, &Data)) {
-      uint8_t nameLen = dictionary[addr + 2];
-      uint8_t storage = dictionary[addr + 3 + nameLen];
-      uint8_t storageType = storage & 0x7F;
-
-      if (storageType == STORAGE_CONST) {
-        uint32_t poolRef =
-          dictionary[addr + 3 + nameLen + 2 + 0] |
-          (dictionary[addr + 3 + nameLen + 2 + 1] << 8) |
-          (dictionary[addr + 3 + nameLen + 2 + 2] << 16) |
-          (dictionary[addr + 3 + nameLen + 2 + 3] << 24);
-
-        if (poolRef != 0xFFFFFFFF) {
-          Serial.println("⚠️ const: already initialized");
-          dropTop(0);
-          return;
-        }
-      }
-      else if (storageType == STORAGE_CONT) {
-        Serial.println("⚠️ cont: assignment not allowed");
-        dropTop(0);
-        return;
-      }
-
-      storeValueToVariable(addr, Data, Len, Type);
-      dropTop(0);
-    }
-    return;
-  }
-
-  // Арифметика (бинарные операции без присваивания)
-  if (Len == 1 && Data[0] == '+') { dropTop(0); applyBinaryOp(addr, OP_ADD); return; }
-  if (Len == 1 && Data[0] == '-') { dropTop(0); applyBinaryOp(addr, OP_SUB); return; }
-  if (Len == 1 && Data[0] == '*') { dropTop(0); applyBinaryOp(addr, OP_MUL); return; }
-  if (Len == 1 && Data[0] == '/') { dropTop(0); applyBinaryOp(addr, OP_DIV); return; }
-
-  // Сравнения
-  if (Len == 2 && Data[0] == '=' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_EQ); return; }
-  if (Len == 2 && Data[0] == '!' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_NE); return; }
-  if (Len == 1 && Data[0] == '<') { dropTop(0); applyCompareOp(addr, CMP_LT); return; }
-  if (Len == 1 && Data[0] == '>') { dropTop(0); applyCompareOp(addr, CMP_GT); return; }
-  if (Len == 2 && Data[0] == '<' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_LE); return; }
-  if (Len == 2 && Data[0] == '>' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_GE); return; }
-
-  // Составное присваивание: +=, -=, *=, /=
-  if (Len == 2 && Data[0] == '+' && Data[1] == '=') {
-    dropTop(0);
-    if (!peekStackTop(&Type, &Len, &Data)) {
-      Serial.println("⚠️ +=: missing right-hand value");
-      return;
-    }
-    applyBinaryOp(addr, OP_ADD);
-    if (peekStackTop(&Type, &Len, &Data)) {
-      storeValueToVariable(addr, Data, Len, Type);
-      dropTop(0);
-    }
-    return;
-  }
-
-  if (Len == 2 && Data[0] == '-' && Data[1] == '=') {
-    dropTop(0);
-    if (!peekStackTop(&Type, &Len, &Data)) {
-      Serial.println("⚠️ -=: missing right-hand value");
-      return;
-    }
-    applyBinaryOp(addr, OP_SUB);
-    if (peekStackTop(&Type, &Len, &Data)) {
-      storeValueToVariable(addr, Data, Len, Type);
-      dropTop(0);
-    }
-    return;
-  }
-
-  if (Len == 2 && Data[0] == '*' && Data[1] == '=') {
-    dropTop(0);
-    if (!peekStackTop(&Type, &Len, &Data)) {
-      Serial.println("⚠️ *=: missing right-hand value");
-      return;
-    }
-    applyBinaryOp(addr, OP_MUL);
-    if (peekStackTop(&Type, &Len, &Data)) {
-      storeValueToVariable(addr, Data, Len, Type);
-      dropTop(0);
-    }
-    return;
-  }
-
-  if (Len == 2 && Data[0] == '/' && Data[1] == '=') {
-    dropTop(0);
-    if (!peekStackTop(&Type, &Len, &Data)) {
-      Serial.println("⚠️ /=: missing right-hand value");
-      return;
-    }
-    applyBinaryOp(addr, OP_DIV);
-    if (peekStackTop(&Type, &Len, &Data)) {
-      storeValueToVariable(addr, Data, Len, Type);
-      dropTop(0);
-    }
-    return;
-  }
-
-  // Неизвестный маркер — читаем значение переменной
-  uint8_t nameLen = dictionary[addr + 2];
-  uint8_t storage = dictionary[addr + 3 + nameLen];
-  uint8_t storageType = storage & 0x7F;
-
-  if (storageType == STORAGE_CONT) {
-    const uint8_t* valData = &dictionary[addr + 3 + nameLen + 2];
-    pushValue(valData, 4, TYPE_INT);
-  }
-  else if (storageType == STORAGE_CONST || storageType == STORAGE_POOLED) {
-    if (readVariableValue(addr, &Type, &Len, &Data)) {
-      pushValue(Data, Len, Type);
-    }
-  }
 }
 
 void pushMarkerFunc(uint16_t addr) {
@@ -382,13 +217,25 @@ void dumpDataPool(uint16_t offset, uint16_t len) {
 
 void dumpDataPoolWord(uint16_t addr) {
   Serial.printf("dataPool (used %u/%u):\n", dataPoolPtr, DATA_POOL_SIZE);
+  
+  // Заголовок: смещения 0-F
+  Serial.print("     ");
+  for (int i = 0; i < 16; i++) {
+    Serial.printf(" %02X", i);
+  }
+  Serial.println();
+
   for (uint16_t i = 0; i < dataPoolPtr; i++) {
     if (i % 16 == 0) {
       if (i > 0) Serial.println();
-      Serial.printf("%04X: ", i);
+      Serial.printf("%04X:", i);
     }
-    Serial.printf("%02X ", dataPool[i]);
+    Serial.printf(" %02X", dataPool[i]);
   }
   if (dataPoolPtr % 16 != 0) Serial.println();
   Serial.println();
 }
+
+void nopFunc(uint16_t addr){
+  
+  }

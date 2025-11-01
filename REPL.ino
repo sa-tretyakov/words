@@ -81,6 +81,51 @@ void executeAt(uint16_t addr) {
       uint16_t targetAddr = dictionary[pos] | (dictionary[pos + 1] << 8);
       if (targetAddr == 0) break;
 
+      // === ОБРАБОТКА МАРКЕРА IF (0xFFFD) ===
+      if (targetAddr == 0xFFFD) {
+        // Читаем условие со стека
+        uint8_t type, len;
+        const uint8_t* data;
+        if (!peekStackTop(&type, &len, &data)) {
+          // Нет условия — считаем ложью → выполняем end
+          pos += 2; // указываем на следующее слово (end)
+          continue;
+        }
+
+        bool condition = false;
+        if (type == TYPE_BOOL && len == 1) {
+          condition = (data[0] != 0);
+        } else if (type == TYPE_INT && len == 4) {
+          int32_t v; memcpy(&v, data, 4); condition = (v != 0);
+        } else if (type == TYPE_UINT8 && len == 1) {
+          condition = (data[0] != 0);
+        } else if (type == TYPE_INT8 && len == 1) {
+          condition = ((int8_t)data[0] != 0);
+        } else if (type == TYPE_UINT16 && len == 2) {
+          uint16_t v; memcpy(&v, data, 2); condition = (v != 0);
+        } else if (type == TYPE_INT16 && len == 2) {
+          int16_t v; memcpy(&v, data, 2); condition = (v != 0);
+        } else if (type == TYPE_FLOAT && len == 4) {
+          float v; memcpy(&v, data, 4); condition = (v != 0.0f);
+        }
+
+        dropTop(0);
+
+        if (condition) {
+          // Истина → пропускаем следующее слово (end = 0xFFFE)
+          pos += 4; // IF (2) + end (2)
+        } else {
+          // Ложь → выполняем следующее слово (end)
+          pos += 2; // указываем на end
+        }
+        continue;
+      }
+
+      // === ОБРАБОТКА МАРКЕРА end (0xFFFE) ===
+      if (targetAddr == 0xFFFE) {
+        return; // выход из слова
+      }
+
       if (targetAddr == 0xFFFF) {
         pos += 2;
         if (pos + 2 > DICT_SIZE) break;
@@ -96,6 +141,7 @@ void executeAt(uint16_t addr) {
     }
   }
 }
+
 
 void executeLine(String& line) {
   // Обработка многострочного комментария (продолжение)
@@ -207,6 +253,55 @@ void executeLineTokens(String& line) {
 
     for (int i = tokenCount - 1; i >= 0; i--) {
       String& token = tokens[i];
+
+      // === ОБРАБОТКА СЛОВА 'end' ===
+      if (token == "end") {
+        uint16_t bodyEnd = dictLen;
+        if (bodyEnd + 2 + 2 > DICT_SIZE) {
+          Serial.println("⚠️ Dictionary full during compile (end)");
+          continue;
+        }
+
+        // Сдвигаем завершающие 00 00
+        dictionary[bodyEnd] = dictionary[bodyEnd - 2];
+        dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
+
+        // Маркер end = 0xFFFE
+        dictionary[bodyEnd - 2] = 0xFE;
+        dictionary[bodyEnd - 1] = 0xFF;
+
+        uint16_t newNext = bodyEnd + 2;
+        dictionary[compileTarget] = (newNext >> 0) & 0xFF;
+        dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
+        dictLen = newNext;
+        continue;
+      }
+      if (token == "if") {
+  uint16_t bodyEnd = dictLen;
+  if (bodyEnd + 4 + 2 > DICT_SIZE) { // 4 байта: IF (2) + end (2)
+    Serial.println("⚠️ Dictionary full (if)");
+    continue;
+  }
+
+  // Сдвигаем завершающие 00 00
+  dictionary[bodyEnd] = dictionary[bodyEnd - 2];
+  dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
+
+  // Маркер IF = 0xFFFD
+  dictionary[bodyEnd - 2] = 0xFD;
+  dictionary[bodyEnd - 1] = 0xFF;
+
+  // Маркер end = 0xFFFE
+  dictionary[bodyEnd] = 0xFE;
+  dictionary[bodyEnd + 1] = 0xFF;
+
+  uint16_t newNext = bodyEnd + 4;
+  dictionary[compileTarget] = (newNext >> 0) & 0xFF;
+  dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
+  dictLen = newNext;
+  continue;
+}
+
       String tokenOrig = token;
       String tempToken = token;
       ValueType forcedType = TYPE_UNDEFINED;
@@ -555,7 +650,6 @@ void executeLineTokens(String& line) {
     }
   }
 }
-
 
 void bodyWord(uint16_t addr) {
   // Читаем строку со стека
