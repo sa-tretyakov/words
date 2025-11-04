@@ -36,6 +36,7 @@ uint16_t ADDR_TMP_LIT = 0;
 
 bool shouldJump = false;
 int32_t jumpOffset = 0;
+uint16_t addrGoto;
 // ========================
 // Настройки
 // ========================
@@ -630,6 +631,8 @@ void setup() {
   }
 
   tmpLit();
+  addInternalWord("goto", gotoFunc);
+  addrGoto = findWordAddress("goto");
   // Служебные слова (storage = 0x80)
   addInternalWord(".", printTop);
   addInternalWord("print", printTop);
@@ -653,7 +656,7 @@ void setup() {
   addInternalWord("load", loadWord);
   addInternalWord("json", jsonWord);
   addInternalWord(":", colonWord);
-  addInternalWord(";", semicolonWord);
+
   addInternalWord("body", bodyWord);
   addInternalWord("+task", addTaskWord);
   addInternalWord("-task", removeTaskWord);
@@ -680,10 +683,10 @@ void setup() {
   addMarkerWord("]");
   addMarkerWord("if");
   addMarkerWord("end");
-addMarkerWord("{");
-addMarkerWord("}");
-addMarkerWord("while"); // while — маркер, как if
-addInternalWord("goto", gotoFunc);
+  addMarkerWord("{");
+  addMarkerWord("}");
+  addMarkerWord("while"); // while — маркер, как if
+
   
 addInternalWord("LOW", [](uint16_t) {pushUInt8(LOW);});
 addInternalWord("HIGH", [](uint16_t) {pushUInt8(HIGH);});

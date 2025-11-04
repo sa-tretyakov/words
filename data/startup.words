@@ -41,9 +41,20 @@ print nums [ 0 ]  // → 1000
 */
 
 var i
+i = 0
 
-: whileTest
-i = 5u8 + 6u8
-print i
+: test
+255u8
 ;
+
+
+: countTo5
+  255u8
+  while i > 5 {
+    print i
+    i = i + 1
+  }
+;
+
+
 

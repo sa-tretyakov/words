@@ -1,3 +1,40 @@
+// Возвращает смещение слова в словаре по его имени.
+// Если слово не найдено — возвращает 0xFFFF.
+uint16_t findWordAddress(const char* name) {
+  uint8_t nameLen = strlen(name);
+  uint16_t ptr = 0;
+
+  while (ptr < dictLen) {
+    if (ptr + 2 >= DICT_SIZE) break;
+    uint16_t nextPtr = dictionary[ptr] | (dictionary[ptr + 1] << 8);
+    if (nextPtr == 0 || nextPtr <= ptr || nextPtr > DICT_SIZE) break;
+
+    if (ptr + 3 > DICT_SIZE) break;
+    uint8_t len = dictionary[ptr + 2];
+    if (len != nameLen || ptr + 3 + len > DICT_SIZE) {
+      ptr = nextPtr;
+      continue;
+    }
+
+    // Сравниваем имя
+    bool match = true;
+    for (uint8_t i = 0; i < nameLen; i++) {
+      if (dictionary[ptr + 3 + i] != name[i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return ptr; // ← смещение слова в словаре
+    }
+
+    ptr = nextPtr;
+  }
+
+  return 0xFFFF; // не найдено
+}
+
+
 void colonWord(uint16_t addr) {
   // Следующий токен — имя слова
   if (stackTop < 2) return;

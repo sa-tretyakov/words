@@ -13,11 +13,9 @@ void printDictionary(uint16_t addr) {
     uint8_t storage = dictionary[ptr + 3 + nameLen];
     uint8_t context  = dictionary[ptr + 3 + nameLen + 1];
 
-    // Печатаем адрес и длину имени
     Serial.printf("@%04X->%04X: [%02d]", ptr, nextPtr, nameLen);
 
-    // Печатаем имя как единое слово (без [ ] вокруг каждого символа)
-    Serial.print("");
+    // Печатаем имя как единое слово
     for (uint8_t i = 0; i < nameLen; i++) {
       char c = dictionary[ptr + 3 + i];
       if (c >= 32 && c <= 126) {
@@ -27,9 +25,10 @@ void printDictionary(uint16_t addr) {
       }
     }
 
-    // Печатаем тип
+    // === ПЕЧАТЬ ТИПА СЛОВА ===
     Serial.print("[");
     if (storage & 0x80) {
+      // Internal word — тип в младших 7 битах
       uint8_t stype = storage & 0x7F;
       if (stype == STORAGE_EMBEDDED) Serial.print("C");
       else if (stype == STORAGE_NAMED) Serial.print("N");
@@ -38,19 +37,15 @@ void printDictionary(uint16_t addr) {
       else if (stype == STORAGE_CONT) Serial.print("T");
       else Serial.print("I");
     } else {
-      if (storage == STORAGE_EMBEDDED) Serial.print("C");
-      else if (storage == STORAGE_NAMED) Serial.print("N");
-      else if (storage == STORAGE_POOLED) Serial.print("V");
-      else if (storage == STORAGE_CONST) Serial.print("K");
-      else if (storage == STORAGE_CONT) Serial.print("T");
-      else Serial.print("?");
+      // External word — storage = 0, печатаем как [X]
+      Serial.print("X");
     }
     Serial.print("]");
 
     // Печатаем контекст
     Serial.printf("[%d]", context);
 
-    // Печатаем данные
+    // Печатаем данные (poolRef, funcPtr, тело и т.д.)
     uint16_t restStart = ptr + 3 + nameLen + 2;
     if (nextPtr > restStart) {
       Serial.print(" ");
@@ -61,6 +56,7 @@ void printDictionary(uint16_t addr) {
     ptr = nextPtr;
   }
 }
+
 
 void arrayFunc(uint16_t addr) {
   // Ожидаем на стеке одно значение: count с типом элемента (например, 5u8)
