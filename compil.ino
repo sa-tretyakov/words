@@ -35,54 +35,150 @@ uint16_t findWordAddress(const char* name) {
 }
 
 
-void colonWord(uint16_t addr) {
-  // Следующий токен — имя слова
-  if (stackTop < 2) return;
-  uint8_t nameLen = stack[stackTop - 2];
-  uint8_t nameType = stack[stackTop - 1];
-  if (nameType != TYPE_NAME) return;
-  if (nameLen > stackTop - 2) return;
+void interpretToken(const String& token) {
+  // === СТРОКИ В КАВЫЧКАХ ===
+  if (token.startsWith("\"") && token.endsWith("\"") && token.length() >= 2) {
+    String strContent = token.substring(1, token.length() - 1);
+    size_t len = strContent.length();
+    if (len > 255) {
+      Serial.println("⚠️ Строка слишком длинная");
+      return;
+    }
 
-  size_t nameStart = stackTop - 2 - nameLen;
-  const char* name = (const char*)&stack[nameStart];
-
-  // Создаём запись external-слова
-  // Формат: [next][nameLen][name][storage=0][context=0][тело... 00 00]
-  size_t headerSize = 2 + 1 + nameLen + 1 + 1; // next+len+name+storage+context
-  size_t recordSize = headerSize + 2; // минимум: 00 00 (пустое тело)
-
-  if (dictLen + recordSize > DICT_SIZE) {
-    Serial.println("⚠️ Dictionary full");
+    if (compiling) {
+      // Компиляция строки как литерала
+      if (dictLen + 6 + len > DICT_SIZE) {
+        Serial.println("⚠️ Dictionary full (string literal)");
+        return;
+      }
+      dictionary[dictLen++] = 0xFF; // 0xFFFF
+      dictionary[dictLen++] = 0xFF;
+      dictionary[dictLen++] = (uint8_t)len;
+      dictionary[dictLen++] = TYPE_STRING;
+      memcpy(&dictionary[dictLen], strContent.c_str(), len);
+      dictLen += len;
+    } else {
+      // Интерпретация через tmpLit
+      storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)strContent.c_str(), (uint8_t)len, TYPE_STRING);
+      executeAt(ADDR_TMP_LIT);
+    }
     return;
   }
 
-  uint8_t* pos = &dictionary[dictLen];
-  uint16_t nextOffset = dictLen + recordSize;
+  // === ОСТАЛЬНЫЕ ТОКЕНЫ (числа, слова) ===
+  String tokenOrig = token;
+  ValueType forcedType = TYPE_UNDEFINED;
+  String tempToken = token;
+  if (tempToken.endsWith("i32")) {
+    forcedType = TYPE_INT;
+    tempToken.remove(tempToken.length() - 3);
+  }
+  else if (tempToken.endsWith("i16")) {
+    forcedType = TYPE_INT16;
+    tempToken.remove(tempToken.length() - 3);
+  }
+  else if (tempToken.endsWith("u16")) {
+    forcedType = TYPE_UINT16;
+    tempToken.remove(tempToken.length() - 3);
+  }
+  else if (tempToken.endsWith("i8")) {
+    forcedType = TYPE_INT8;
+    tempToken.remove(tempToken.length() - 2);
+  }
+  else if (tempToken.endsWith("u8")) {
+    forcedType = TYPE_UINT8;
+    tempToken.remove(tempToken.length() - 2);
+  }
 
-  pos[0] = (nextOffset >> 0) & 0xFF;
-  pos[1] = (nextOffset >> 8) & 0xFF;
-  pos[2] = nameLen;
-  memcpy(&pos[3], name, nameLen);
-  pos[3 + nameLen] = 0; // storage = 0 (external)
-  pos[3 + nameLen + 1] = 0; // context = 0
-
-  // Пустое тело: 00 00
-  pos[headerSize] = 0x00;
-  pos[headerSize + 1] = 0x00;
-
-  compileTarget = dictLen;
-  dictLen = nextOffset;
-  stackTop = nameStart;
-
-  compiling = true;
-}
-
-void semicolonWord(uint16_t addr) {
-  if (!compiling) {
-    Serial.println("⚠️ ; outside compilation");
+  if (tempToken.length() == 0) {
+    lookupAndExecute(tokenOrig);
     return;
   }
 
-  compiling = false;
-  // Тело уже собрано в executeLine (см. ниже)
+  bool hasDot = false, isHex = false;
+  bool isNumber = isValidNumber(tempToken, hasDot, isHex);
+
+  if (!isNumber) {
+    lookupAndExecute(tokenOrig);
+    return;
+  }
+
+  if (hasDot) {
+    if (forcedType != TYPE_UNDEFINED) {
+      Serial.printf("⚠️ Float literals cannot have type suffixes: %s\n", tokenOrig.c_str());
+      return;
+    }
+    float f = tempToken.toFloat();
+    storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)&f, 4, TYPE_FLOAT);
+    executeAt(ADDR_TMP_LIT);
+  } else {
+    long val;
+    if (isHex) val = strtol(tempToken.c_str(), nullptr, 16);
+    else val = atol(tempToken.c_str());
+
+    uint8_t type, len;
+    uint8_t data[4];
+
+    if (forcedType == TYPE_UNDEFINED) {
+      if (isHex) {
+        if (val >= 0 && val <= UINT8_MAX) {
+          type = TYPE_UINT8;
+          len = 1;
+          data[0] = (uint8_t)val;
+        }
+        else if (val >= 0 && val <= UINT16_MAX) {
+          type = TYPE_UINT16;
+          len = 2;
+          uint16_t v16 = (uint16_t)val;
+          memcpy(data, &v16, 2);
+        }
+        else {
+          type = TYPE_INT;
+          len = 4;
+          int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+          memcpy(data, &v, 4);
+        }
+      } else {
+        type = TYPE_INT; len = 4; int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val; memcpy(data, &v, 4);
+      }
+    } else {
+      switch (forcedType) {
+        case TYPE_INT8: {
+            type = TYPE_INT8; len = 1;
+            int8_t v8 = (val < INT8_MIN) ? INT8_MIN : (val > INT8_MAX) ? INT8_MAX : (int8_t)val;
+            data[0] = v8;
+            break;
+          }
+        case TYPE_UINT8: {
+            type = TYPE_UINT8; len = 1;
+            data[0] = (val < 0) ? 0 : (val > UINT8_MAX) ? UINT8_MAX : (uint8_t)val;
+            break;
+          }
+        case TYPE_INT16: {
+            type = TYPE_INT16; len = 2;
+            int16_t v16 = (val < INT16_MIN) ? INT16_MIN : (val > INT16_MAX) ? INT16_MAX : (int16_t)val;
+            memcpy(data, &v16, 2);
+            break;
+          }
+        case TYPE_UINT16: {
+            type = TYPE_UINT16; len = 2;
+            uint16_t u16 = (val < 0) ? 0 : (val > UINT16_MAX) ? UINT16_MAX : (uint16_t)val;
+            memcpy(data, &u16, 2);
+            break;
+          }
+        case TYPE_INT: {
+            type = TYPE_INT; len = 4;
+            int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+            memcpy(data, &v32, 4);
+            break;
+          }
+        default: {
+            return;
+          }
+      }
+    }
+
+    storeValueToVariable(ADDR_TMP_LIT, data, len, type);
+    executeAt(ADDR_TMP_LIT);
+  }
 }

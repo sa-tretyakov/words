@@ -62,7 +62,9 @@ void executeAt(uint16_t addr) {
   uint8_t nameLen = dictionary[addr + 2];
   if (addr + 3 + nameLen + 1 >= DICT_SIZE) return;
   uint8_t storage = dictionary[addr + 3 + nameLen];
+  
   if (storage & 0x80) {
+    // Internal word
     uint16_t nextPtr = dictionary[addr] | (dictionary[addr + 1] << 8);
     if (nextPtr < addr + 7 || nextPtr > DICT_SIZE) return;
     uint32_t funcAddr =
@@ -73,75 +75,69 @@ void executeAt(uint16_t addr) {
     WordFunc func = (WordFunc)funcAddr;
     func(addr);
   } else {
-    uint8_t nameLen = dictionary[addr + 2];
+    // External word
+    uint16_t nextPtr = dictionary[addr] | (dictionary[addr + 1] << 8);
     uint16_t bodyStart = addr + 3 + nameLen + 2;
     uint16_t pos = bodyStart;
 
-    while (pos + 2 <= DICT_SIZE) {
-      uint16_t targetAddr = dictionary[pos] | (dictionary[pos + 1] << 8);
-      if (targetAddr == 0) break;
+    while (pos < nextPtr) {
+      if (pos + 2 > nextPtr) break; // Защита от выхода за пределы
 
-      // === ОБРАБОТКА МАРКЕРА IF (0xFFFD) ===
+      uint16_t targetAddr = dictionary[pos] | (dictionary[pos + 1] << 8);
+      
+      // Обработка маркера IF (0xFFFD)
       if (targetAddr == 0xFFFD) {
-        // Читаем условие со стека
         uint8_t type, len;
         const uint8_t* data;
         if (!peekStackTop(&type, &len, &data)) {
-          // Нет условия — считаем ложью → выполняем end
-          pos += 2; // указываем на следующее слово (end)
+          pos += 2; // Выполняем end
           continue;
         }
 
         bool condition = false;
-        if (type == TYPE_BOOL && len == 1) {
-          condition = (data[0] != 0);
-        } else if (type == TYPE_INT && len == 4) {
-          int32_t v; memcpy(&v, data, 4); condition = (v != 0);
-        } else if (type == TYPE_UINT8 && len == 1) {
-          condition = (data[0] != 0);
-        } else if (type == TYPE_INT8 && len == 1) {
-          condition = ((int8_t)data[0] != 0);
-        } else if (type == TYPE_UINT16 && len == 2) {
-          uint16_t v; memcpy(&v, data, 2); condition = (v != 0);
-        } else if (type == TYPE_INT16 && len == 2) {
-          int16_t v; memcpy(&v, data, 2); condition = (v != 0);
-        } else if (type == TYPE_FLOAT && len == 4) {
-          float v; memcpy(&v, data, 4); condition = (v != 0.0f);
-        }
+        if (type == TYPE_BOOL && len == 1) condition = data[0];
+        else if (type == TYPE_INT && len == 4) { int32_t v; memcpy(&v, data, 4); condition = (v != 0); }
+        else if (type == TYPE_UINT8 && len == 1) condition = (data[0] != 0);
+        else if (type == TYPE_INT8 && len == 1) condition = ((int8_t)data[0] != 0);
+        else if (type == TYPE_UINT16 && len == 2) { uint16_t v; memcpy(&v, data, 2); condition = (v != 0); }
+        else if (type == TYPE_INT16 && len == 2) { int16_t v; memcpy(&v, data, 2); condition = (v != 0); }
+        else if (type == TYPE_FLOAT && len == 4) { float v; memcpy(&v, data, 4); condition = (v != 0.0f); }
 
         dropTop(0);
 
         if (condition) {
-          // Истина → пропускаем следующее слово (end = 0xFFFE)
+          // Истина → пропускаем end (0xFFFE)
           pos += 4; // IF (2) + end (2)
         } else {
-          // Ложь → выполняем следующее слово (end)
+          // Ложь → выполняем end
           pos += 2; // указываем на end
         }
         continue;
       }
 
-      // === ОБРАБОТКА МАРКЕРА end (0xFFFE) ===
+      // Обработка маркера end (0xFFFE)
       if (targetAddr == 0xFFFE) {
-        return; // выход из слова
+        return;
       }
 
+      // Обработка литерала (0xFFFF)
       if (targetAddr == 0xFFFF) {
         pos += 2;
-        if (pos + 2 > DICT_SIZE) break;
+        if (pos + 2 > nextPtr) break;
         uint8_t len = dictionary[pos++];
         uint8_t type = dictionary[pos++];
-        if (pos + len > DICT_SIZE) break;
+        if (pos + len > nextPtr) break;
         pushValue(&dictionary[pos], len, type);
         pos += len;
-      } else {
-        executeAt(targetAddr);
-        pos += 2;
+        continue;
       }
+
+      // Обычное слово
+      executeAt(targetAddr);
+      pos += 2;
     }
   }
 }
-
 
 void executeLine(String& line) {
   // Обработка многострочного комментария (продолжение)
@@ -211,448 +207,8 @@ void executeLine(String& line) {
   }
 }
 
-void executeLineTokens(String& line) {
-  const int MAX_TOKENS = 32;
-  String tokens[MAX_TOKENS];
-  int tokenCount = 0;
-
-  int start = 0;
-  int end = 0;
-  int len = line.length();
-
-  while (start < len && tokenCount < MAX_TOKENS) {
-    while (start < len && line[start] == ' ') start++;
-    if (start >= len) break;
-
-    end = start;
-    bool inQuotes = false;
-    while (end < len) {
-      char c = line[end];
-      if (c == '"' && (end == 0 || line[end - 1] != '\\')) {
-        inQuotes = !inQuotes;
-      }
-      if (!inQuotes && c == ' ') break;
-      end++;
-    }
-
-    String token = line.substring(start, end);
-    if (token.length() > 0) {
-      tokens[tokenCount++] = token;
-    }
-    start = end;
-  }
-
-  // === РЕЖИМ КОМПИЛЯЦИИ ===
-  if (compiling) {
-    for (int i = 0; i < tokenCount; i++) {
-      if (tokens[i] == ";") {
-        compiling = false;
-        return;
-      }
-    }
-
-    for (int i = tokenCount - 1; i >= 0; i--) {
-      String& token = tokens[i];
-
-      // === ОБРАБОТКА СЛОВА 'end' ===
-      if (token == "end") {
-        uint16_t bodyEnd = dictLen;
-        if (bodyEnd + 2 + 2 > DICT_SIZE) {
-          Serial.println("⚠️ Dictionary full during compile (end)");
-          continue;
-        }
-
-        // Сдвигаем завершающие 00 00
-        dictionary[bodyEnd] = dictionary[bodyEnd - 2];
-        dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
-
-        // Маркер end = 0xFFFE
-        dictionary[bodyEnd - 2] = 0xFE;
-        dictionary[bodyEnd - 1] = 0xFF;
-
-        uint16_t newNext = bodyEnd + 2;
-        dictionary[compileTarget] = (newNext >> 0) & 0xFF;
-        dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
-        dictLen = newNext;
-        continue;
-      }
-      if (token == "if") {
-  uint16_t bodyEnd = dictLen;
-  if (bodyEnd + 4 + 2 > DICT_SIZE) { // 4 байта: IF (2) + end (2)
-    Serial.println("⚠️ Dictionary full (if)");
-    continue;
-  }
-
-  // Сдвигаем завершающие 00 00
-  dictionary[bodyEnd] = dictionary[bodyEnd - 2];
-  dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
-
-  // Маркер IF = 0xFFFD
-  dictionary[bodyEnd - 2] = 0xFD;
-  dictionary[bodyEnd - 1] = 0xFF;
-
-  // Маркер end = 0xFFFE
-  dictionary[bodyEnd] = 0xFE;
-  dictionary[bodyEnd + 1] = 0xFF;
-
-  uint16_t newNext = bodyEnd + 4;
-  dictionary[compileTarget] = (newNext >> 0) & 0xFF;
-  dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
-  dictLen = newNext;
-  continue;
-}
-
-      String tokenOrig = token;
-      String tempToken = token;
-      ValueType forcedType = TYPE_UNDEFINED;
-      bool hasDot = false;
-      bool isHex = false;
-      bool isNumber = false;
-
-      // Обработка суффиксов
-      if (tempToken.endsWith("i32")) {
-        forcedType = TYPE_INT;
-        tempToken.remove(tempToken.length() - 3);
-      } else if (tempToken.endsWith("i16")) {
-        forcedType = TYPE_INT16;
-        tempToken.remove(tempToken.length() - 3);
-      } else if (tempToken.endsWith("u16")) {
-        forcedType = TYPE_UINT16;
-        tempToken.remove(tempToken.length() - 3);
-      } else if (tempToken.endsWith("i8")) {
-        forcedType = TYPE_INT8;
-        tempToken.remove(tempToken.length() - 2);
-      } else if (tempToken.endsWith("u8")) {
-        forcedType = TYPE_UINT8;
-        tempToken.remove(tempToken.length() - 2);
-      }
-
-      if (tempToken.length() > 0) {
-        isNumber = isValidNumber(tempToken, hasDot, isHex);
-      }
-
-      if (isNumber) {
-        if (hasDot) {
-          // FLOAT
-          if (forcedType != TYPE_UNDEFINED) {
-            Serial.printf("⚠️ Float literals cannot have type suffixes: %s\n", tokenOrig.c_str());
-            continue;
-          }
-          float f = tempToken.toFloat();
-          uint8_t type = TYPE_FLOAT;
-          uint8_t len = 4;
-          uint8_t data[4];
-          memcpy(data, &f, 4);
-
-          uint16_t bodyEnd = dictLen;
-          if (bodyEnd + 2 + 1 + 1 + len + 2 > DICT_SIZE) {
-            Serial.println("⚠️ Dictionary full during compile");
-            continue;
-          }
-
-          dictionary[bodyEnd] = dictionary[bodyEnd - 2];
-          dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
-          dictionary[bodyEnd - 2] = 0xFF;
-          dictionary[bodyEnd - 1] = 0xFF;
-          dictionary[bodyEnd] = len;
-          dictionary[bodyEnd + 1] = type;
-          memcpy(&dictionary[bodyEnd + 2], data, len);
-
-          uint16_t newNext = bodyEnd + 2 + len + 2;
-          dictionary[compileTarget] = (newNext >> 0) & 0xFF;
-          dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
-          dictLen = newNext;
-        } else {
-          // ЦЕЛЫЕ ЧИСЛА (включая HEX)
-          long val;
-          if (isHex) {
-            val = strtol(tempToken.c_str(), nullptr, 16);
-          } else {
-            val = atol(tempToken.c_str());
-          }
-
-          uint8_t type;
-          uint8_t len;
-          uint8_t data[4];
-
-          if (forcedType == TYPE_UNDEFINED) {
-            // Автоматический выбор типа
-            if (isHex) {
-              if (val >= 0 && val <= UINT8_MAX) {
-                type = TYPE_UINT8;
-                len = 1;
-                data[0] = (uint8_t)val;
-              } else if (val >= 0 && val <= UINT16_MAX) {
-                type = TYPE_UINT16;
-                len = 2;
-                uint16_t v16 = (uint16_t)val;
-                memcpy(data, &v16, 2);
-              } else {
-                type = TYPE_INT;
-                len = 4;
-                int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-                memcpy(data, &v32, 4);
-              }
-            } else {
-              // Десятичные → int32
-              type = TYPE_INT;
-              len = 4;
-              int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-              memcpy(data, &v, 4);
-            }
-          } else {
-            // Явный тип через суффикс
-            switch (forcedType) {
-              case TYPE_INT8: {
-                  type = TYPE_INT8; len = 1;
-                  data[0] = (val < INT8_MIN) ? INT8_MIN : (val > INT8_MAX) ? INT8_MAX : (int8_t)val;
-                  break;
-                }
-              case TYPE_UINT8: {
-                  type = TYPE_UINT8; len = 1;
-                  data[0] = (val < 0) ? 0 : (val > UINT8_MAX) ? UINT8_MAX : (uint8_t)val;
-                  break;
-                }
-              case TYPE_INT16: {
-                  type = TYPE_INT16; len = 2;
-                  int16_t v16 = (val < INT16_MIN) ? INT16_MIN : (val > INT16_MAX) ? INT16_MAX : (int16_t)val;
-                  memcpy(data, &v16, 2);
-                  break;
-                }
-              case TYPE_UINT16: {
-                  type = TYPE_UINT16; len = 2;
-                  uint16_t u16 = (val < 0) ? 0 : (val > UINT16_MAX) ? UINT16_MAX : (uint16_t)val;
-                  memcpy(data, &u16, 2);
-                  break;
-                }
-              case TYPE_INT: {
-                  type = TYPE_INT; len = 4;
-                  int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-                  memcpy(data, &v32, 4);
-                  break;
-                }
-              default: {
-                  Serial.printf("⚠️ Internal error: %s\n", tokenOrig.c_str());
-                  continue;
-                }
-            }
-          }
-
-          uint16_t bodyEnd = dictLen;
-          if (bodyEnd + 2 + 1 + 1 + len + 2 > DICT_SIZE) {
-            Serial.println("⚠️ Dictionary full during compile");
-            continue;
-          }
-
-          dictionary[bodyEnd] = dictionary[bodyEnd - 2];
-          dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
-          dictionary[bodyEnd - 2] = 0xFF;
-          dictionary[bodyEnd - 1] = 0xFF;
-          dictionary[bodyEnd] = len;
-          dictionary[bodyEnd + 1] = type;
-          memcpy(&dictionary[bodyEnd + 2], data, len);
-
-          uint16_t newNext = bodyEnd + 2 + len + 2;
-          dictionary[compileTarget] = (newNext >> 0) & 0xFF;
-          dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
-          dictLen = newNext;
-        }
-      } else {
-        // ОБЫЧНЫЙ ПОИСК СЛОВА
-        uint16_t ptr = 0;
-        bool found = false;
-        while (ptr < dictLen) {
-          if (ptr + 2 > DICT_SIZE) break;
-          uint16_t nextPtr = dictionary[ptr] | (dictionary[ptr + 1] << 8);
-          if (nextPtr == 0 || nextPtr <= ptr || nextPtr > DICT_SIZE) break;
-
-          uint8_t nameLen = dictionary[ptr + 2];
-          if (nameLen == 0 || ptr + 3 + nameLen > DICT_SIZE) break;
-
-          if ((size_t)nameLen == token.length()) {
-            bool match = true;
-            for (uint8_t j = 0; j < nameLen; j++) {
-              if (dictionary[ptr + 3 + j] != token[j]) {
-                match = false;
-                break;
-              }
-            }
-            if (match) {
-              uint16_t nameLenTarget = dictionary[compileTarget + 2];
-              uint16_t headerSize = 2 + 1 + nameLenTarget + 1 + 1;
-              uint16_t bodyEnd = dictLen;
-
-              if (bodyEnd + 2 > DICT_SIZE) {
-                Serial.println("⚠️ Dictionary full during compile");
-                found = true;
-                break;
-              }
-
-              dictionary[bodyEnd] = dictionary[bodyEnd - 2];
-              dictionary[bodyEnd + 1] = dictionary[bodyEnd - 1];
-              dictionary[bodyEnd - 2] = (ptr >> 0) & 0xFF;
-              dictionary[bodyEnd - 1] = (ptr >> 8) & 0xFF;
-
-              uint16_t newNext = bodyEnd + 2;
-              dictionary[compileTarget] = (newNext >> 0) & 0xFF;
-              dictionary[compileTarget + 1] = (newNext >> 8) & 0xFF;
-              dictLen = newNext;
-
-              found = true;
-              break;
-            }
-          }
-          ptr = dictionary[ptr] | (dictionary[ptr + 1] << 8);
-        }
-
-        if (!found) {
-          Serial.printf("⚠️ Word not found in compile: %s\n", token.c_str());
-        }
-      }
-    }
-    return;
-  }
-
-  // === ОБЫЧНЫЙ РЕЖИМ ===
-  for (int i = tokenCount - 1; i >= 0; i--) {
-    String& token = tokens[i];
-
-    if (token.startsWith("\"") && token.endsWith("\"") && token.length() >= 2) {
-      String strContent = token.substring(1, token.length() - 1);
-      size_t len = strContent.length();
-      if (len > 255) {
-        Serial.println("⚠️ Строка слишком длинная");
-      } else {
-        storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)strContent.c_str(), (uint8_t)len, TYPE_STRING);
-        executeAt(ADDR_TMP_LIT);
-      }
-    } else {
-      String tokenOrig = token;
-      ValueType forcedType = TYPE_UNDEFINED;
-
-      if (token.endsWith("i32")) {
-        forcedType = TYPE_INT;
-        token.remove(token.length() - 3);
-      } else if (token.endsWith("i16")) {
-        forcedType = TYPE_INT16;
-        token.remove(token.length() - 3);
-      } else if (token.endsWith("u16")) {
-        forcedType = TYPE_UINT16;
-        token.remove(token.length() - 3);
-      } else if (token.endsWith("i8")) {
-        forcedType = TYPE_INT8;
-        token.remove(token.length() - 2);
-      } else if (token.endsWith("u8")) {
-        forcedType = TYPE_UINT8;
-        token.remove(token.length() - 2);
-      }
-
-      if (token.length() == 0) {
-        lookupAndExecute(tokenOrig);
-        continue;
-      }
-
-      bool hasDot = false;
-      bool isHex = false;
-      bool isNumber = isValidNumber(token, hasDot, isHex);
-
-      if (!isNumber) {
-        lookupAndExecute(tokenOrig);
-        continue;
-      }
-
-      if (hasDot) {
-        if (forcedType != TYPE_UNDEFINED) {
-          Serial.printf("⚠️ Float literals cannot have type suffixes: %s\n", tokenOrig.c_str());
-          continue;
-        }
-        float f = token.toFloat();
-        storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)&f, 4, TYPE_FLOAT);
-        executeAt(ADDR_TMP_LIT);
-      } else {
-        // ЦЕЛЫЕ ЧИСЛА С HEX И АВТОТИПОМ
-        long val;
-        if (isHex) {
-          val = strtol(token.c_str(), nullptr, 16);
-        } else {
-          val = atol(token.c_str());
-        }
-
-        uint8_t type;
-        uint8_t len;
-        uint8_t data[4];
-
-        if (forcedType == TYPE_UNDEFINED) {
-          if (isHex) {
-            if (val >= 0 && val <= UINT8_MAX) {
-              type = TYPE_UINT8;
-              len = 1;
-              data[0] = (uint8_t)val;
-            } else if (val >= 0 && val <= UINT16_MAX) {
-              type = TYPE_UINT16;
-              len = 2;
-              uint16_t v16 = (uint16_t)val;
-              memcpy(data, &v16, 2);
-            } else {
-              type = TYPE_INT;
-              len = 4;
-              int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-              memcpy(data, &v32, 4);
-            }
-          } else {
-            // Десятичные числа → int32
-            type = TYPE_INT;
-            len = 4;
-            int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-            memcpy(data, &v, 4);
-          }
-        } else {
-          // Явный тип через суффикс
-          switch (forcedType) {
-            case TYPE_INT8: {
-                type = TYPE_INT8; len = 1;
-                data[0] = (val < INT8_MIN) ? INT8_MIN : (val > INT8_MAX) ? INT8_MAX : (int8_t)val;
-                break;
-              }
-            case TYPE_UINT8: {
-                type = TYPE_UINT8; len = 1;
-                data[0] = (val < 0) ? 0 : (val > UINT8_MAX) ? UINT8_MAX : (uint8_t)val;
-                break;
-              }
-            case TYPE_INT16: {
-                type = TYPE_INT16; len = 2;
-                int16_t v16 = (val < INT16_MIN) ? INT16_MIN : (val > INT16_MAX) ? INT16_MAX : (int16_t)val;
-                memcpy(data, &v16, 2);
-                break;
-              }
-            case TYPE_UINT16: {
-                type = TYPE_UINT16; len = 2;
-                uint16_t u16 = (val < 0) ? 0 : (val > UINT16_MAX) ? UINT16_MAX : (uint16_t)val;
-                memcpy(data, &u16, 2);
-                break;
-              }
-            case TYPE_INT: {
-                type = TYPE_INT; len = 4;
-                int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-                memcpy(data, &v32, 4);
-                break;
-              }
-            default: {
-                Serial.printf("⚠️ Internal error parsing: %s\n", tokenOrig.c_str());
-                continue;
-              }
-          }
-        }
-
-        storeValueToVariable(ADDR_TMP_LIT, data, len, type);
-        executeAt(ADDR_TMP_LIT);
-      }
-    }
-  }
-}
-
 void bodyWord(uint16_t addr) {
-  // Читаем строку со стека
+  // Читаем имя слова со стека
   uint8_t type, len;
   const uint8_t* data;
   if (!peekStackTop(&type, &len, &data)) return;
@@ -662,14 +218,12 @@ void bodyWord(uint16_t addr) {
   }
   dropTop(0);
 
-  // Преобразуем в String
   String wordName = String((char*)data, len);
 
   // Ищем слово в словаре
-  uint16_t ptr = 0;
-  bool found = false;
   uint16_t wordAddr = 0;
-
+  bool found = false;
+  uint16_t ptr = 0;
   while (ptr < dictLen) {
     if (ptr + 2 > DICT_SIZE) break;
     uint16_t nextPtr = dictionary[ptr] | (dictionary[ptr + 1] << 8);
@@ -700,7 +254,7 @@ void bodyWord(uint16_t addr) {
     return;
   }
 
-  // Проверяем: external-слово?
+  // Только external-слова
   uint8_t nameLen = dictionary[wordAddr + 2];
   uint8_t storage = dictionary[wordAddr + 3 + nameLen];
   if (storage != 0) {
@@ -709,27 +263,57 @@ void bodyWord(uint16_t addr) {
   }
 
   // Выводим тело
-  uint16_t headerSize = 2 + 1 + nameLen + 1 + 1; // next+len+name+storage+context
-  uint16_t pos = wordAddr + headerSize;
+  uint16_t nextPtr = dictionary[wordAddr] | (dictionary[wordAddr + 1] << 8);
+  uint16_t pos = wordAddr + 2 + 1 + nameLen + 1 + 1; // next + nameLen + name + storage + context
 
   Serial.print("Body: ");
   bool first = true;
-  while (pos + 2 <= DICT_SIZE) {
-    uint16_t targetAddr = dictionary[pos] | (dictionary[pos + 1] << 8);
-    if (targetAddr == 0) break; // конец тела
 
-    if (targetAddr == 0xFFFF) {
-      // Литерал
+  while (pos < nextPtr) {
+    if (pos + 2 > nextPtr) break;
+
+    uint16_t targetAddr = dictionary[pos] | (dictionary[pos + 1] << 8);
+
+    // Специальные маркеры
+    if (targetAddr == 0xFFFD) {
+      if (!first) Serial.print(" ");
+      Serial.print("if");
+      first = false;
       pos += 2;
-      if (pos + 2 > DICT_SIZE) break;
+      continue;
+    }
+    if (targetAddr == 0xFFFE) {
+      if (!first) Serial.print(" ");
+      Serial.print("end");
+      first = false;
+      pos += 2;
+      continue;
+    }
+
+    // Литералы
+    if (targetAddr == 0xFFFF) {
+      pos += 2;
+      if (pos + 2 > nextPtr) break;
       uint8_t lenLit = dictionary[pos++];
       uint8_t typeLit = dictionary[pos++];
-      if (pos + lenLit > DICT_SIZE) break;
+      if (pos + lenLit > nextPtr) break;
 
       if (!first) Serial.print(" ");
       Serial.print("<lit:");
-      // Выводим данные в зависимости от типа
-      if (typeLit == TYPE_INT && lenLit == 4) {
+
+      if (typeLit == TYPE_STRING) {
+        Serial.print("\"");
+        for (uint8_t i = 0; i < lenLit; i++) {
+          char c = dictionary[pos + i];
+          if (c >= 32 && c <= 126) {
+            Serial.print(c);
+          } else {
+            Serial.printf("\\x%02X", (uint8_t)c);
+          }
+        }
+        Serial.print("\"");
+      }
+      else if (typeLit == TYPE_INT && lenLit == 4) {
         int32_t v; memcpy(&v, &dictionary[pos], 4);
         Serial.print(v);
       }
@@ -755,33 +339,38 @@ void bodyWord(uint16_t addr) {
         float v; memcpy(&v, &dictionary[pos], 4);
         Serial.print(v, 6);
       }
-      else if (typeLit == TYPE_STRING) {
-        Serial.print("\"");
-        for (uint8_t i = 0; i < lenLit; i++) {
-          char c = dictionary[pos + i];
-          if (c >= 32 && c <= 126) Serial.print(c);
-          else Serial.printf("\\x%02X", (uint8_t)c);
-        }
-        Serial.print("\"");
-      }
       else {
         Serial.print("?");
       }
-      Serial.print(">");
 
+      Serial.print(">");
       pos += lenLit;
       first = false;
+      continue;
     }
-    else {
-      // Обычное слово
-      uint8_t targetNameLen = dictionary[targetAddr + 2];
+
+    // Обычное слово
+    uint8_t targetNameLen = dictionary[targetAddr + 2];
+    if (targetNameLen == 0 || targetAddr + 3 + targetNameLen > DICT_SIZE) {
       if (!first) Serial.print(" ");
-      for (uint8_t i = 0; i < targetNameLen; i++) {
-        Serial.print((char)dictionary[targetAddr + 3 + i]);
-      }
+      Serial.print("<bad>");
       first = false;
       pos += 2;
+      continue;
     }
+
+    if (!first) Serial.print(" ");
+    for (uint8_t i = 0; i < targetNameLen; i++) {
+      char c = dictionary[targetAddr + 3 + i];
+      if (c >= 32 && c <= 126) {
+        Serial.print(c);
+      } else {
+        Serial.printf("\\x%02X", (uint8_t)c);
+      }
+    }
+    first = false;
+    pos += 2;
   }
+
   Serial.println();
 }

@@ -1,3 +1,7 @@
+: ln
+print CRLF
+;
+
 var pinout0
 pinout0 = 0u8
 var pinout0Led
@@ -14,8 +18,11 @@ var x var y
 x = 2 y = 1
 
 : choice
-if x == y
-print x
+y = 
+if 5 <= y
+print y
+print " больше"
+ln
 ;
 
 
