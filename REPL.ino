@@ -57,6 +57,8 @@ bool isValidNumber(const String& s, bool& hasDot, bool& isHex) {
   return hasDigit;
 }
 
+
+
 void executeAt(uint16_t addr) {
   if (addr + 2 >= DICT_SIZE) return;
   uint8_t nameLen = dictionary[addr + 2];
@@ -81,7 +83,7 @@ void executeAt(uint16_t addr) {
     uint16_t pos = bodyStart;
 
     while (pos < nextPtr) {
-      if (pos + 2 > nextPtr) break; // Защита от выхода за пределы
+      if (pos + 2 > nextPtr) break;
 
       uint16_t targetAddr = dictionary[pos] | (dictionary[pos + 1] << 8);
       
@@ -90,7 +92,7 @@ void executeAt(uint16_t addr) {
         uint8_t type, len;
         const uint8_t* data;
         if (!peekStackTop(&type, &len, &data)) {
-          pos += 2; // Выполняем end
+          pos += 2;
           continue;
         }
 
@@ -106,11 +108,9 @@ void executeAt(uint16_t addr) {
         dropTop(0);
 
         if (condition) {
-          // Истина → пропускаем end (0xFFFE)
-          pos += 4; // IF (2) + end (2)
+          pos += 4; // пропустить IF + end
         } else {
-          // Ложь → выполняем end
-          pos += 2; // указываем на end
+          pos += 2; // указать на end
         }
         continue;
       }
@@ -134,10 +134,20 @@ void executeAt(uint16_t addr) {
 
       // Обычное слово
       executeAt(targetAddr);
-      pos += 2;
+
+      // Проверка прыжка от goto
+      if (shouldJump) {
+        pos += (int16_t)jumpOffset;
+        shouldJump = false;
+        jumpOffset = 0;
+      } else {
+        pos += 2;
+      }
     }
   }
 }
+
+
 
 void executeLine(String& line) {
   // Обработка многострочного комментария (продолжение)
@@ -208,7 +218,6 @@ void executeLine(String& line) {
 }
 
 void bodyWord(uint16_t addr) {
-  // Читаем имя слова со стека
   uint8_t type, len;
   const uint8_t* data;
   if (!peekStackTop(&type, &len, &data)) return;
@@ -220,7 +229,7 @@ void bodyWord(uint16_t addr) {
 
   String wordName = String((char*)data, len);
 
-  // Ищем слово в словаре
+  // Ищем слово
   uint16_t wordAddr = 0;
   bool found = false;
   uint16_t ptr = 0;
@@ -254,7 +263,6 @@ void bodyWord(uint16_t addr) {
     return;
   }
 
-  // Только external-слова
   uint8_t nameLen = dictionary[wordAddr + 2];
   uint8_t storage = dictionary[wordAddr + 3 + nameLen];
   if (storage != 0) {
@@ -262,115 +270,116 @@ void bodyWord(uint16_t addr) {
     return;
   }
 
-  // Выводим тело
   uint16_t nextPtr = dictionary[wordAddr] | (dictionary[wordAddr + 1] << 8);
-  uint16_t pos = wordAddr + 2 + 1 + nameLen + 1 + 1; // next + nameLen + name + storage + context
+  uint16_t pos = wordAddr + 2 + 1 + nameLen + 1 + 1; // начало тела
 
-  Serial.print("Body: ");
-  bool first = true;
+  // === Сбор элементов и их адресов ===
+  struct Item {
+    uint16_t addr;
+    String repr;
+  };
+  const int MAX_ITEMS = 64;
+  Item items[MAX_ITEMS];
+  int itemCount = 0;
 
-  while (pos < nextPtr) {
-    if (pos + 2 > nextPtr) break;
+  uint16_t tempPos = pos;
+  while (tempPos < nextPtr && itemCount < MAX_ITEMS) {
+    if (tempPos + 2 > nextPtr) break;
+    uint16_t targetAddr = dictionary[tempPos] | (dictionary[tempPos + 1] << 8);
 
-    uint16_t targetAddr = dictionary[pos] | (dictionary[pos + 1] << 8);
-
-    // Специальные маркеры
+    // if
     if (targetAddr == 0xFFFD) {
-      if (!first) Serial.print(" ");
-      Serial.print("if");
-      first = false;
-      pos += 2;
+      items[itemCount].addr = tempPos;
+      items[itemCount].repr = "if";
+      itemCount++;
+      tempPos += 2;
       continue;
     }
+    // end
     if (targetAddr == 0xFFFE) {
-      if (!first) Serial.print(" ");
-      Serial.print("end");
-      first = false;
-      pos += 2;
+      items[itemCount].addr = tempPos;
+      items[itemCount].repr = "end";
+      itemCount++;
+      tempPos += 2;
       continue;
     }
-
-    // Литералы
+    // литерал
     if (targetAddr == 0xFFFF) {
-      pos += 2;
-      if (pos + 2 > nextPtr) break;
-      uint8_t lenLit = dictionary[pos++];
-      uint8_t typeLit = dictionary[pos++];
-      if (pos + lenLit > nextPtr) break;
+      items[itemCount].addr = tempPos;
+      tempPos += 2;
+      if (tempPos + 2 > nextPtr) break;
+      uint8_t lenLit = dictionary[tempPos++];
+      uint8_t typeLit = dictionary[tempPos++];
+      if (tempPos + lenLit > nextPtr) break;
 
-      if (!first) Serial.print(" ");
-      Serial.print("<lit:");
-
+      String lit = "<lit:";
       if (typeLit == TYPE_STRING) {
-        Serial.print("\"");
+        lit += "\"";
         for (uint8_t i = 0; i < lenLit; i++) {
-          char c = dictionary[pos + i];
-          if (c >= 32 && c <= 126) {
-            Serial.print(c);
-          } else {
-            Serial.printf("\\x%02X", (uint8_t)c);
-          }
+          char c = dictionary[tempPos + i];
+          if (c >= 32 && c <= 126) lit += c;
+          else lit += '?';
         }
-        Serial.print("\"");
+        lit += "\"";
+      } else if (typeLit == TYPE_INT && lenLit == 4) {
+        int32_t v; memcpy(&v, &dictionary[tempPos], 4);
+        lit += String(v);
+      } else if (typeLit == TYPE_UINT8 && lenLit == 1) {
+        lit += String(dictionary[tempPos]) + "u8";
+      } else if (typeLit == TYPE_INT8 && lenLit == 1) {
+        lit += String((int8_t)dictionary[tempPos]) + "i8";
+      } else if (typeLit == TYPE_UINT16 && lenLit == 2) {
+        uint16_t v; memcpy(&v, &dictionary[tempPos], 2);
+        lit += String(v) + "u16";
+      } else if (typeLit == TYPE_INT16 && lenLit == 2) {
+        int16_t v; memcpy(&v, &dictionary[tempPos], 2);
+        lit += String(v) + "i16";
+      } else if (typeLit == TYPE_FLOAT && lenLit == 4) {
+        float v; memcpy(&v, &dictionary[tempPos], 4);
+        lit += String(v, 6);
+      } else {
+        lit += "?";
       }
-      else if (typeLit == TYPE_INT && lenLit == 4) {
-        int32_t v; memcpy(&v, &dictionary[pos], 4);
-        Serial.print(v);
-      }
-      else if (typeLit == TYPE_UINT8 && lenLit == 1) {
-        Serial.print((int)dictionary[pos]);
-        Serial.print("u8");
-      }
-      else if (typeLit == TYPE_INT8 && lenLit == 1) {
-        Serial.print((int)(int8_t)dictionary[pos]);
-        Serial.print("i8");
-      }
-      else if (typeLit == TYPE_UINT16 && lenLit == 2) {
-        uint16_t v; memcpy(&v, &dictionary[pos], 2);
-        Serial.print(v);
-        Serial.print("u16");
-      }
-      else if (typeLit == TYPE_INT16 && lenLit == 2) {
-        int16_t v; memcpy(&v, &dictionary[pos], 2);
-        Serial.print(v);
-        Serial.print("i16");
-      }
-      else if (typeLit == TYPE_FLOAT && lenLit == 4) {
-        float v; memcpy(&v, &dictionary[pos], 4);
-        Serial.print(v, 6);
-      }
-      else {
-        Serial.print("?");
-      }
-
-      Serial.print(">");
-      pos += lenLit;
-      first = false;
+      lit += ">";
+      items[itemCount].repr = lit;
+      itemCount++;
+      tempPos += lenLit;
       continue;
     }
 
-    // Обычное слово
+    // обычное слово
     uint8_t targetNameLen = dictionary[targetAddr + 2];
     if (targetNameLen == 0 || targetAddr + 3 + targetNameLen > DICT_SIZE) {
-      if (!first) Serial.print(" ");
-      Serial.print("<bad>");
-      first = false;
-      pos += 2;
+      items[itemCount].addr = tempPos;
+      items[itemCount].repr = "<bad>";
+      itemCount++;
+      tempPos += 2;
       continue;
     }
 
-    if (!first) Serial.print(" ");
+    items[itemCount].addr = tempPos;
+    String name = "";
     for (uint8_t i = 0; i < targetNameLen; i++) {
       char c = dictionary[targetAddr + 3 + i];
-      if (c >= 32 && c <= 126) {
-        Serial.print(c);
-      } else {
-        Serial.printf("\\x%02X", (uint8_t)c);
-      }
+      if (c >= 32 && c <= 126) name += c;
+      else name += '?';
     }
-    first = false;
-    pos += 2;
+    items[itemCount].repr = name;
+    itemCount++;
+    tempPos += 2;
   }
 
-  Serial.println();
+  // === Вывод адресов ===
+  for (int i = 0; i < itemCount; i++) {
+    if (i > 0) Serial.print(" ");
+    Serial.printf("[%04X]", items[i].addr);
+  }
+  if (itemCount > 0) Serial.println();
+
+  // === Вывод имён ===
+  for (int i = 0; i < itemCount; i++) {
+    if (i > 0) Serial.print(" ");
+    Serial.print(items[i].repr);
+  }
+  if (itemCount > 0) Serial.println();
 }

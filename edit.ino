@@ -1,23 +1,3 @@
-void compileEndMarker() {
-  if (dictLen + 2 > DICT_SIZE) {
-    Serial.println("⚠️ Dictionary full (end)");
-    return;
-  }
-  dictionary[dictLen++] = 0xFE; // 0xFFFE
-  dictionary[dictLen++] = 0xFF;
-}
-
-void compileIfMarker() {
-  if (dictLen + 4 > DICT_SIZE) {
-    Serial.println("⚠️ Dictionary full (if)");
-    return;
-  }
-  dictionary[dictLen++] = 0xFD; // 0xFFFD
-  dictionary[dictLen++] = 0xFF;
-  dictionary[dictLen++] = 0xFE; // 0xFFFE
-  dictionary[dictLen++] = 0xFF;
-}
-
 void handleStringToken(const String& token) {
   if (token.startsWith("\"") && token.endsWith("\"") && token.length() >= 2) {
     String strContent = token.substring(1, token.length() - 1);
@@ -172,6 +152,86 @@ void compileIntegerLiteral(const String& valueStr, const String& originalToken, 
   }
 
   void compileToken(const String & token) {
+   // === СПЕЦИАЛЬНАЯ ОБРАБОТКА ЦИКЛОВ ===
+
+  if (token == "{") {
+    if (loopDepth >= MAX_LOOP_NESTING) {
+      Serial.println("⚠️ Loop nesting too deep");
+      return;
+    }
+    loopStack[loopDepth].conditionStart = dictLen;
+    Serial.print("conditionStart=");
+    Serial.println(dictLen,HEX);
+    return;
+  }
+
+  if (token == "while") {
+    if (loopDepth >= MAX_LOOP_NESTING) {
+      Serial.println("⚠️ Loop nesting error");
+      return;
+    }
+
+    // Резервируем место под литерал смещения выхода (6 байт)
+    dictionary[dictLen++] = 0xFF;
+    dictionary[dictLen++] = 0xFF;
+    dictionary[dictLen++] = 2;
+    dictionary[dictLen++] = TYPE_INT16;
+    dictionary[dictLen++] = 0;
+    dictionary[dictLen++] = 0;
+
+    // Запоминаем позицию заглушки
+    loopStack[loopDepth].patchPos = dictLen - 6;
+    loopStack[loopDepth].afterWhilePos = dictLen + 2;
+
+    // Слово "while"
+    dictionary[dictLen++] = addrWhile & 0xFF;
+    dictionary[dictLen++] = (addrWhile >> 8) & 0xFF;
+
+    loopDepth++;
+    return;
+  }
+
+  if (token == "}") {
+    if (loopDepth == 0) {
+      Serial.println("⚠️ Unmatched }");
+      return;
+    }
+    loopDepth--;
+    LoopInfo& info = loopStack[loopDepth];
+
+    // Запоминаем позицию под литерал смещения возврата
+    uint16_t offsetBackPos = dictLen;
+
+    // Резервируем 6 байт под литерал
+    for (int i = 0; i < 6; i++) {
+      dictionary[dictLen++] = 0;
+    }
+
+    // Записываем goto (2 байта)
+    dictionary[dictLen++] = addrGoto & 0xFF;
+    dictionary[dictLen++] = (addrGoto >> 8) & 0xFF;
+
+    // Теперь dictLen — конец тела
+    uint16_t finalPos = dictLen;
+
+    // Смещение возврата: от конца до начала условия
+    int16_t offsetBack = (int16_t)(info.conditionStart - finalPos+2);
+
+    // Патчим литерал смещения возврата
+    dictionary[offsetBackPos + 0] = 0xFF;
+    dictionary[offsetBackPos + 1] = 0xFF;
+    dictionary[offsetBackPos + 2] = 2;
+    dictionary[offsetBackPos + 3] = TYPE_INT16;
+    dictionary[offsetBackPos + 4] = (uint8_t)(offsetBack & 0xFF);
+    dictionary[offsetBackPos + 5] = (uint8_t)((offsetBack >> 8) & 0xFF);
+
+    // Патчим смещение выхода (после while)
+    int16_t offsetExit = (int16_t)(finalPos - (info.patchPos + 6));
+    dictionary[info.patchPos + 4] = (uint8_t)(offsetExit & 0xFF);
+    dictionary[info.patchPos + 5] = (uint8_t)((offsetExit >> 8) & 0xFF);
+
+    return;
+  }
     if (token == "end") {
       compileCode(0xFFFE);
       //compileEndMarker();

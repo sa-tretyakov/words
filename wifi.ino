@@ -1,4 +1,10 @@
+#if defined(ESP8266)
+#include <ESP8266WiFi.h>
+#else
 #include <WiFi.h>
+#endif
+
+
 
 void wifiInit() {
   addInternalWord("modeStaAp", modeStaApFunc,254);
@@ -12,7 +18,7 @@ void wifiInit() {
   addInternalWord("apConfig", apConfigFunc,254);
   addInternalWord("ipAp", ipApFunc,254);
   addInternalWord("scan", scanFunc,254);
-  addInternalWord("wifiOff", wifiOffFunc, 254);
+  //addInternalWord("wifiOff", wifiOffFunc, 254);
 }
 
 void modeStaApFunc(uint16_t addr) {
@@ -218,10 +224,10 @@ void ipApFunc(uint16_t addr) {
   pushString(ipStr.c_str());
 }
 
-void wifiOffFunc(uint16_t addr) {
-  bool ok = WiFi.mode(WIFI_MODE_NULL);
-  pushBool(ok);
-}
+//void wifiOffFunc(uint16_t addr) {
+//  bool ok = WiFi.mode(WIFI_MODE_NULL);
+//  pushBool(ok);
+//}
 
 void scanFunc(uint16_t addr) {
   jsonOutput->print("{\"networks\":[");

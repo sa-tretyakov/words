@@ -4,6 +4,19 @@
 #include <cctype>  // для isdigit
 #define FILESYSTEM SPIFFS
 #define FORMAT_FILESYSTEM false
+
+#if defined(ESP8266)
+#if FILESYSTEM == SPIFFS
+#include <FS.h>
+#endif
+#if FILESYSTEM == LittleFS
+#include <LittleFS.h>
+#endif
+#if FILESYSTEM == SD
+#include "SD.h"
+#include "SPI.h"
+#endif
+#else
 #if FILESYSTEM == FFat
 #include <FFat.h>
 #endif
@@ -17,6 +30,13 @@
 #include "SD.h"
 #include "SPI.h"
 #endif
+#endif
+
+
+
+
+
+
 // ========================
 // Конфигурация стека
 // ========================
@@ -37,6 +57,17 @@ uint16_t ADDR_TMP_LIT = 0;
 bool shouldJump = false;
 int32_t jumpOffset = 0;
 uint16_t addrGoto;
+uint16_t addrWhile;
+#define MAX_LOOP_NESTING 8
+
+struct LoopInfo {
+  uint16_t conditionStart; // позиция '{' — начало условия
+  uint16_t afterWhilePos;  // ← ЭТО ПОЛЕ
+  uint16_t patchPos;       // где записан младший байт смещения выхода
+};
+
+LoopInfo loopStack[MAX_LOOP_NESTING];
+uint8_t loopDepth = 0;  // ← вот она
 // ========================
 // Настройки
 // ========================
@@ -633,6 +664,8 @@ void setup() {
   tmpLit();
   addInternalWord("goto", gotoFunc);
   addrGoto = findWordAddress("goto");
+  addInternalWord("while", whileFunc);
+  addrWhile = findWordAddress("while");
   // Служебные слова (storage = 0x80)
   addInternalWord(".", printTop);
   addInternalWord("print", printTop);
@@ -685,7 +718,7 @@ void setup() {
   addMarkerWord("end");
   addMarkerWord("{");
   addMarkerWord("}");
-  addMarkerWord("while"); // while — маркер, как if
+
 
   
 addInternalWord("LOW", [](uint16_t) {pushUInt8(LOW);});

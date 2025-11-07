@@ -29,54 +29,79 @@ void pushZeroForType(uint8_t elemType) {
  * Аргумент:
  *   addr — смещение слова в словаре.
  */
+
 void mychoiceFunc(uint16_t addr) {
-  // Случай 1: стек пуст — просто возвращаем значение переменной/константы
   if (stackTop == 0) {
     readVariableAsValue(addr);
     return;
   }
-  // Случай 2: читаем верхушку стека
+
   uint8_t Type, Len;
   const uint8_t* Data;
   if (!peekStackTop(&Type, &Len, &Data)) return;
 
-  // Случай 3: на стеке не маркер — возвращаем значение слова
   if (Type != TYPE_MARKER) {
     readVariableAsValue(addr);
     return;
   }
 
-  // Случай 4: на стеке маркер — обрабатываем операцию
-
   // Доступ к элементу массива: word [ index ] или word [ index ] = value
   if (Len == 1 && Data[0] == '[') {
-    //Serial.println("Обработка массива");
     handleArrayAccess(addr);
     return;
   }
 
   // Простое присваивание: word = value
   if (Len == 1 && Data[0] == '=') {
-    //Serial.println("Простое присваевание");
     handleAssignment(addr);
     return;
   }
 
-  // Арифметические операции: word + value, word - value, и т.д.
+  // Арифметические операции
   if (Len == 1 && Data[0] == '+') { dropTop(0); applyBinaryOp(addr, OP_ADD); return; }
   if (Len == 1 && Data[0] == '-') { dropTop(0); applyBinaryOp(addr, OP_SUB); return; }
   if (Len == 1 && Data[0] == '*') { dropTop(0); applyBinaryOp(addr, OP_MUL); return; }
   if (Len == 1 && Data[0] == '/') { dropTop(0); applyBinaryOp(addr, OP_DIV); return; }
 
-  // Операции сравнения: word == value, word != value, и т.д.
-  if (Len == 2 && Data[0] == '=' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_EQ); return; }
-  if (Len == 2 && Data[0] == '!' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_NE); return; }
-  if (Len == 1 && Data[0] == '<') { dropTop(0); applyCompareOp(addr, CMP_LT); return; }
-  if (Len == 1 && Data[0] == '>') { dropTop(0); applyCompareOp(addr, CMP_GT); return; }
-  if (Len == 2 && Data[0] == '<' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_LE); return; }
-  if (Len == 2 && Data[0] == '>' && Data[1] == '=') { dropTop(0); applyCompareOp(addr, CMP_GE); return; }
+  // Сравнения — ИСПРАВЛЕНО: сначала кладём значение переменной, потом вызываем applyCompareOp
+  if (Len == 2 && Data[0] == '=' && Data[1] == '=') {
+    dropTop(0);
+    readVariableAsValue(addr); // кладём значение переменной на стек
+    applyCompareOp(CMP_EQ);
+    return;
+  }
+  if (Len == 2 && Data[0] == '!' && Data[1] == '=') {
+    dropTop(0);
+    readVariableAsValue(addr);
+    applyCompareOp(CMP_NE);
+    return;
+  }
+  if (Len == 1 && Data[0] == '<') {
+    dropTop(0);
+    readVariableAsValue(addr);
+    applyCompareOp(CMP_LT);
+    return;
+  }
+  if (Len == 1 && Data[0] == '>') {
+    dropTop(0);
+    readVariableAsValue(addr);
+    applyCompareOp(CMP_GT);
+    return;
+  }
+  if (Len == 2 && Data[0] == '<' && Data[1] == '=') {
+    dropTop(0);
+    readVariableAsValue(addr);
+    applyCompareOp(CMP_LE);
+    return;
+  }
+  if (Len == 2 && Data[0] == '>' && Data[1] == '=') {
+    dropTop(0);
+    readVariableAsValue(addr);
+    applyCompareOp(CMP_GE);
+    return;
+  }
 
-  // Составное присваивание: word += value, word -= value, и т.д.
+  // Составное присваивание
   if (Len == 2 && Data[0] == '+' && Data[1] == '=') {
     dropTop(0);
     if (!peekStackTop(&Type, &Len, &Data)) return;
@@ -106,8 +131,11 @@ void mychoiceFunc(uint16_t addr) {
     return;
   }
 
-  // По умолчанию: неизвестный маркер — просто возвращаем значение слова
+  // По умолчанию
   readVariableAsValue(addr);
 }
+
+
+
 
  

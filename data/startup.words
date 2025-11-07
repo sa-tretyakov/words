@@ -2,6 +2,11 @@
 print CRLF
 ;
 
+: help
+type "help.txt"
+;
+
+
 var pinout0
 pinout0 = 0u8
 var pinout0Led
@@ -12,56 +17,4 @@ pinout0 = not pinout0
 digitalWrite pinout0Led pinout0
 ;
 +task "tuggleLed" 100
-
-
-var x var y
-x = 2 y = 1
-
-: choice
-y = 
-if 5 <= y
-print y
-print " больше"
-ln
-;
-
-
-var buf
-buf = array 10u8
-
-// Запись
-buf [ 0 ] = 0xAA
-buf [ 3 ] = 0x55
-buf [ 5 ] = 0x5A
-buf [ 7 ] = 0xA5
-buf [ 9 ] = 0xFF
-
-/*
-// Чтение
-print buf [ 3 ]  // → 42
-
-// Работает с разными типами
-var nums
-nums = array 5i16
-nums [ 0 ] = 1000
-print nums [ 0 ]  // → 1000
-*/
-
-var i
-i = 0
-
-: test
-255u8
-;
-
-
-: countTo5
-  255u8
-  while i > 5 {
-    print i
-    i = i + 1
-  }
-;
-
-
 

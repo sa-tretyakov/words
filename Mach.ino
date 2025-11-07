@@ -356,97 +356,96 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
   }
 }
 
-void applyCompareOp(uint16_t addr, uint8_t op) {
-  uint8_t argType, argLen;
-  const uint8_t* argData;
-  if (!peekStackTop(&argType, &argLen, &argData)) {
+void applyCompareOp(uint8_t op) {
+  // Pop правый операнд (со стека)
+  uint8_t rightType, rightLen;
+  const uint8_t* rightData;
+  if (!peekStackTop(&rightType, &rightLen, &rightData)) {
     pushBool(false);
     return;
   }
+  dropTop(0); // убираем правый
 
-  uint8_t varType, varLen;
-  const uint8_t* varData;
-  if (!readVariableValue(addr, &varType, &varLen, &varData)) {
+  // Pop левый операнд (должен быть уже на стеке!)
+  uint8_t leftType, leftLen;
+  const uint8_t* leftData;
+  if (!peekStackTop(&leftType, &leftLen, &leftData)) {
     pushBool(false);
     return;
   }
+  dropTop(0); // убираем левый
 
   bool result = false;
 
   // === int32 ===
-  if (argType == TYPE_INT && varType == TYPE_INT && argLen == 4 && varLen == 4) {
-    int32_t a, b;
-    memcpy(&a, argData, 4);
-    memcpy(&b, varData, 4);
-    int cmp = (a > b) - (a < b);
+  if (leftType == TYPE_INT && rightType == TYPE_INT && leftLen == 4 && rightLen == 4) {
+    int32_t left, right;
+    memcpy(&left, leftData, 4);
+    memcpy(&right, rightData, 4);
+    int cmp = (left < right) - (left > right);  // ← перевернуто
     result = compareResult(cmp, op);
-    dropTop(0);
-    pushBool(result);
-    return;
   }
-
   // === int8 ===
-  if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
-    int8_t a = (int8_t)argData[0];
-    int8_t b = (int8_t)varData[0];
-    int cmp = (a > b) - (a < b);
+  else if (leftType == TYPE_INT8 && rightType == TYPE_INT8 && leftLen == 1 && rightLen == 1) {
+    int8_t left = (int8_t)leftData[0];
+    int8_t right = (int8_t)rightData[0];
+    int cmp = (left < right) - (left > right);  // ← перевернуто
     result = compareResult(cmp, op);
-    dropTop(0);
-    pushBool(result);
-    return;
   }
-
   // === uint8 ===
-  if (argType == TYPE_UINT8 && varType == TYPE_UINT8 && argLen == 1 && varLen == 1) {
-    uint8_t a = argData[0];
-    uint8_t b = varData[0];
-    int cmp = (a > b) - (a < b);
+  else if (leftType == TYPE_UINT8 && rightType == TYPE_UINT8 && leftLen == 1 && rightLen == 1) {
+    uint8_t left = leftData[0];
+    uint8_t right = rightData[0];
+    int cmp = (left < right) - (left > right);  // ← перевернуто
     result = compareResult(cmp, op);
-    dropTop(0);
-    pushBool(result);
-    return;
   }
-
+  // === int16 ===
+  else if (leftType == TYPE_INT16 && rightType == TYPE_INT16 && leftLen == 2 && rightLen == 2) {
+    int16_t left, right;
+    memcpy(&left, leftData, 2);
+    memcpy(&right, rightData, 2);
+    int cmp = (left < right) - (left > right);  // ← перевернуто
+    result = compareResult(cmp, op);
+  }
+  // === uint16 ===
+  else if (leftType == TYPE_UINT16 && rightType == TYPE_UINT16 && leftLen == 2 && rightLen == 2) {
+    uint16_t left, right;
+    memcpy(&left, leftData, 2);
+    memcpy(&right, rightData, 2);
+    int cmp = (left < right) - (left > right);  // ← перевернуто
+    result = compareResult(cmp, op);
+  }
   // === float ===
-  if (argType == TYPE_FLOAT && varType == TYPE_FLOAT && argLen == 4 && varLen == 4) {
-    float a, b;
-    memcpy(&a, argData, 4);
-    memcpy(&b, varData, 4);
-    int cmp = (a > b) - (a < b);
+  else if (leftType == TYPE_FLOAT && rightType == TYPE_FLOAT && leftLen == 4 && rightLen == 4) {
+    float left, right;
+    memcpy(&left, leftData, 4);
+    memcpy(&right, rightData, 4);
+    int cmp = (left < right) - (left > right);  // ← перевернуто
     result = compareResult(cmp, op);
-    dropTop(0);
-    pushBool(result);
-    return;
   }
-
   // === string ===
-  if (argType == TYPE_STRING && varType == TYPE_STRING) {
-    int cmp = strncmp((const char*)argData, (const char*)varData, argLen < varLen ? argLen : varLen);
-    if (cmp == 0) cmp = (argLen - varLen);
+  else if (leftType == TYPE_STRING && rightType == TYPE_STRING) {
+    const char* left = (const char*)leftData;
+    const char* right = (const char*)rightData;
+    size_t leftLenStr = leftLen;
+    size_t rightLenStr = rightLen;
+    int cmp = strncmp(right, left, leftLenStr < rightLenStr ? leftLenStr : rightLenStr);  // ← left/right поменяны местами
+    if (cmp == 0) cmp = (rightLenStr - leftLenStr);  // ← перевернуто
     result = compareResult(cmp, op);
-    dropTop(0);
-    pushBool(result);
-    return;
   }
-
   // === bool ===
-  if (argType == TYPE_BOOL && varType == TYPE_BOOL && argLen == 1 && varLen == 1) {
-    bool a = (argData[0] != 0);
-    bool b = (varData[0] != 0);
-    int cmp = (a > b) - (a < b);
+  else if (leftType == TYPE_BOOL && rightType == TYPE_BOOL && leftLen == 1 && rightLen == 1) {
+    bool left = (leftData[0] != 0);
+    bool right = (rightData[0] != 0);
+    int cmp = (left < right) - (left > right);  // ← перевернуто
     result = compareResult(cmp, op);
-    dropTop(0);
-    pushBool(result);
-    return;
+  }
+  // Типы не совпадают
+  else {
+    if (op == CMP_EQ) result = false;
+    else if (op == CMP_NE) result = true;
+    else result = false;
   }
 
-  // Типы не совпадают
-  dropTop(0);
-  if (op == CMP_EQ) {
-    pushBool(false);
-  } else if (op == CMP_NE) {
-    pushBool(true);
-  } else {
-    pushBool(false);
-  }
+  pushBool(result);
 }

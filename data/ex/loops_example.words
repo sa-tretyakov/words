@@ -1,0 +1,60 @@
+/*
+Запустить пример можно командой:
+load ex/loops_example.words
+
+Words поддерживает два естественных синтаксиса циклов только в компелированых словах:
+*/
+
+var i
+i = 0
+: countUp
+  while i < 10 {
+    print "while: i = "
+    print i
+    ln
+    i += 1
+  }
+  print "— конец while —"
+  ln
+  i = 0
+;
+
+
+/*
+Цикл с постусловием: 
+Здесь i начинается с 5, условие i < 3 — ложно,
+но тело всё равно выполнится один раз.
+*/
+: countOnce
+  {
+    print "do-while: i = "
+    print i
+    ln
+    i = i + 1
+  } while i < 3
+  print "— конец do-while —"
+  ln
+;
+countOnce i = 5
+
+
+/*
+Пример: обратный отсчёт с использованием while в конце
+*/
+: countDown
+  {
+    print "Отсчёт: "
+    print i
+    ln
+    i = i - 1
+  } while i > 0
+  print "ПУСК!"
+  ln
+;
+
+// Запуск примеров
+
+countUp
+countUp i = 5
+countOnce i = 5
+countDown i = 10
