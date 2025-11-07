@@ -18,3 +18,5 @@ digitalWrite pinout0Led pinout0
 ;
 +task "tuggleLed" 100
 
+ln print "Добро пожаловать Words ждет вас! Введите help"
+ln print "words ok>"
