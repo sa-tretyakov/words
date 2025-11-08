@@ -7,18 +7,20 @@
 
 
 void wifiInit() {
-  addInternalWord("modeStaAp", modeStaApFunc,254);
-  addInternalWord("modeSta", modeStaFunc,254);
-  addInternalWord("modeAp", modeApFunc,254);
-  addInternalWord("onSta", wifiFunc,254);
-  addInternalWord("dbm", dbmFunc,254);
-  addInternalWord("ipSta", ipStaFunc,254);
-  addInternalWord("onAp", onApFunc,254);
-  addInternalWord("setAp", setApFunc,254);
-  addInternalWord("apConfig", apConfigFunc,254);
-  addInternalWord("ipAp", ipApFunc,254);
-  addInternalWord("scan", scanFunc,254);
-  //addInternalWord("wifiOff", wifiOffFunc, 254);
+   String tmp = "cont wifi";
+   executeLine(tmp);
+  addInternalWord("modeStaAp", modeStaApFunc,currentContext);
+  addInternalWord("modeSta", modeStaFunc,currentContext);
+  addInternalWord("modeAp", modeApFunc,currentContext);
+  addInternalWord("onSta", wifiFunc,currentContext);
+  addInternalWord("dbm", dbmFunc,currentContext);
+  addInternalWord("ipSta", ipStaFunc,currentContext);
+  addInternalWord("onAp", onApFunc,currentContext);
+  addInternalWord("setAp", setApFunc,currentContext);
+  addInternalWord("apConfig", apConfigFunc,currentContext);
+  addInternalWord("ipAp", ipApFunc,currentContext);
+  addInternalWord("scan", scanFunc,currentContext);
+  addInternalWord("wifiOff", wifiOffFunc, currentContext);
 }
 
 void modeStaApFunc(uint16_t addr) {
@@ -224,10 +226,10 @@ void ipApFunc(uint16_t addr) {
   pushString(ipStr.c_str());
 }
 
-//void wifiOffFunc(uint16_t addr) {
-//  bool ok = WiFi.mode(WIFI_MODE_NULL);
-//  pushBool(ok);
-//}
+void wifiOffFunc(uint16_t addr) {
+  bool ok = WiFi.mode(WIFI_MODE_NULL);
+  pushBool(ok);
+}
 
 void scanFunc(uint16_t addr) {
   jsonOutput->print("{\"networks\":[");

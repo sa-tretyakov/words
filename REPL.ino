@@ -78,6 +78,17 @@ void executeAt(uint16_t addr) {
     func(addr);
   } else {
     // External word
+        uint32_t startTime = 0;
+    bool isRootTiming = false;
+
+    // Запускаем замер ТОЛЬКО если:
+    // - режим включён,
+    // - и мы — самый внешний вызов (не рекурсия)
+    if (seetimeMode && !seetimeActive) {
+      seetimeActive = true;
+      isRootTiming = true;
+      startTime = micros();
+    }
     uint16_t nextPtr = dictionary[addr] | (dictionary[addr + 1] << 8);
     uint16_t bodyStart = addr + 3 + nameLen + 2;
     uint16_t pos = bodyStart;
@@ -144,7 +155,19 @@ void executeAt(uint16_t addr) {
         pos += 2;
       }
     }
+        // Завершение слова без "end"
+    if (isRootTiming) {
+      uint32_t duration = micros() - startTime;
+      uint8_t printLen = (nameLen < 32) ? nameLen : 31;
+      char nameBuf[33];
+      memcpy(nameBuf, &dictionary[addr + 3], printLen);
+      nameBuf[printLen] = '\0';
+      Serial.printf("⏱️ %s: %u µs\n", nameBuf, duration);
+      seetimeActive = false;
+    }
   }
+
+
 }
 
 

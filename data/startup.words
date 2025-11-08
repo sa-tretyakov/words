@@ -20,3 +20,10 @@ digitalWrite pinout0Led pinout0
 
 ln print "Добро пожаловать Words ждет вас! Введите help"
 ln print "words ok>"
+
+: sqr
+  let q        // создали переменную
+  q =         // данные на стеке поэтому запишем их в q
+  q * q       // перемножим и тогда результат на стеке
+;
+

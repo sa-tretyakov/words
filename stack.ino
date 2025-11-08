@@ -1,3 +1,39 @@
+void contFunc(uint16_t addr) {
+  // Читаем значение (номер контекста) из записи в словаре
+  uint8_t nameLen = dictionary[addr + 2];
+  // Значение начинается после: [next][nameLen][name][storage][context] → смещение = 3 + nameLen + 2
+  uint32_t value =
+    dictionary[addr + 3 + nameLen + 2 + 0] |
+    (dictionary[addr + 3 + nameLen + 2 + 1] << 8) |
+    (dictionary[addr + 3 + nameLen + 2 + 2] << 16) |
+    (dictionary[addr + 3 + nameLen + 2 + 3] << 24);
+  
+  // Устанавливаем текущий контекст
+  currentContext = (uint8_t)value;
+}
+void seetimeWord(uint16_t addr) {
+  uint8_t type, len;
+  const uint8_t* data;
+  
+  // Берём значение с вершины стека (оно уже там, потому что строка: "seetime true")
+  if (!peekStackTop(&type, &len, &data)) {
+    Serial.println("⚠️ seetime: ожидается true или false после команды");
+    return;
+  }
+
+  // Преобразуем ЛЮБОЙ тип к логическому значению (уже есть в коде!)
+  bool enable = valueToBool(type, len, data);
+
+  // Убираем аргумент со стека
+  dropTop(0);
+
+  // Применяем режим
+  seetimeMode = enable;
+
+  Serial.print("⏱️ seetime: ");
+  Serial.println(enable ? "ON" : "OFF");
+}
+
 void whileFunc(uint16_t addr) {
   // 1. Pop смещение выхода (i16 или int32)
   int32_t offsetExit;

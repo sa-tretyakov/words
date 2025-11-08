@@ -1,12 +1,14 @@
 void pinsInit() {
+     String tmp = "cont pins";
+   executeLine(tmp);
   // Слова GPIO
-  addInternalWord("pinMode", pinModeWord);
-  addInternalWord("digitalWrite", digitalWriteWord);
-  addInternalWord("analogWrite", analogWriteWord);
-  addInternalWord("digitalRead", digitalReadWord);
-  addInternalWord("analogRead", analogReadWord);
-  addInternalWord("amv", amvWord);
-  addInternalWord("pulseIn", pulseInFunc);
+  addInternalWord("pinMode", pinModeWord,currentContext);
+  addInternalWord("digitalWrite", digitalWriteWord,currentContext);
+  addInternalWord("analogWrite", analogWriteWord,currentContext);
+  addInternalWord("digitalRead", digitalReadWord,currentContext);
+  addInternalWord("analogRead", analogReadWord,currentContext);
+  addInternalWord("amv", amvWord,currentContext);
+  addInternalWord("pulseIn", pulseInFunc,currentContext);
     
   }
 bool popPin(uint8_t* outPin) {

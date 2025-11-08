@@ -1,3 +1,19 @@
+void switchContextFunc(uint16_t addr) {
+  // Читаем сохранённый номер контекста из тела слова
+  uint8_t nameLen = dictionary[addr + 2];
+  uint32_t storedContext =
+    dictionary[addr + 3 + nameLen + 2 + 0] |
+    (dictionary[addr + 3 + nameLen + 2 + 1] << 8) |
+    (dictionary[addr + 3 + nameLen + 2 + 2] << 16) |
+    (dictionary[addr + 3 + nameLen + 2 + 3] << 24);
+
+  // Устанавливаем текущий контекст
+  currentContext = (uint8_t)storedContext;
+
+  // Опционально: можно класть подтверждение на стек, но не обязательно
+  // pushUInt8(currentContext);
+}
+
 void printDictionary(uint16_t addr) {
   uint16_t ptr = 0;
 
@@ -34,7 +50,7 @@ void printDictionary(uint16_t addr) {
       else if (stype == STORAGE_NAMED) Serial.print("N");
       else if (stype == STORAGE_POOLED) Serial.print("V");
       else if (stype == STORAGE_CONST) Serial.print("K");
-      else if (stype == STORAGE_CONT) Serial.print("T");
+     // else if (stype == STORAGE_CONT) Serial.print("T");
       else Serial.print("I");
     } else {
       // External word — storage = 0, печатаем как [X]
@@ -157,6 +173,7 @@ void pushMarker(const char* name) {
   stack[stackTop++] = (uint8_t)len;
   stack[stackTop++] = TYPE_MARKER;
 }
+
 
 void varWord(uint16_t callerAddr) {
   if (stackTop < 2) return;
@@ -309,69 +326,48 @@ void wordsWord(uint16_t addr) {
   Serial.printf("(%d words)\n", count);
 }
 
+
 void contWord(uint16_t addr) {
   uint8_t nameType, nameLen;
   const uint8_t* nameData;
-  if (!peekStackTop(&nameType, &nameLen, &nameData)) return;
-  if (nameType != TYPE_NAME) return;
-  dropTop(0);
-  maxCont++;              // увеличиваем счётчик
-  currentContext = maxCont; // контекст = текущее значение maxCont
-  size_t recordSize = 2 + 1 + nameLen + 1 + 1 + 4 + 4;
-  if (dictLen + recordSize > DICT_SIZE) {
-    maxCont--;            // откат
-    currentContext = maxCont - 1;
+  if (!peekStackTop(&nameType, &nameLen, &nameData) || nameType != TYPE_NAME) {
+    Serial.println("⚠️ cont: ожидается имя");
     return;
   }
+  dropTop(0);
+
+  // Увеличиваем счётчик и СРАЗУ активируем новый контекст
+  maxCont++;
+  currentContext = maxCont;  // ← вот оно — немедленное переключение!
+
+  // Создаём слово-константу (как `const`), но с типом STORAGE_CONT
+  size_t recordSize = 2 + 1 + nameLen + 1 + 1 + 4 + 4; // next + len + name + storage + context + value + funcPtr
+  if (dictLen + recordSize > DICT_SIZE) {
+    maxCont--;
+    currentContext = maxCont - 1; // откат
+    return;
+  }
+
   uint8_t* pos = &dictionary[dictLen];
   uint16_t nextOffset = dictLen + recordSize;
+
   pos[0] = (nextOffset >> 0) & 0xFF;
   pos[1] = (nextOffset >> 8) & 0xFF;
   pos[2] = nameLen;
   memcpy(&pos[3], nameData, nameLen);
-  pos[3 + nameLen] = 0x80 | STORAGE_CONT; // 0x84
-  pos[3 + nameLen + 1] = 0;
-  memcpy(&pos[3 + nameLen + 2], &maxCont, 4); // значение = maxCont
-  uint32_t funcAddr = (uint32_t)mychoiceFunc;
-  memcpy(&pos[3 + nameLen + 2 + 4], &funcAddr, 4);
-  dictLen = nextOffset;
-}
+  pos[3 + nameLen] = 0x80 | STORAGE_CONT;
+  pos[3 + nameLen + 1] = 0; // контекст слова = глобальный
 
-void contextWord(uint16_t addr) {
-  uint8_t valType, valLen;
-  const uint8_t* valData;
-  if (!peekStackTop(&valType, &valLen, &valData)) return;
-  dropTop(0);
-  // Преобразуем в uint8_t
-  uint8_t ctx = 0;
-  if (valType == TYPE_INT && valLen == 4) {
-    int32_t v; memcpy(&v, valData, 4);
-    if (v < 0) v = 0;
-    if (v > 255) v = 255;
-    ctx = (uint8_t)v;
-  }
-  else if (valType == TYPE_UINT8 && valLen == 1) {
-    ctx = valData[0];
-  }
-  else if (valType == TYPE_INT8 && valLen == 1) {
-    int8_t v = (int8_t)valData[0];
-    if (v < 0) v = 0;
-    ctx = (uint8_t)v;
-  }
-  else if (valType == TYPE_UINT16 && valLen == 2) {
-    uint16_t v; memcpy(&v, valData, 2);
-    if (v > 255) v = 255;
-    ctx = (uint8_t)v;
-  }
-  else if (valType == TYPE_INT16 && valLen == 2) {
-    int16_t v; memcpy(&v, valData, 2);
-    if (v < 0) v = 0;
-    if (v > 255) v = 255;
-    ctx = (uint8_t)v;
-  }
-  else {
-    Serial.println("⚠️ context: invalid value");
-    return;
-  }
-  currentContext = ctx;
+  // Значение = номер контекста
+  uint32_t value = maxCont;
+  memcpy(&pos[3 + nameLen + 2], &value, 4);
+
+  // Функция — для возможности вызова позже
+  uint32_t funcAddr = (uint32_t)contFunc;
+  memcpy(&pos[3 + nameLen + 2 + 4], &funcAddr, 4);
+
+  dictLen = nextOffset;
+
+  // Опционально: можно сообщить пользователю
+  // Serial.printf("Контекст '%.*s' = %d активен\n", nameLen, nameData, maxCont);
 }

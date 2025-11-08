@@ -46,7 +46,7 @@ constexpr size_t STACK_SIZE = 2048;
 uint8_t stack[STACK_SIZE];
 size_t stackTop = 0; // указатель на первую свободную ячейку
 uint8_t currentContext = 0; // текущий контекст (0 = global)
-int32_t maxCont = 0;
+uint8_t maxCont = 255;
 bool compiling = false;        // флаг компиляции
 uint16_t compileTarget = 0;    // смещение в словаре для текущего слова
 String cachedScanResult = "";
@@ -68,6 +68,9 @@ struct LoopInfo {
 
 LoopInfo loopStack[MAX_LOOP_NESTING];
 uint8_t loopDepth = 0;  // ← вот она
+
+bool seetimeMode = false;     // пользователь включил замер?
+bool seetimeActive = false;   // уже идёт замер (защита от вложенности)
 // ========================
 // Настройки
 // ========================
@@ -434,157 +437,131 @@ uint16_t popUInt16() {
 // Печать стека
 // ========================
 void printStackCompact() {
-  Serial.println("");
+  // --- Стек ---
+  Serial.println();
   Serial.print("ctx:");
   Serial.print(currentContext);
   if (stackTop == 0) {
-    Serial.println(" []");
-    return;
-  }
+    Serial.print(" []");
+  } else {
+    // (ваш существующий код печати стека — без изменений)
+    const int MAX_ELEMENTS = 256;
+    struct Element {
+      char prefix;
+      String repr;
+    };
+    Element elements[MAX_ELEMENTS];
+    int count = 0;
+    size_t tempTop = stackTop;
 
-  const int MAX_ELEMENTS = 256;
-  struct Element {
-    char prefix;
-    String repr;
-  };
-  Element elements[MAX_ELEMENTS];
-  int count = 0;
+    while (tempTop >= 2 && count < MAX_ELEMENTS) {
+      uint8_t len = stack[tempTop - 2];
+      uint8_t type = stack[tempTop - 1];
+      if (len > tempTop - 2) break;
+      size_t dataStart = tempTop - 2 - len;
+      char prefix = '?';
+      String repr;
 
-  size_t tempTop = stackTop;
-
-  while (tempTop >= 2 && count < MAX_ELEMENTS) {
-    uint8_t len = stack[tempTop - 2];
-    uint8_t type = stack[tempTop - 1];
-
-    if (len > tempTop - 2) break;
-
-    size_t dataStart = tempTop - 2 - len;
-    char prefix = '?';
-    String repr;
-
-    switch (type) {
-      case TYPE_INT: {
-          if (len == 4) {
-            int32_t val; memcpy(&val, &stack[dataStart], 4);
-            repr = String(val);
-            prefix = 'I';
-          }
-          break;
-        }
-      case TYPE_FLOAT: {
-          if (len == 4) {
-            float val; memcpy(&val, &stack[dataStart], 4);
-            repr = String(val, 6);
-            prefix = 'F';
-          }
-          break;
-        }
-      case TYPE_STRING: {
+      switch (type) {
+        case TYPE_INT: if (len == 4) { int32_t v; memcpy(&v, &stack[dataStart], 4); repr = String(v); prefix = 'I'; } break;
+        case TYPE_FLOAT: if (len == 4) { float v; memcpy(&v, &stack[dataStart], 4); repr = String(v, 6); prefix = 'F'; } break;
+        case TYPE_STRING: {
           repr = "";
           for (size_t i = 0; i < len; i++) {
             char c = stack[dataStart + i];
-            if (c >= 32 && c <= 126) repr += c;
-            else repr += '?';
+            repr += (c >= 32 && c <= 126) ? c : '?';
           }
           prefix = 'S';
           break;
         }
-      case TYPE_BOOL: {
-          if (len == 1) {
-            bool val = (stack[dataStart] != 0);
-            repr = val ? "true" : "false";
-            prefix = 'B';
-          }
-          break;
-        }
-      case TYPE_INT8: {
-          int8_t val = static_cast<int8_t>(stack[dataStart]);
-          repr = String(val);
-          prefix = '8';
-          break;
-        }
-      case TYPE_UINT8: {
-          uint8_t val = stack[dataStart];
-          repr = String(val);
-          prefix = 'U';
-          break;
-        }
-      case TYPE_INT16: {
-          int16_t val; memcpy(&val, &stack[dataStart], 2);
-          repr = String(val);
-          prefix = 'W';
-          break;
-        }
-      case TYPE_UINT16: {
-          uint16_t val; memcpy(&val, &stack[dataStart], 2);
-          repr = String(val);
-          prefix = 'w';
-          break;
-        }
-      case TYPE_NAME: {
+        case TYPE_BOOL: if (len == 1) { repr = stack[dataStart] ? "true" : "false"; prefix = 'B'; } break;
+        case TYPE_INT8: { int8_t v = static_cast<int8_t>(stack[dataStart]); repr = String(v); prefix = '8'; } break;
+        case TYPE_UINT8: { uint8_t v = stack[dataStart]; repr = String(v); prefix = 'U'; } break;
+        case TYPE_INT16: { int16_t v; memcpy(&v, &stack[dataStart], 2); repr = String(v); prefix = 'W'; } break;
+        case TYPE_UINT16: { uint16_t v; memcpy(&v, &stack[dataStart], 2); repr = String(v); prefix = 'w'; } break;
+        case TYPE_NAME: {
           repr = "";
           for (size_t i = 0; i < len; i++) {
             char c = stack[dataStart + i];
-            if (c >= 32 && c <= 126) repr += c;
-            else repr += '?';
+            repr += (c >= 32 && c <= 126) ? c : '?';
           }
           prefix = 'N';
           break;
         }
-              case TYPE_ARRAY: {
+        case TYPE_ARRAY: {
           if (len >= 3) {
             uint8_t elemType = stack[dataStart];
             uint16_t count = stack[dataStart + 1] | (stack[dataStart + 2] << 8);
-            String typeStr;
-            switch (elemType) {
-              case TYPE_UINT8: typeStr = "u8"; break;
-              case TYPE_INT8:  typeStr = "i8"; break;
-              case TYPE_UINT16: typeStr = "u16"; break;
-              case TYPE_INT16:  typeStr = "i16"; break;
-              case TYPE_INT:    typeStr = "i32"; break;
-              default:          typeStr = "?";
-            }
+            String typeStr = (elemType == TYPE_UINT8) ? "u8" : (elemType == TYPE_INT8) ? "i8" : (elemType == TYPE_UINT16) ? "u16" : (elemType == TYPE_INT16) ? "i16" : (elemType == TYPE_INT) ? "i32" : "?";
             repr = typeStr + "[" + String(count) + "]";
             prefix = 'A';
-          } else {
-            repr = "?";
-            prefix = 'A';
-          }
+          } else { repr = "?"; prefix = 'A'; }
           break;
         }
-      case TYPE_MARKER: {
+        case TYPE_MARKER: {
           repr = "";
           for (size_t i = 0; i < len; i++) {
             char c = stack[dataStart + i];
-            if (c >= 32 && c <= 126) repr += c;
-            else repr += '?';
+            repr += (c >= 32 && c <= 126) ? c : '?';
           }
           prefix = 'M';
           break;
         }
+      }
+
+      if (prefix != '?') {
+        elements[count].prefix = prefix;
+        elements[count].repr = repr;
+        count++;
+      } else break;
+      tempTop = dataStart;
     }
 
-    if (prefix != '?') {
-      elements[count].prefix = prefix;
-      elements[count].repr = repr;
-      count++;
-    } else {
-      break;
+    Serial.print(" [");
+    for (int i = count - 1; i >= 0; i--) {
+      if (i < count - 1) Serial.print(' ');
+      Serial.print(elements[i].prefix);
+      Serial.print('(');
+      Serial.print(elements[i].repr);
+      Serial.print(')');
     }
-
-    tempTop = dataStart;
+    Serial.print(']');
   }
 
-  Serial.print(" [");
-  for (int i = count - 1; i >= 0; i--) {
-    if (i < count - 1) Serial.print(' ');
-    Serial.print(elements[i].prefix);
-    Serial.print('(');
-    Serial.print(elements[i].repr);
-    Serial.print(')');
+  // --- Состояние системы (seetime + задачи) ---
+  Serial.println(); // новая строка для состояния
+  Serial.print("⏱️ seetime: ");
+  Serial.print(seetimeMode ? "ON" : "OFF");
+  Serial.print(" | +task: ");
+
+  // Собираем список активных задач
+  bool first = true;
+  for (int i = 0; i < MAX_TASKS; i++) {
+    if (tasks[i].active) {
+      if (!first) Serial.print(", ");
+      first = false;
+
+      uint16_t wordAddr = tasks[i].wordAddr;
+      if (wordAddr + 2 < DICT_SIZE) {
+        uint8_t nameLen = dictionary[wordAddr + 2];
+        if (nameLen > 0 && wordAddr + 3 + nameLen <= DICT_SIZE) {
+          for (uint8_t j = 0; j < nameLen; j++) {
+            char c = dictionary[wordAddr + 3 + j];
+            if (c >= 32 && c <= 126) Serial.print(c);
+            else Serial.print('?');
+          }
+          Serial.print('(');
+          Serial.print(tasks[i].interval);
+          Serial.print("ms)");
+        }
+      }
+    }
   }
-  Serial.println(']');
+  if (first) Serial.print("[]"); // нет задач
+
+  Serial.println();
 }
+
 
 void printBytes(const uint8_t* data, size_t len) {
   for (size_t i = 0; i < len; i++) {
@@ -666,6 +643,11 @@ void setup() {
   addrGoto = findWordAddress("goto");
   addInternalWord("while", whileFunc);
   addrWhile = findWordAddress("while");
+  addInternalWord("true", [](uint16_t) { pushBool(true); });
+  addInternalWord("false", [](uint16_t) { pushBool(false); });
+  addInternalWord("on", [](uint16_t) { pushBool(true); });
+  addInternalWord("off", [](uint16_t) { pushBool(false); });
+  addInternalWord("seetime", seetimeWord);
   // Служебные слова (storage = 0x80)
   addInternalWord(".", printTop);
   addInternalWord("print", printTop);
@@ -676,9 +658,7 @@ void setup() {
   addInternalWord("var", varWord);
   addInternalWord("const", constWord);
   addInternalWord("cont", contWord);
-  addInternalWord("context", contextWord);
   addInternalWord("array", arrayFunc);
-  addInternalWord("ctx", contextWord);
   addInternalWord("not", notWord);
   addInternalWord("pool", dumpDataPoolWord);
   addInternalWord("delayMicroseconds", delayMicrosecondsFunc);
@@ -730,23 +710,21 @@ addInternalWord("CR", [](uint16_t) { pushString("\r"); });
 addInternalWord("LF", [](uint16_t) { pushString("\n"); });
 addInternalWord("CRLF", [](uint16_t) { pushString("\r\n"); });
     
-pinsInit();
-i2cInit();
+
+
   addInternalWord("json>serial", jsonToSerialWord);
   addInternalWord("json>file", jsonToFile);
-  wifiInit();
-  currentContext = 0;
-  Serial.println("Words>");
-  // Выполняем инициализацию одной строкой
-  String tmp = "load startup.words"; // 0 = maxCont";
-  executeLine(tmp);
-//  tmp = ": help";
-//  executeLine(tmp);
-//  tmp = "type \"help.txt\"";
-//  executeLine(tmp);
-//  tmp = ";";
-//  executeLine(tmp);
-  printStackCompact();
+   String tmp = "cont main";
+   executeLine(tmp);
+   wifiInit(); 
+   pinsInit();
+   i2cInit();
+   currentContext = 0;   
+   tmp = "load startup.words"; // 0 = maxCont";
+   executeLine(tmp);
+
+   Serial.println("Words>");
+   printStackCompact();
 
 
 }
