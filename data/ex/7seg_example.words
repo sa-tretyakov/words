@@ -1,0 +1,53 @@
+cont 7seg
+var seg_digits
+seg_digits = array 10u8
+seg_digits [ ] = 0xC0 0xF9 0xA4 0xB0 0x99 0x92 0x82 0xF8 0x80 0x90
+var seg_num
+seg_num = array 5u8
+seg_num [ ] = 0xF1 0xF2 0xF4 0xF8 0xF0
+// pins
+var DATA_DIO
+DATA_DIO = 21u8
+var CLK_DIO
+CLK_DIO = 14u8
+var LATCH_DIO
+LATCH_DIO = 19u8
+pinMode LATCH_DIO OUTPUT
+pinMode CLK_DIO OUTPUT
+pinMode DATA_DIO OUTPUT
+digitalWrite LATCH_DIO HIGH
+
+var cont7
+cont7 = 0u8
+var dig7
+dig7 = 2
+: wNumber
+    digitalWrite LATCH_DIO LOW
+    shiftOut DATA_DIO CLK_DIO HIGH seg_digits [ dig7 ]
+    shiftOut DATA_DIO CLK_DIO HIGH seg_num [ cont7 ]
+    digitalWrite LATCH_DIO HIGH
+;
+
+var num
+num = array 5u8
+var vol7
+: 7segLoop
+cont7 = 0u8
+while cont7 < 5u8 {
+dig7 = num [ cont7 ]
+wNumber
+cont7 += 1u8
+}
+;
++task "7segLoop" 1
+
+: 7segPrint
+  vol7 =
+  cont7 = 4u8
+  while cont7 > 0u8 {
+    num [ cont7 - 1u8 ] = vol7 % 10
+    vol7 = vol7 / 10
+    cont7 -= 1u8
+  }
+;
+main

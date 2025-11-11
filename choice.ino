@@ -62,6 +62,7 @@ void mychoiceFunc(uint16_t addr) {
   if (Len == 1 && Data[0] == '-') { dropTop(0); applyBinaryOp(addr, OP_SUB); return; }
   if (Len == 1 && Data[0] == '*') { dropTop(0); applyBinaryOp(addr, OP_MUL); return; }
   if (Len == 1 && Data[0] == '/') { dropTop(0); applyBinaryOp(addr, OP_DIV); return; }
+  if (Len == 1 && Data[0] == '%') { dropTop(0); applyBinaryOp(addr, OP_MOD); return; } // ← новая строка
 
   // Сравнения — ИСПРАВЛЕНО: сначала кладём значение переменной, потом вызываем applyCompareOp
   if (Len == 2 && Data[0] == '=' && Data[1] == '=') {

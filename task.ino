@@ -44,7 +44,7 @@ void addTaskWord(uint16_t addr) {
   for (int i = 0; i < MAX_TASKS; i++) {
     if (!tasks[i].active) {
       tasks[i] = {wordAddr, interval, millis(), true};
-      Serial.printf("Task added: %s\n", name.c_str());
+      //Serial.printf("Task added: %s\n", name.c_str());
       return;
     }
   }
@@ -76,7 +76,7 @@ void removeTaskWord(uint16_t addr) {
         }
         if (match) {
           tasks[i].active = false;
-          Serial.printf("Task removed: %s\n", wordName.c_str());
+          //Serial.printf("Task removed: %s\n", wordName.c_str());
           return;
         }
       }

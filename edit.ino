@@ -160,8 +160,8 @@ void compileIntegerLiteral(const String& valueStr, const String& originalToken, 
       return;
     }
     loopStack[loopDepth].conditionStart = dictLen;
-    Serial.print("conditionStart=");
-    Serial.println(dictLen,HEX);
+//    Serial.print("conditionStart=");
+//    Serial.println(dictLen,HEX);
     return;
   }
 
@@ -484,7 +484,7 @@ void executeLineTokens(String& line) {
     pos[2] = nameLen;
     memcpy(&pos[3], name, nameLen);
     pos[3 + nameLen] = 0; // storage = 0 (external)
-    pos[3 + nameLen + 1] = 0; // context = 0
+    pos[3 + nameLen + 1] = currentContext; // context = 0
 
     compileTarget = dictLen;
     dictLen += headerSize;

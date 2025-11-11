@@ -1,29 +1,67 @@
 : ln
 print CRLF
 ;
-
 : help
 type "help.txt"
 ;
 
+load "ex/blinker_example.words"
+load "ex/7seg_example.words"
 
-var pinout0
-pinout0 = 0u8
-var pinout0Led
-pinout0Led = 2
-pinMode pinout0Led OUTPUT
-: tuggleLed
-pinout0 = not pinout0
-digitalWrite pinout0Led pinout0
+cont servo
+var ser_pin var ser_chan
+ser_pin = 3u8
+ser_chan = 0u8
+
+: initServo
+ledcSetup ser_chan 50u8 12 // запустили на канале
+ledcAttach ser_pin ser_chan  // Связали канал с пином
+ledcWrite ser_pin 0u16
 ;
-+task "tuggleLed" 100
+initServo
+var grad
 
-ln print "Добро пожаловать Words ждет вас! Введите help"
-ln print "words ok>"
-
-: sqr
-  let q        // создали переменную
-  q =         // данные на стеке поэтому запишем их в q
-  q * q       // перемножим и тогда результат на стеке
+: angle // angle что на сколько
+ser_chan =
+grad = 
+7segPrint grad
+grad *= 410 
+grad /= 180
+grad += 240
+ledcWrite ser_chan grad
 ;
+const стол
+стол = 0
+angle 0 90
+
+: поверни
+angle 
+;
+
+: на
+nop
+;
+
+: градусов
+nop
+;
+
+main
+ln print "Добро пожаловать Words ждет вас!"
+ln print "Для вывода числа на индикатор введите: 7segPrint 1234"
+
+7seg
+var число
+число = 9999
+: count
+число += 1
+7segPrint число
+;
+
+ln print "Запустить счетчик: +task "count" 1000"
+// +task "count" 1000
+main
+
+
+
 

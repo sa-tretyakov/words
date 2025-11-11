@@ -1,16 +1,46 @@
+void ledsInit() {
+  String tmp = "cont leds";
+  executeLine(tmp);
+  addInternalWord("ledcSetup", ledcSetupWord,currentContext);
+  addInternalWord("ledcAttach", ledcAttachWord,currentContext);
+  addInternalWord("ledcWrite", ledcWriteWord,currentContext);
+}
+
+void ledcSetupWord(uint16_t addr) {
+  uint8_t channel; if (!popAsUInt8(&channel)) return;  
+  int32_t freq; if (!popInt32FromAny(&freq)) return;  // ✅ int32_t  
+  uint8_t resolution; if (!popAsUInt8(&resolution)) return;
+  ledcSetup(channel, freq, resolution);
+}
+void ledcAttachWord(uint16_t addr) {
+  uint8_t pin; if (!popAsUInt8(&pin)) return;  
+  uint8_t channel; if (!popAsUInt8(&channel)) return;
+  ledcAttachPin(pin, channel);
+}
+void ledcWriteWord(uint16_t addr) {
+  uint8_t channel; if (!popAsUInt8(&channel)) return;
+  int32_t value; if (!popInt32FromAny(&value)) return;  // ✅ int32_t
+  ledcWrite(channel, value);
+}
+
 void pinsInit() {
-     String tmp = "cont pins";
-   executeLine(tmp);
+  String tmp = "cont pins";
+  executeLine(tmp);
   // Слова GPIO
-  addInternalWord("pinMode", pinModeWord,currentContext);
-  addInternalWord("digitalWrite", digitalWriteWord,currentContext);
-  addInternalWord("analogWrite", analogWriteWord,currentContext);
-  addInternalWord("digitalRead", digitalReadWord,currentContext);
-  addInternalWord("analogRead", analogReadWord,currentContext);
-  addInternalWord("amv", amvWord,currentContext);
-  addInternalWord("pulseIn", pulseInFunc,currentContext);
-    
-  }
+  addInternalWord("pinMode", pinModeWord, currentContext);
+  addInternalWord("digitalWrite", digitalWriteWord, currentContext);
+  addInternalWord("analogWrite", analogWriteWord, currentContext);
+  addInternalWord("digitalRead", digitalReadWord, currentContext);
+  addInternalWord("analogRead", analogReadWord, currentContext);
+  addInternalWord("amv", amvWord, currentContext);
+  addInternalWord("pulseIn", pulseInFunc, currentContext);
+  addInternalWord("shiftOut", shiftOutWord, currentContext);
+  addInternalWord("tone", toneWord, currentContext);
+  addInternalWord("beep", beepWord, currentContext);
+  addInternalWord("noTone", noToneWord, currentContext);
+  addInternalWord("silence", noToneWord, currentContext);
+
+}
 bool popPin(uint8_t* outPin) {
   uint8_t pinType, pinLen;
   const uint8_t* pinData;
@@ -202,4 +232,105 @@ void pulseInFunc(uint16_t addr) {
   // Выполняем
   unsigned long duration = ::pulseIn(pin, state, (unsigned long)timeout);
   pushInt((int32_t)duration);
+}
+
+void shiftOutWord(uint16_t addr) {
+
+  // dataPin
+  if (stackTop < 2) return;
+  uint8_t dataPin;
+  if (!popAsUInt8(&dataPin)) return;
+
+  // clockPin
+  if (stackTop < 2) return;
+  uint8_t clockPin;
+  if (!popAsUInt8(&clockPin)) return;
+
+  // bitOrder
+  if (stackTop < 2) return;
+  uint8_t bitOrder;
+  if (!popAsUInt8(&bitOrder)) return;
+
+  // value
+  if (stackTop < 2) return;
+  int32_t value;
+  if (!popInt32FromAny(&value)) return;
+  uint8_t val = (uint8_t)(value & 0xFF);
+  //  Serial.print("dataPin ");
+  //  Serial.println(dataPin);
+  //    Serial.print("clockPin ");
+  //  Serial.println(clockPin);
+  //    Serial.print("bitOrder ");
+  //  Serial.println(bitOrder);
+  //    Serial.print("val ");
+  //  Serial.println(val);
+  // ИСПОЛЬЗУЕМ СТАНДАРТНУЮ ФУНКЦИЮ ARDUINO
+  ::shiftOut(dataPin, clockPin, bitOrder, val);
+}
+
+
+void toneWord(uint16_t addr) {
+  // pin
+  if (stackTop < 2) {
+    Serial.println("⚠️ tone: пин ожидается");
+    return;
+  }
+  uint8_t pin;
+  if (!popAsUInt8(&pin)) {
+    return;
+  }
+  // частота
+  if (stackTop < 2) {
+    Serial.println("⚠️ tone: частота ожидается");
+    return;
+  }
+  int32_t freq;
+  if (!popInt32FromAny(&freq)) {
+    return;
+  }
+  if (freq < 1) freq = 1;
+  if (freq > 65535) freq = 65535;
+
+  ::tone(pin, (unsigned int)freq);
+}
+void beepWord(uint16_t addr) {
+  // пин
+  if (stackTop < 2) {
+    Serial.println("⚠️ пикни: пин ожидается");
+    return;
+  }
+  uint8_t pin = 0;
+  if (!popAsUInt8(&pin)) return;
+  // частота
+  if (stackTop < 2) {
+    Serial.println("⚠️ пикни: частота (Гц) ожидается");
+    return;
+  }
+  int32_t freq = 0;
+  if (!popInt32FromAny(&freq)) return;
+  if (freq < 100) freq = 100;     // минимум 100 Гц (ниже — не слышно)
+  if (freq > 10000) freq = 10000; // максимум 10 кГц
+  // длительность
+  if (stackTop < 2) {
+    Serial.println("⚠️ пикни: длительность (мс) ожидается");
+    return;
+  }
+  int32_t dur = 0;
+  if (!popInt32FromAny(&dur)) return;
+  if (dur < 0) dur = 0;
+  if (dur > 10000) dur = 10000; // 10 сек максимум
+  ::tone(pin, (unsigned int)freq, (unsigned long)dur);
+}
+
+void noToneWord(uint16_t addr) {
+  if (stackTop < 2) {
+    Serial.println("⚠️ noTone: pin expected");
+    return;
+  }
+  uint8_t pin;
+  if (!popAsUInt8(&pin)) {
+    Serial.println("⚠️ noTone: invalid pin");
+    return;
+  }
+  ::noTone(pin);
 }

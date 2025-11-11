@@ -57,8 +57,6 @@ bool isValidNumber(const String& s, bool& hasDot, bool& isHex) {
   return hasDigit;
 }
 
-
-
 void executeAt(uint16_t addr) {
   if (addr + 2 >= DICT_SIZE) return;
   uint8_t nameLen = dictionary[addr + 2];
@@ -169,8 +167,6 @@ void executeAt(uint16_t addr) {
 
 
 }
-
-
 
 void executeLine(String& line) {
   // Обработка многострочного комментария (продолжение)

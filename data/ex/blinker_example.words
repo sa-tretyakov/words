@@ -1,0 +1,15 @@
+
+// Мигает светодиодом в фоновом режиме 
+var testLed
+testLed = 0u8
+var pinTestLed
+pinTestLed = 13u8
+: blink
+pinMode pinTestLed OUTPUT
+testLed = not testLed
+digitalWrite pinTestLed testLed
+;
++task "blink" 100
+
+// Загрузите коммандой load ex/blinker_example.words
+// будет мигать с задоной частотой

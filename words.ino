@@ -74,8 +74,8 @@ bool seetimeActive = false;   // уже идёт замер (защита от �
 // ========================
 // Настройки
 // ========================
-#define DICT_SIZE 2048
-#define DATA_POOL_SIZE 2048
+#define DICT_SIZE 32768
+#define DATA_POOL_SIZE 32768
 
 // Тип хранения (зарезервировано для будущего)
 #define STORAGE_EMBEDDED 0
@@ -93,6 +93,9 @@ uint16_t dictLen = 0;
 uint8_t dataPool[DATA_POOL_SIZE];
 uint16_t dataPoolPtr = 0;
 
+#define TEMP_DICT_SIZE 512
+uint8_t tempDictionary[TEMP_DICT_SIZE];
+uint16_t tempDictLen = 0;
 // ========================
 // Типы значений
 // ========================
@@ -115,6 +118,7 @@ enum ValueType : uint8_t {
 #define OP_SUB 1
 #define OP_MUL 2
 #define OP_DIV 3
+#define OP_MOD 4  // ← остаток от деления
 
 // Сравнения
 #define CMP_EQ 0  // ==
@@ -438,8 +442,8 @@ uint16_t popUInt16() {
 // ========================
 void printStackCompact() {
   // --- Стек ---
-  Serial.println();
-  Serial.print("ctx:");
+  //Serial.println();
+  Serial.print("context:");
   Serial.print(currentContext);
   if (stackTop == 0) {
     Serial.print(" []");
@@ -560,6 +564,7 @@ void printStackCompact() {
   if (first) Serial.print("[]"); // нет задач
 
   Serial.println();
+  Serial.println("Words>");
 }
 
 
@@ -631,7 +636,10 @@ void setup() {
   dataPoolPtr = 0; // ← критически важно!
   stackTop = 0;
   Serial.begin(115200);
-  delay(500);
+    for (int i=0; i <= 255; i++){
+Serial.println();
+   }
+
 
   if (!FILESYSTEM.begin()) {
     Serial.println("FS Mount Failed");
@@ -643,10 +651,19 @@ void setup() {
   addrGoto = findWordAddress("goto");
   addInternalWord("while", whileFunc);
   addrWhile = findWordAddress("while");
+  
   addInternalWord("true", [](uint16_t) { pushBool(true); });
   addInternalWord("false", [](uint16_t) { pushBool(false); });
   addInternalWord("on", [](uint16_t) { pushBool(true); });
   addInternalWord("off", [](uint16_t) { pushBool(false); });
+  addInternalWord("LOW", [](uint16_t) {pushUInt8(LOW);});
+  addInternalWord("HIGH", [](uint16_t) {pushUInt8(HIGH);});
+  addInternalWord("INPUT", [](uint16_t) {pushUInt8(INPUT);});
+  addInternalWord("OUTPUT", [](uint16_t) {pushUInt8(OUTPUT);});
+  addInternalWord("INPUT_PULLUP", [](uint16_t) {pushUInt8(INPUT_PULLUP);});
+  addInternalWord("CR", [](uint16_t) { pushString("\r"); });
+addInternalWord("LF", [](uint16_t) { pushString("\n"); });
+addInternalWord("CRLF", [](uint16_t) { pushString("\r\n"); });  
   addInternalWord("seetime", seetimeWord);
   // Служебные слова (storage = 0x80)
   addInternalWord(".", printTop);
@@ -656,6 +673,7 @@ void setup() {
   addInternalWord("`", printDictionary);
   addInternalWord("words", wordsWord);
   addInternalWord("var", varWord);
+  addInternalWord("let", letWord);
   addInternalWord("const", constWord);
   addInternalWord("cont", contWord);
   addInternalWord("array", arrayFunc);
@@ -667,13 +685,12 @@ void setup() {
   addInternalWord("cat", catWord);
   addInternalWord("type", catWord);
   addInternalWord("load", loadWord);
-  addInternalWord("json", jsonWord);
   addInternalWord(":", colonWord);
-
   addInternalWord("body", bodyWord);
   addInternalWord("+task", addTaskWord);
   addInternalWord("-task", removeTaskWord);
-
+  addInternalWord("reset", resetFunc);
+  addInternalWord("nop", nopFunc);
 
   // Маркеры (storage = 0x81)
   addMarkerWord("=");
@@ -685,7 +702,7 @@ void setup() {
   addMarkerWord("-=");
   addMarkerWord("*=");
   addMarkerWord("/=");
-
+  addMarkerWord("%");
   addMarkerWord("==");
   addMarkerWord("!=");
   addMarkerWord("<");
@@ -700,30 +717,19 @@ void setup() {
   addMarkerWord("}");
 
 
-  
-addInternalWord("LOW", [](uint16_t) {pushUInt8(LOW);});
-addInternalWord("HIGH", [](uint16_t) {pushUInt8(HIGH);});
-addInternalWord("INPUT", [](uint16_t) {pushUInt8(INPUT);});
-addInternalWord("OUTPUT", [](uint16_t) {pushUInt8(OUTPUT);});
-addInternalWord("INPUT_PULLUP", [](uint16_t) {pushUInt8(INPUT_PULLUP);});
-addInternalWord("CR", [](uint16_t) { pushString("\r"); });
-addInternalWord("LF", [](uint16_t) { pushString("\n"); });
-addInternalWord("CRLF", [](uint16_t) { pushString("\r\n"); });
-    
-
-
-  addInternalWord("json>serial", jsonToSerialWord);
-  addInternalWord("json>file", jsonToFile);
    String tmp = "cont main";
    executeLine(tmp);
+   strInit();
+   jsonInit();
    wifiInit(); 
    pinsInit();
+   ledsInit();
    i2cInit();
    currentContext = 0;   
    tmp = "load startup.words"; // 0 = maxCont";
    executeLine(tmp);
 
-   Serial.println("Words>");
+   //Serial.println("Words>");
    printStackCompact();
 
 

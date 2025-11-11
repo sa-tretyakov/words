@@ -350,12 +350,67 @@ void handleAssignment(uint16_t addr) {
   dropTop(0);
 }
 
-void handleArrayAccess(uint16_t addr) {
-  dropTop(0); // '['
 
+void handleArrayAccess(uint16_t addr) {
+  dropTop(0); // убираем '['
+  // Проверяем: если следующий маркер — ']' и потом '=', то это массовая загрузка
+  if (popMarkerIf(']')) {
+    if (!popMarkerIf('=')) {
+      Serial.println("⚠️ []: ожидается =");
+      return;
+    }
+
+    // ИСПРАВЛЕНО: elemType — uint8_t!
+    uint8_t elemType;
+    uint16_t elemCount, poolRef;
+
+    if (!readArrayHeader(addr, &elemType, &elemCount, &poolRef)) {
+      Serial.println("⚠️ []: не массив");
+      // Очищаем стек
+      while (stackTop >= 2) {
+        uint8_t t = stack[stackTop - 1], l = stack[stackTop - 2];
+        if (l > stackTop - 2) break;
+        dropTop(0);
+      }
+      return;
+    }
+
+    // Считаем количество значений на стеке
+    size_t valuesCount = 0;
+    size_t tempTop = stackTop;
+    while (tempTop >= 2) {
+      uint8_t l = stack[tempTop - 2];
+      if (l > tempTop - 2) break;
+      valuesCount++;
+      tempTop -= 2 + l;
+    }
+
+    if (valuesCount != elemCount) {
+      Serial.printf("⚠️ []: ожидается %d значений, получено %u\n", elemCount, valuesCount);
+      // Очищаем стек
+      while (stackTop >= 2) {
+        uint8_t t = stack[stackTop - 1], l = stack[stackTop - 2];
+        if (l > stackTop - 2) break;
+        dropTop(0);
+      }
+      return;
+    }
+
+// Читаем значения в прямом порядке
+for (uint16_t i = 0; i < elemCount; i++) {
+  uint8_t valType, valLen;
+  const uint8_t* valData;
+  if (!peekStackTop(&valType, &valLen, &valData)) break;
+  dropTop(0);
+  // Записываем в i-й элемент
+  writeArrayElement(poolRef, i, valData, valType);
+}
+    return;
+  }
+
+  // === СТАРЫЙ КОД: доступ по индексу ===
   int32_t index;
   if (!popInt32FromAny(&index)) {
-    // Индекс уже удалён, но был некорректным — выходим
     return;
   }
 
@@ -371,6 +426,8 @@ void handleArrayAccess(uint16_t addr) {
     writeArrayElementByAddr(addr, index);
   }
 }
+
+
 
 void readVariableAsValue(uint16_t addr) {
   uint8_t nameLen = dictionary[addr + 2];

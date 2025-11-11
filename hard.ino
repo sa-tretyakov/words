@@ -239,3 +239,7 @@ void dumpDataPoolWord(uint16_t addr) {
 void nopFunc(uint16_t addr){
   
   }
+
+void resetFunc(uint16_t addr){
+  ESP.restart();
+  }
