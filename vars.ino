@@ -1,11 +1,15 @@
-//void varsInit() {
-//  String tmp = "cont vars";
-//  executeLine(tmp);
-//  addInternalWord("var", varWord);
-//  addInternalWord("const", constWord);
-//  addInternalWord("array", arrayFunc);
-//  addInternalWord("let", letWord);
-//}
+void varsInit() {
+  String tmp = "cont vars";
+  executeLine(tmp);
+  addInternalWord("var", varWord);
+  addInternalWord("const", constWord);
+  addInternalWord("array", arrayFunc);
+  addMarkerWord("[");
+  addMarkerWord("]");
+  addInternalWord("let", letWord);
+   tmp = "main";
+  executeLine(tmp);
+}
 
 void contWord(uint16_t addr) {
   uint8_t nameType, nameLen;

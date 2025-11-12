@@ -1,3 +1,11 @@
+void taskInit() {
+  String tmp = "cont task";
+  executeLine(tmp);
+  addInternalWord("+task", addTaskWord);
+  addInternalWord("-task", removeTaskWord);
+  tmp = "main";
+  executeLine(tmp);
+}
 void addTaskWord(uint16_t addr) {
   uint8_t type, len;
   const uint8_t* data;

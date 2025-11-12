@@ -1,3 +1,14 @@
+void jsonInit() {
+  String tmp = "cont json";
+  executeLine(tmp);
+  addInternalWord("json>", jsonWord);
+  addInternalWord("json>serial", jsonToSerialWord);
+  addInternalWord("json>file", jsonToFile);
+  tmp = "main";
+  executeLine(tmp);
+}
+
+
 void loadJson(const char* jsonStr) {
   if (!jsonStr) return;
   size_t len = strlen(jsonStr);

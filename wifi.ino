@@ -7,7 +7,7 @@
 
 
 void wifiInit() {
-   String tmp = "cont wifi";
+   String tmp = "cont network";
    executeLine(tmp);
   addInternalWord("modeStaAp", modeStaApFunc,currentContext);
   addInternalWord("modeSta", modeStaFunc,currentContext);
@@ -21,6 +21,8 @@ void wifiInit() {
   addInternalWord("ipAp", ipApFunc,currentContext);
   addInternalWord("scan", scanFunc,currentContext);
   addInternalWord("wifiOff", wifiOffFunc, currentContext);
+  tmp = "main";
+  executeLine(tmp);
 }
 
 void modeStaApFunc(uint16_t addr) {

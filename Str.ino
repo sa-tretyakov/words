@@ -1,21 +1,14 @@
-void jsonInit() {
-  String tmp = "cont json";
-  executeLine(tmp);
-  addInternalWord("json>", jsonWord);
-  addInternalWord("json>serial", jsonToSerialWord);
-  addInternalWord("json>file", jsonToFile);
-
-
-}
 void strInit() {
-  String tmp = "cont str";
+  String tmp = "cont strings";
   executeLine(tmp);
   // Слова GPIO
-  addInternalWord("charAt", charAtWord, currentContext);
-  addInternalWord("len", lenWord, currentContext);
-  addInternalWord("digit", digitWord, currentContext);
-  addInternalWord("->str", toStrWord, currentContext);
-
+  addInternalWord("charAt", charAtWord);
+  addInternalWord("char", charWord);
+  addInternalWord("len", lenWord);
+  addInternalWord("digit", digitWord);
+  addInternalWord(">str", toStrWord);
+  tmp = "main";
+  executeLine(tmp);
 
 }
 
@@ -88,6 +81,42 @@ void charAtWord(uint16_t addr) {
   // 5. Результат
   pushUInt8(strData[index]);
 }
+
+void charWord(uint16_t addr) {
+  uint8_t type, len;
+  const uint8_t* data;
+  if (!peekStackTop(&type, &len, &data)) return;
+  
+  // Поддерживаем только uint8 и int (в пределах 0-255)
+  uint8_t code = 0;
+  if (type == TYPE_UINT8 && len == 1) {
+    code = data[0];
+  }
+  else if (type == TYPE_INT && len == 4) {
+    int32_t v; memcpy(&v, data, 4);
+    if (v < 0 || v > 255) {
+      Serial.println("⚠️ char: value out of range 0-255");
+      return;
+    }
+    code = (uint8_t)v;
+  }
+  else {
+    Serial.println("⚠️ char: expected uint8 or int");
+    return;
+  }
+  
+  dropTop(0);
+  
+  // Кладём как строку длиной 1
+  if (isStackOverflow(1 + 2)) {
+    handleStackOverflow();
+    return;
+  }
+  stack[stackTop++] = code;
+  stack[stackTop++] = 1;
+  stack[stackTop++] = TYPE_STRING;
+}
+
 
 void lenWord(uint16_t addr) {
   if (stackTop < 2) {

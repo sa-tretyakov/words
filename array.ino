@@ -80,7 +80,6 @@ bool writeArrayElement(uint16_t poolRef, int32_t index, const uint8_t* valueData
   return false;
 }
 
-
 // Читает элемент массива и кладёт его на стек.
 void readArrayElementByAddr(uint16_t addr, int32_t index) {
   uint8_t elemType;
@@ -120,15 +119,16 @@ void readArrayElementByAddr(uint16_t addr, int32_t index) {
   readArrayElement(fullArrayData, len, elemType, index);
 }
 
-// Записывает значение из стека в массив по индексу.
-// Возвращает true, если успешно (и убирает значение со стека).
-// Записывает значение из стека в элемент массива по заданному индексу.
-// Аргументы:
-//   addr   — адрес слова-массива в словаре (например, "buf")
-//   index  — индекс элемента для записи (например, 3)
-// Возвращает:
-//   true  — если запись успешна,
-//   false — если ошибка (некорректный массив, индекс, нет значения на стеке).
+/* Записывает значение из стека в массив по индексу.
+ Возвращает true, если успешно (и убирает значение со стека).
+ Записывает значение из стека в элемент массива по заданному индексу.
+ Аргументы:
+   addr   — адрес слова-массива в словаре (например, "buf")
+   index  — индекс элемента для записи (например, 3)
+ Возвращает:
+   true  — если запись успешна,
+   false — если ошибка (некорректный массив, индекс, нет значения на стеке).
+*/ 
 bool writeArrayElementByAddr(uint16_t addr, int32_t index) {
   // Объявляем переменные для метаданных массива
   uint8_t elemType;   // тип элемента (u8, i16 и т.д.)
@@ -175,8 +175,6 @@ bool writeArrayElementByAddr(uint16_t addr, int32_t index) {
   // Запись успешна
   return true;
 }
-// Читает заголовок массива и возвращает true при успехе.
-// Заполняет elemType, elemCount, poolRef.
 
 /*
  * Читает метаданные массива (заголовок) из переменной в словаре.
@@ -350,7 +348,6 @@ void handleAssignment(uint16_t addr) {
   dropTop(0);
 }
 
-
 void handleArrayAccess(uint16_t addr) {
   dropTop(0); // убираем '['
   // Проверяем: если следующий маркер — ']' и потом '=', то это массовая загрузка
@@ -426,8 +423,6 @@ for (uint16_t i = 0; i < elemCount; i++) {
     writeArrayElementByAddr(addr, index);
   }
 }
-
-
 
 void readVariableAsValue(uint16_t addr) {
   uint8_t nameLen = dictionary[addr + 2];

@@ -13,14 +13,19 @@ var ser_pin var ser_chan
 ser_pin = 3u8
 ser_chan = 0u8
 
-: initServo
+: initServo // initServo pin канал
+ser_pin = 
+ser_chan = 
 ledcSetup ser_chan 50u8 12 // запустили на канале
+ln print ser_chan
 ledcAttach ser_pin ser_chan  // Связали канал с пином
-ledcWrite ser_pin 0u16
+ledcWrite ser_chan 0u16
 ;
-initServo
-var grad
+//initServo 20 1
+initServo 3 0
 
+
+var grad
 : angle // angle что на сколько
 ser_chan =
 grad = 
@@ -28,24 +33,25 @@ grad =
 grad *= 410 
 grad /= 180
 grad += 240
+ln print grad
 ledcWrite ser_chan grad
 ;
+
 const стол
 стол = 0
-angle 0 90
-
+const голова
+стол = 1
 : поверни
 angle 
 ;
-
 : на
 nop
 ;
-
 : градусов
 nop
 ;
-
+поверни стол на 90 градусов
+// поверни голова на 90 градусов
 main
 ln print "Добро пожаловать Words ждет вас!"
 ln print "Для вывода числа на индикатор введите: 7segPrint 1234"

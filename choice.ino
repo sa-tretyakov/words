@@ -1,7 +1,3 @@
-
-
-
-
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ mychoiceFunc ===
 
 void pushZeroForType(uint8_t elemType) {
@@ -10,13 +6,7 @@ void pushZeroForType(uint8_t elemType) {
   else pushInt(0);
 }
 
-
-
-
-
-
 // === ОСНОВНАЯ ФУНКЦИЯ ===
-
 /*
  * mychoiceFunc — центральный обработчик вызова слова в Words.
  * 
@@ -135,8 +125,5 @@ void mychoiceFunc(uint16_t addr) {
   // По умолчанию
   readVariableAsValue(addr);
 }
-
-
-
 
  

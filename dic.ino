@@ -95,7 +95,7 @@ bool addMarkerWord(const char* name) {
   pos[2] = nameLen;
   memcpy(&pos[3], name, nameLen);
   pos[3 + nameLen] = 0x80 | STORAGE_NAMED; // = 0x81
-  pos[3 + nameLen + 1] = 0; // context = 0
+  pos[3 + nameLen + 1] = currentContext; // context = 0
 
   uint32_t funcAddr = (uint32_t)pushMarkerFunc;
   memcpy(&pos[3 + nameLen + 2], &funcAddr, 4);

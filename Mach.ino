@@ -1,3 +1,21 @@
+void mathInit() {
+  String tmp = "cont math";
+  executeLine(tmp);
+  addMarkerWord("=");
+  addMarkerWord("+");
+  addMarkerWord("-");
+  addMarkerWord("*");
+  addMarkerWord("/");
+  addMarkerWord("+=");
+  addMarkerWord("-=");
+  addMarkerWord("*=");
+  addMarkerWord("/=");
+  addMarkerWord("%");
+ tmp = "main";
+  executeLine(tmp);
+}
+
+
 void tmpLit() {
   // Создаём временное слово "tmpLit"
   uint8_t name[] = {'t', 'm', 'p', 'L', 'i', 't'};

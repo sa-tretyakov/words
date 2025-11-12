@@ -1,3 +1,18 @@
+void filesInit() {
+  String tmp = "cont files";
+  executeLine(tmp);
+  addInternalWord("dir", listFilesWord);
+  addInternalWord("ls", listFilesWord);
+  addInternalWord("cat", catWord);
+  addInternalWord("type", catWord);
+  addInternalWord("load", loadWord);
+ tmp = "main";
+  executeLine(tmp);
+}
+
+
+
+
 bool popFilename(char* outPath, size_t outSize) {
   uint8_t nameType, nameLen;
   const uint8_t* nameData;
