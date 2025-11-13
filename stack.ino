@@ -11,6 +11,8 @@ void contFunc(uint16_t addr) {
   // Устанавливаем текущий контекст
   currentContext = (uint8_t)value;
 }
+
+
 void seetimeWord(uint16_t addr) {
   uint8_t type, len;
   const uint8_t* data;

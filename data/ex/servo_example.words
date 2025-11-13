@@ -1,0 +1,55 @@
+cont servo
+var ser_pin var ser_chan
+ser_pin = 10u8
+ser_chan = 0u8
+
+: serInit
+ledcSetup ser_chan 50u8 12 // запустили на канале
+ledcAttach ser_pin ser_chan   // Связали канал с пином
+ledcWrite ser_chan 0u16
+;
+ser_pin = 3u8
+ser_chan = 0u8
+serInit
+ser_pin = 4u8
+ser_chan = 1u8
+serInit
+ser_pin = 46u8
+ser_chan = 2u8
+serInit
+ser_pin = 20u8
+ser_chan = 3u8
+serInit
+
+var grad
+: angle // angle что на сколько
+ser_chan =
+grad = 
+grad *= 410 
+grad /= 180
+grad += 240
+ledcWrite ser_chan grad
+;
+angle 0u8 0
+angle 1u8 0
+angle 2u8 0
+angle 3u8 0
+
+var rot_count
+rot_count = 240u16
+var max_count
+max_count = 570u16
+: rotate
+rot_count += 1u16
+ledcWrite 0u8 rot_count
+ledcWrite 1u8 rot_count
+ledcWrite 2u8 rot_count
+ledcWrite 3u8 rot_count
+if rot_count >= max_count 
+rot_count = 240u16
+;
+//+task "rotate" 10
+
+
+
+main
