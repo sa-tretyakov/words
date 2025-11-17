@@ -23,22 +23,18 @@ serInit
 
 var grad
 : angle // angle что на сколько
-ser_chan =
 grad = 
 grad *= 410 
 grad /= 180
 grad += 240
-ledcWrite ser_chan grad
+grad
 ;
-angle 0u8 0
-angle 1u8 0
-angle 2u8 0
-angle 3u8 0
+
 
 var rot_count
 rot_count = 240u16
 var max_count
-max_count = 570u16
+max_count = 540u16
 : rotate
 rot_count += 1u16
 ledcWrite 0u8 rot_count
@@ -48,8 +44,5 @@ ledcWrite 3u8 rot_count
 if rot_count >= max_count 
 rot_count = 240u16
 ;
-//+task "rotate" 10
-
-
-
+// +task "rotate" 10
 main

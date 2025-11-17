@@ -1,9 +1,9 @@
 cont 7seg
 var seg_digits
-seg_digits = array 10u8
+seg_digits = array u8 10u8
 seg_digits [ ] = 0xC0 0xF9 0xA4 0xB0 0x99 0x92 0x82 0xF8 0x80 0x90
 var seg_num
-seg_num = array 5u8
+seg_num = array u8 5u8
 seg_num [ ] = 0xF1 0xF2 0xF4 0xF8 0xF0
 // pins
 var DATA_DIO
@@ -29,7 +29,7 @@ dig7 = 2
 ;
 
 var num
-num = array 5u8
+num = array u8 5u8
 var vol7
 : 7segLoop
 cont7 = 0u8

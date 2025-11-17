@@ -1,0 +1,40 @@
+
+modeSta
+onSta "Halo Network" "Evonic3105!"
+print
+ln
+print ipSta
+ln
+
+
+// echo -n "Hello ESP!" | nc -u -w1 192.168.2.93 1900
+cont udp
+var udpsoc
+udpsoc = 0u8
+udpBegin udpsoc 0x76C
+// udpBeginMulticast udpsoc 0x76C "239.255.255.250"
+var udpBuffer
+udpBuffer = array 255u8 // Массив 200 байт типа u8
+var packet_size
+var udpcount
+udpcount = 0u16
+: udptest
+packet_size = udpAvailable udpsoc
+if packet_size != 0u16
+print "получено "
+print  packet_size
+print " байт "
+ln
+udpReadArray udpsoc udpBuffer packet_size
+while udpcount < packet_size {
+print char udpBuffer [ udpcount ]
+udpcount += 1u16
+}
+ln
+;
+
++task "udptest" 100
+
+
+
+main

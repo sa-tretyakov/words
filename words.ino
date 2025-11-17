@@ -111,7 +111,8 @@ enum ValueType : uint8_t {
   TYPE_UINT16 = 8,
   TYPE_MARKER = 9,
   TYPE_NAME = 10,
-  TYPE_ARRAY = 11
+  TYPE_ARRAY = 11,
+  TYPE_ADDRINFO = 12
 };
 // Арифметика
 #define OP_ADD 0
@@ -440,133 +441,6 @@ uint16_t popUInt16() {
 // ========================
 // Печать стека
 // ========================
-void printStackCompact() {
-  // --- Стек ---
-  //Serial.println();
-  Serial.print("context:");
-  Serial.print(currentContext);
-  if (stackTop == 0) {
-    Serial.print(" []");
-  } else {
-    // (ваш существующий код печати стека — без изменений)
-    const int MAX_ELEMENTS = 256;
-    struct Element {
-      char prefix;
-      String repr;
-    };
-    Element elements[MAX_ELEMENTS];
-    int count = 0;
-    size_t tempTop = stackTop;
-
-    while (tempTop >= 2 && count < MAX_ELEMENTS) {
-      uint8_t len = stack[tempTop - 2];
-      uint8_t type = stack[tempTop - 1];
-      if (len > tempTop - 2) break;
-      size_t dataStart = tempTop - 2 - len;
-      char prefix = '?';
-      String repr;
-
-      switch (type) {
-        case TYPE_INT: if (len == 4) { int32_t v; memcpy(&v, &stack[dataStart], 4); repr = String(v); prefix = 'I'; } break;
-        case TYPE_FLOAT: if (len == 4) { float v; memcpy(&v, &stack[dataStart], 4); repr = String(v, 6); prefix = 'F'; } break;
-        case TYPE_STRING: {
-          repr = "";
-          for (size_t i = 0; i < len; i++) {
-            char c = stack[dataStart + i];
-            repr += (c >= 32 && c <= 126) ? c : '?';
-          }
-          prefix = 'S';
-          break;
-        }
-        case TYPE_BOOL: if (len == 1) { repr = stack[dataStart] ? "true" : "false"; prefix = 'B'; } break;
-        case TYPE_INT8: { int8_t v = static_cast<int8_t>(stack[dataStart]); repr = String(v); prefix = '8'; } break;
-        case TYPE_UINT8: { uint8_t v = stack[dataStart]; repr = String(v); prefix = 'U'; } break;
-        case TYPE_INT16: { int16_t v; memcpy(&v, &stack[dataStart], 2); repr = String(v); prefix = 'W'; } break;
-        case TYPE_UINT16: { uint16_t v; memcpy(&v, &stack[dataStart], 2); repr = String(v); prefix = 'w'; } break;
-        case TYPE_NAME: {
-          repr = "";
-          for (size_t i = 0; i < len; i++) {
-            char c = stack[dataStart + i];
-            repr += (c >= 32 && c <= 126) ? c : '?';
-          }
-          prefix = 'N';
-          break;
-        }
-        case TYPE_ARRAY: {
-          if (len >= 3) {
-            uint8_t elemType = stack[dataStart];
-            uint16_t count = stack[dataStart + 1] | (stack[dataStart + 2] << 8);
-            String typeStr = (elemType == TYPE_UINT8) ? "u8" : (elemType == TYPE_INT8) ? "i8" : (elemType == TYPE_UINT16) ? "u16" : (elemType == TYPE_INT16) ? "i16" : (elemType == TYPE_INT) ? "i32" : "?";
-            repr = typeStr + "[" + String(count) + "]";
-            prefix = 'A';
-          } else { repr = "?"; prefix = 'A'; }
-          break;
-        }
-        case TYPE_MARKER: {
-          repr = "";
-          for (size_t i = 0; i < len; i++) {
-            char c = stack[dataStart + i];
-            repr += (c >= 32 && c <= 126) ? c : '?';
-          }
-          prefix = 'M';
-          break;
-        }
-      }
-
-      if (prefix != '?') {
-        elements[count].prefix = prefix;
-        elements[count].repr = repr;
-        count++;
-      } else break;
-      tempTop = dataStart;
-    }
-
-    Serial.print(" [");
-    for (int i = count - 1; i >= 0; i--) {
-      if (i < count - 1) Serial.print(' ');
-      Serial.print(elements[i].prefix);
-      Serial.print('(');
-      Serial.print(elements[i].repr);
-      Serial.print(')');
-    }
-    Serial.print(']');
-  }
-
-  // --- Состояние системы (seetime + задачи) ---
-  Serial.println(); // новая строка для состояния
-  Serial.print("⏱️ seetime: ");
-  Serial.print(seetimeMode ? "ON" : "OFF");
-  Serial.print(" | +task: ");
-
-  // Собираем список активных задач
-  bool first = true;
-  for (int i = 0; i < MAX_TASKS; i++) {
-    if (tasks[i].active) {
-      if (!first) Serial.print(", ");
-      first = false;
-
-      uint16_t wordAddr = tasks[i].wordAddr;
-      if (wordAddr + 2 < DICT_SIZE) {
-        uint8_t nameLen = dictionary[wordAddr + 2];
-        if (nameLen > 0 && wordAddr + 3 + nameLen <= DICT_SIZE) {
-          for (uint8_t j = 0; j < nameLen; j++) {
-            char c = dictionary[wordAddr + 3 + j];
-            if (c >= 32 && c <= 126) Serial.print(c);
-            else Serial.print('?');
-          }
-          Serial.print('(');
-          Serial.print(tasks[i].interval);
-          Serial.print("ms)");
-        }
-      }
-    }
-  }
-  if (first) Serial.print("[]"); // нет задач
-
-  Serial.println();
-  Serial.println("Words>");
-}
-
 
 void printBytes(const uint8_t* data, size_t len) {
   for (size_t i = 0; i < len; i++) {
@@ -669,6 +543,7 @@ Serial.println();
   jsonInit();
   taskInit();  
   filesInit();
+   debugInit();
 
    strInit();
    wifiInit(); 

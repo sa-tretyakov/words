@@ -43,6 +43,7 @@ void compileCode(uint16_t code) {
   dictionary[dictLen++] = (uint8_t)(code & 0xFF);      // младший байт
   dictionary[dictLen++] = (uint8_t)((code >> 8) & 0xFF); // старший байт
 }
+
 uint16_t findWord(const String& token) {
   uint16_t ptr = 0;
   while (ptr < dictLen) {

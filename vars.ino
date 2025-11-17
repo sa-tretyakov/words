@@ -7,9 +7,17 @@ void varsInit() {
   addMarkerWord("[");
   addMarkerWord("]");
   addInternalWord("let", letWord);
+  addMarkerWord("u8");
+  addMarkerWord("i8");
+  addMarkerWord("u16");
+  addMarkerWord("i16");
+  addMarkerWord("i32");
    tmp = "main";
   executeLine(tmp);
 }
+
+
+
 
 void contWord(uint16_t addr) {
   uint8_t nameType, nameLen;
@@ -126,68 +134,84 @@ void constWord(uint16_t addr) {
   dictLen = nextOffset;
   stackTop = nameStart;
 }
+
+
 void arrayFunc(uint16_t addr) {
-  // Ожидаем на стеке одно значение: count с типом элемента (например, 5u8)
-  if (stackTop < 2) {
-    Serial.println("⚠️ array: expected count with type suffix (e.g. 5u8)");
-    // Кладём пустую заготовку (0 элементов)
+  uint8_t typeMarkerType, typeMarkerLen;
+  const uint8_t* typeMarkerData;
+  if (!peekStackTop(&typeMarkerType, &typeMarkerLen, &typeMarkerData)) {
+    Serial.println("⚠️ array: expected type marker (e.g., u8, i8, u16, i16, i32)");
     uint8_t dummy[3] = {TYPE_UINT8, 0, 0};
     pushValue(dummy, 3, TYPE_ARRAY);
     return;
   }
+  if (typeMarkerType != TYPE_MARKER) {
+     Serial.println("⚠️ array: expected type marker (e.g., u8, i8, u16, i16, i32), got type:"); Serial.println(typeMarkerType);
+     uint8_t dummy[3] = {TYPE_UINT8, 0, 0};
+     pushValue(dummy, 3, TYPE_ARRAY);
+     dropTop(0);
+     return;
+  }
+  String typeName = String((char*)typeMarkerData, typeMarkerLen);
 
-  uint8_t valueLen = stack[stackTop - 2];
-  uint8_t valueType = stack[stackTop - 1];
+  uint8_t elemType = TYPE_UINT8; // Значение по умолчанию
+  if (typeName == "u8") elemType = TYPE_UINT8;
+  else if (typeName == "i8") elemType = TYPE_INT8;
+  else if (typeName == "u16") elemType = TYPE_UINT16;
+  else if (typeName == "i16") elemType = TYPE_INT16;
+  else if (typeName == "i32") elemType = TYPE_INT;
 
-  // Поддерживаем только целочисленные типы как тип элемента
-  if (valueType != TYPE_UINT8 && valueType != TYPE_INT8 &&
-      valueType != TYPE_UINT16 && valueType != TYPE_INT16 &&
-      valueType != TYPE_INT) {
+  if (elemType != TYPE_UINT8 && elemType != TYPE_INT8 &&
+      elemType != TYPE_UINT16 && elemType != TYPE_INT16 &&
+      elemType != TYPE_INT) {
     Serial.println("⚠️ array: element type must be u8, i8, u16, i16, or i32");
     uint8_t dummy[3] = {TYPE_UINT8, 0, 0};
     pushValue(dummy, 3, TYPE_ARRAY);
     dropTop(0);
     return;
   }
+  dropTop(0);
 
-  // Читаем количество элементов (всегда беззнаковое)
-  uint16_t count = 0;
-  if (valueType == TYPE_UINT8) {
-    count = popUInt8();
-  } else if (valueType == TYPE_INT8) {
-    int8_t v = popInt8();
-    count = (v < 0) ? 0 : (uint16_t)v;
-  } else if (valueType == TYPE_UINT16) {
-    count = popUInt16();
-  } else if (valueType == TYPE_INT16) {
-    int16_t v = popInt16();
-    count = (v < 0) ? 0 : (uint16_t)v;
-  } else if (valueType == TYPE_INT) {
-    int32_t v = popInt();
-    if (v < 0) v = 0;
-    if (v > 65535) v = 65535;
-    count = (uint16_t)v;
+  if (stackTop < 2) {
+    Serial.println("⚠️ array: expected count after type marker");
+    uint8_t dummy[3] = {elemType, 0, 0};
+    pushValue(dummy, 3, TYPE_ARRAY);
+    return;
   }
 
-  // Ограничиваем разумным максимумом (можно изменить)
+  int32_t count_raw;
+  if (!popInt32FromAny(&count_raw)) {
+     Serial.println("⚠️ array: count must be an integer");
+     uint8_t dummy[3] = {elemType, 0, 0};
+     pushValue(dummy, 3, TYPE_ARRAY);
+     return;
+  }
+
+  uint16_t count = 0;
+  if (count_raw < 0) {
+      Serial.println("⚠️ array: count must be >= 0");
+      count = 0;
+  } else if (count_raw > 65535) {
+      Serial.println("⚠️ array: count too large (max 65535)");
+      count = 65535;
+  } else {
+      count = (uint16_t)count_raw;
+  }
+
   if (count == 0) {
     Serial.println("⚠️ array: count must be > 0");
     count = 1;
   }
-  if (count > 1024) {
-    Serial.println("⚠️ array: count too large (max 1024)");
-    count = 1024;
-  }
 
-  // Формируем заготовку: [elemType][count_L][count_H]
+
   uint8_t arrayStub[3];
-  arrayStub[0] = valueType;               // тип элемента
-  arrayStub[1] = (uint8_t)(count & 0xFF); // младший байт
-  arrayStub[2] = (uint8_t)(count >> 8);   // старший байт
+  arrayStub[0] = elemType;
+  arrayStub[1] = (uint8_t)(count & 0xFF);
+  arrayStub[2] = (uint8_t)(count >> 8);
 
-  // Кладём на стек как TYPE_ARRAY (длина = 3)
   pushValue(arrayStub, 3, TYPE_ARRAY);
 }
+
 void letWord(uint16_t callerAddr) {
   if (stackTop < 2) return;
   uint8_t topLen = stack[stackTop - 2];

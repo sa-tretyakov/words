@@ -5,27 +5,13 @@ print CRLF
 type "help.txt"
 ;
 
-load "ex/blinker_example.words"
-load "ex/7seg_example.words"
-load "ex/servo_example.words"
-
+// load "ex/7seg_example.words"
 
 main
 ln print "Добро пожаловать Words ждет вас!"
-ln print "Для вывода числа на индикатор введите: 7segPrint 1234"
 
-7seg
-var число
-число = 9999
-: count
-число += 1
-7segPrint число
-;
-
-ln print "Запустить счетчик: +task "count" 1000"
-// +task "count" 1000
+cont ar
+var buf
+buf = array u8 1600u16
+buf [ 19u16 ] = 0xAA
 main
-
-
-
-
