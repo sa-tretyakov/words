@@ -5,13 +5,9 @@ print CRLF
 type "help.txt"
 ;
 
-// load "ex/7seg_example.words"
+load ex/7seg_example.words
+load ex/blinker_example.words
 
 main
 ln print "Добро пожаловать Words ждет вас!"
 
-cont ar
-var buf
-buf = array u8 1600u16
-buf [ 19u16 ] = 0xAA
-main
