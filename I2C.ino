@@ -31,14 +31,14 @@ void i2cWriteFunc(uint16_t addr) {
     pushBool(false);
     return;
   }
-Serial.print("Adress ");
-Serial.println(devAddr,HEX);
+outputStream->print("Adress ");
+outputStream->println(devAddr,HEX);
   if (len == 0 || len > 32) {
     pushBool(false);
     return;
   }
-Serial.print("Len ");
-Serial.println(len);
+outputStream->print("Len ");
+outputStream->println(len);
   // Читаем байты данных
   uint8_t buffer[32];
   for (int i = len - 1; i >= 0; i--) {

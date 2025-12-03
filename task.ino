@@ -11,7 +11,7 @@ void addTaskWord(uint16_t addr) {
   const uint8_t* data;
   
   // Имя (строка)
-  if (!peekStackTop(&type, &len, &data) || type != TYPE_STRING) { dropTop(0); Serial.println("⚠️ +Task: string expected"); return; }
+  if (!peekStackTop(&type, &len, &data) || type != TYPE_STRING) { dropTop(0); outputStream->println("⚠️ +Task: string expected"); return; }
   String name = String((char*)data, len);
   dropTop(0);
   
@@ -22,7 +22,7 @@ void addTaskWord(uint16_t addr) {
   if (type == TYPE_INT && len == 4) memcpy(&interval, data, 4);
   else if (type == TYPE_UINT16 && len == 2) { uint16_t v; memcpy(&v, data, 2); interval = v; }
   else if (type == TYPE_UINT8 && len == 1) interval = data[0];
-  else { Serial.println("⚠️ +Task: invalid interval"); return; }
+  else { outputStream->println("⚠️ +Task: invalid interval"); return; }
 
   // Найти слово
   uint16_t wordAddr = 0;
@@ -35,7 +35,7 @@ void addTaskWord(uint16_t addr) {
     if (next <= p) break;
     p = next;
   }
-  if (!wordAddr) { Serial.println("⚠️ +Task: word not found"); return; }
+  if (!wordAddr) { outputStream->println("⚠️ +Task: word not found"); return; }
 
   // Обновить или добавить
   for (int i = 0; i < MAX_TASKS; i++) {
@@ -44,7 +44,7 @@ void addTaskWord(uint16_t addr) {
       if (tlen == name.length() && memcmp(&dictionary[tasks[i].wordAddr + 3], name.c_str(), tlen) == 0) {
         tasks[i].interval = interval;
         tasks[i].lastRun = millis();
-        Serial.printf("Task updated: %s\n", name.c_str());
+        outputStream->printf("Task updated: %s\n", name.c_str());
         return;
       }
     }
@@ -52,11 +52,11 @@ void addTaskWord(uint16_t addr) {
   for (int i = 0; i < MAX_TASKS; i++) {
     if (!tasks[i].active) {
       tasks[i] = {wordAddr, interval, millis(), true};
-      //Serial.printf("Task added: %s\n", name.c_str());
+      //outputStream->printf("Task added: %s\n", name.c_str());
       return;
     }
   }
-  Serial.println("⚠️ +Task: full");
+  outputStream->println("⚠️ +Task: full");
 }
 
 void removeTaskWord(uint16_t addr) {
@@ -64,7 +64,7 @@ void removeTaskWord(uint16_t addr) {
   const uint8_t* nameData;
   if (!peekStackTop(&nameType, &nameLen, &nameData)) return;
   if (nameType != TYPE_STRING) {
-    Serial.println("⚠️ -Task: expected string in quotes");
+    outputStream->println("⚠️ -Task: expected string in quotes");
     return;
   }
   dropTop(0);
@@ -84,12 +84,12 @@ void removeTaskWord(uint16_t addr) {
         }
         if (match) {
           tasks[i].active = false;
-          //Serial.printf("Task removed: %s\n", wordName.c_str());
+          //outputStream->printf("Task removed: %s\n", wordName.c_str());
           return;
         }
       }
     }
   }
 
-  Serial.println("⚠️ -Task: task not found");
+  outputStream->println("⚠️ -Task: task not found");
 }

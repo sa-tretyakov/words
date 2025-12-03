@@ -34,21 +34,20 @@ uint16_t findWordAddress(const char* name) {
   return 0xFFFF; // не найдено
 }
 
-
 void interpretToken(const String& token) {
   // === СТРОКИ В КАВЫЧКАХ ===
   if (token.startsWith("\"") && token.endsWith("\"") && token.length() >= 2) {
     String strContent = token.substring(1, token.length() - 1);
     size_t len = strContent.length();
     if (len > 255) {
-      Serial.println("⚠️ Строка слишком длинная");
+      outputStream->println("⚠️ Строка слишком длинная");
       return;
     }
 
     if (compiling) {
       // Компиляция строки как литерала
       if (dictLen + 6 + len > DICT_SIZE) {
-        Serial.println("⚠️ Dictionary full (string literal)");
+        outputStream->println("⚠️ Dictionary full (string literal)");
         return;
       }
       dictionary[dictLen++] = 0xFF; // 0xFFFF
@@ -69,6 +68,8 @@ void interpretToken(const String& token) {
   String tokenOrig = token;
   ValueType forcedType = TYPE_UNDEFINED;
   String tempToken = token;
+
+  // Определяем, есть ли суффикс типа
   if (tempToken.endsWith("i32")) {
     forcedType = TYPE_INT;
     tempToken.remove(tempToken.length() - 3);
@@ -90,6 +91,7 @@ void interpretToken(const String& token) {
     tempToken.remove(tempToken.length() - 2);
   }
 
+  // Если после удаления суффикса пусто — это не число, это слово
   if (tempToken.length() == 0) {
     lookupAndExecute(tokenOrig);
     return;
@@ -105,7 +107,7 @@ void interpretToken(const String& token) {
 
   if (hasDot) {
     if (forcedType != TYPE_UNDEFINED) {
-      Serial.printf("⚠️ Float literals cannot have type suffixes: %s\n", tokenOrig.c_str());
+      outputStream->printf("⚠️ Float literals cannot have type suffixes: %s\n", tokenOrig.c_str());
       return;
     }
     float f = tempToken.toFloat();
@@ -113,13 +115,17 @@ void interpretToken(const String& token) {
     executeAt(ADDR_TMP_LIT);
   } else {
     long val;
-    if (isHex) val = strtol(tempToken.c_str(), nullptr, 16);
-    else val = atol(tempToken.c_str());
+    if (isHex) {
+      val = strtol(tempToken.c_str(), nullptr, 16);
+    } else {
+      val = atol(tempToken.c_str());
+    }
 
     uint8_t type, len;
     uint8_t data[4];
 
     if (forcedType == TYPE_UNDEFINED) {
+      // Автоматический выбор типа
       if (isHex) {
         if (val >= 0 && val <= UINT8_MAX) {
           type = TYPE_UINT8;
@@ -139,45 +145,69 @@ void interpretToken(const String& token) {
           memcpy(data, &v, 4);
         }
       } else {
-        type = TYPE_INT; len = 4; int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val; memcpy(data, &v, 4);
+        type = TYPE_INT; len = 4;
+        int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+        memcpy(data, &v, 4);
       }
     } else {
+      // Явно указан тип — строгая проверка диапазона
       switch (forcedType) {
         case TYPE_INT8: {
+            if (val < INT8_MIN || val > INT8_MAX) {
+                outputStream->printf("⚠️ Value %ld out of range for i8 (-128..127): %s\n", val, tokenOrig.c_str());
+                return;
+            }
             type = TYPE_INT8; len = 1;
-            int8_t v8 = (val < INT8_MIN) ? INT8_MIN : (val > INT8_MAX) ? INT8_MAX : (int8_t)val;
-            data[0] = v8;
+            data[0] = (int8_t)val;
             break;
           }
         case TYPE_UINT8: {
+            if (val < 0 || val > UINT8_MAX) {
+                outputStream->printf("⚠️ Value %ld out of range for u8 (0..255): %s\n", val, tokenOrig.c_str());
+                return;
+            }
             type = TYPE_UINT8; len = 1;
-            data[0] = (val < 0) ? 0 : (val > UINT8_MAX) ? UINT8_MAX : (uint8_t)val;
+            data[0] = (uint8_t)val;
             break;
           }
         case TYPE_INT16: {
+            if (val < INT16_MIN || val > INT16_MAX) {
+                outputStream->printf("⚠️ Value %ld out of range for i16 (-32768..32767): %s\n", val, tokenOrig.c_str());
+                return;
+            }
             type = TYPE_INT16; len = 2;
-            int16_t v16 = (val < INT16_MIN) ? INT16_MIN : (val > INT16_MAX) ? INT16_MAX : (int16_t)val;
+            int16_t v16 = (int16_t)val;
             memcpy(data, &v16, 2);
             break;
           }
         case TYPE_UINT16: {
+            if (val < 0 || val > UINT16_MAX) {
+                outputStream->printf("⚠️ Value %ld out of range for u16 (0..65535): %s\n", val, tokenOrig.c_str());
+                return;
+            }
             type = TYPE_UINT16; len = 2;
-            uint16_t u16 = (val < 0) ? 0 : (val > UINT16_MAX) ? UINT16_MAX : (uint16_t)val;
+            uint16_t u16 = (uint16_t)val;
             memcpy(data, &u16, 2);
             break;
           }
         case TYPE_INT: {
+            if (val < INT32_MIN || val > INT32_MAX) {
+                outputStream->printf("⚠️ Value %ld out of range for i32: %s\n", val, tokenOrig.c_str());
+                return;
+            }
             type = TYPE_INT; len = 4;
-            int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
+            int32_t v32 = (int32_t)val;
             memcpy(data, &v32, 4);
             break;
           }
         default: {
+            outputStream->printf("⚠️ Internal error: %s\n", tokenOrig.c_str());
             return;
           }
       }
     }
 
+    // Сохраняем значение во временную переменную и исполняем
     storeValueToVariable(ADDR_TMP_LIT, data, len, type);
     executeAt(ADDR_TMP_LIT);
   }

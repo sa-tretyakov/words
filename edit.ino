@@ -3,14 +3,14 @@ void handleStringToken(const String& token) {
     String strContent = token.substring(1, token.length() - 1);
     size_t len = strContent.length();
     if (len > 255) {
-      Serial.println("⚠️ Строка слишком длинная");
+      outputStream->println("⚠️ Строка слишком длинная");
       return;
     }
 
     if (compiling) {
       // Компиляция строки как литерала
       if (dictLen + 6 + len > DICT_SIZE) {
-        Serial.println("⚠️ Dictionary full (string literal)");
+        outputStream->println("⚠️ Dictionary full (string literal)");
         return;
       }
       dictionary[dictLen++] = 0xFF; // 0xFFFF
@@ -29,14 +29,14 @@ void handleStringToken(const String& token) {
     if (compiling) {
       compileToken(token);
     } else {
-      interpretTokenAsWord(token);
+      interpretToken(token);
     }
   }
 }
 
 void compileCode(uint16_t code) {
   if (dictLen + 2 > DICT_SIZE) {
-    Serial.println("⚠️ Dictionary full — compilation aborted");
+    outputStream->println("⚠️ Dictionary full — compilation aborted");
     compiling = false; // останавливаем компиляцию
     return;
   }
@@ -78,7 +78,7 @@ void compileFloatLiteral(const String& valueStr, const String& originalToken) {
   memcpy(data, &f, 4);
 
   if (dictLen + 6 > DICT_SIZE) { // FF FF len type data
-    Serial.println("⚠️ Dictionary full (float)");
+    outputStream->println("⚠️ Dictionary full (float)");
     return;
   }
 
@@ -89,6 +89,7 @@ void compileFloatLiteral(const String& valueStr, const String& originalToken) {
   memcpy(&dictionary[dictLen], data, len);
   dictLen += len;
 }
+
 
 void compileIntegerLiteral(const String& valueStr, const String& originalToken, bool isHex) {
   long val;
@@ -116,7 +117,7 @@ void compileIntegerLiteral(const String& valueStr, const String& originalToken, 
       } else if (val >= 0 && val <= UINT16_MAX) {
         type = TYPE_UINT16; len = 2; uint16_t v16 = (uint16_t)val; memcpy(data, &v16, 2);
       } else {
-        type = TYPE_INT; len = 4; int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val; memcpy(data, &v32, 4);
+        type = TYPE_INT; len = 4; int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val; memcpy(data, &v, 4);
       }
     } else {
       type = TYPE_INT; len = 4; int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val; memcpy(data, &v, 4);
@@ -124,51 +125,83 @@ void compileIntegerLiteral(const String& valueStr, const String& originalToken, 
   } else {
     switch (forcedType) {
       case TYPE_INT8: {
-          type = TYPE_INT8; len = 1; data[0] = (val < INT8_MIN) ? INT8_MIN : (val > INT8_MAX) ? INT8_MAX : (int8_t)val; break;
-      } case TYPE_UINT8: {
-          type = TYPE_UINT8; len = 1; data[0] = (val < 0) ? 0 : (val > UINT8_MAX) ? UINT8_MAX : (uint8_t)val; break;
-      } case TYPE_INT16: {
-          type = TYPE_INT16; len = 2; int16_t v16 = (val < INT16_MIN) ? INT16_MIN : (val > INT16_MAX) ? INT16_MAX : (int16_t)val; memcpy(data, &v16, 2); break;
-      } case TYPE_UINT16: {
-          type = TYPE_UINT16; len = 2; uint16_t u16 = (val < 0) ? 0 : (val > UINT16_MAX) ? UINT16_MAX : (uint16_t)val; memcpy(data, &u16, 2); break;
-      } case TYPE_INT: {
-          type = TYPE_INT; len = 4; int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val; memcpy(data, &v32, 4); break;
-      }default: {
-            Serial.printf("⚠️ Internal error: %s\n", originalToken.c_str()); return;
-          
-      }
+          if (val < INT8_MIN || val > INT8_MAX) {
+              outputStream->printf("⚠️ Value %ld out of range for i8 (-128..127): %s\n", val, originalToken.c_str());
+              return;
+          }
+          type = TYPE_INT8; len = 1; data[0] = (int8_t)val;
+          break;
+        }
+      case TYPE_UINT8: {
+          if (val < 0 || val > UINT8_MAX) {
+              outputStream->printf("⚠️ Value %ld out of range for u8 (0..255): %s\n", val, originalToken.c_str());
+              return;
+          }
+          type = TYPE_UINT8; len = 1; data[0] = (uint8_t)val;
+          break;
+        }
+      case TYPE_INT16: {
+          if (val < INT16_MIN || val > INT16_MAX) {
+              outputStream->printf("⚠️ Value %ld out of range for i16 (-32768..32767): %s\n", val, originalToken.c_str());
+              return;
+          }
+          type = TYPE_INT16; len = 2; int16_t v16 = (int16_t)val; memcpy(data, &v16, 2);
+          break;
+        }
+      case TYPE_UINT16: {
+          if (val < 0 || val > UINT16_MAX) {
+              outputStream->printf("⚠️ Value %ld out of range for u16 (0..65535): %s\n", val, originalToken.c_str());
+              return;
+          }
+          type = TYPE_UINT16; len = 2; uint16_t u16 = (uint16_t)val; memcpy(data, &u16, 2);
+          break;
+        }
+      case TYPE_INT: {
+          if (val < INT32_MIN || val > INT32_MAX) {
+              outputStream->printf("⚠️ Value %ld out of range for i32: %s\n", val, originalToken.c_str());
+              return;
+          }
+          type = TYPE_INT; len = 4; int32_t v32 = (int32_t)val; memcpy(data, &v32, 4);
+          break;
+        }
+      default: {
+          outputStream->printf("⚠️ Internal error in token: %s\n", originalToken.c_str());
+          return;
+        }
     }
   }
-    if (dictLen + 6 > DICT_SIZE) {
-      Serial.println("⚠️ Dictionary full (int)");
-      return;
-    }
 
-    dictionary[dictLen++] = 0xFF;
-    dictionary[dictLen++] = 0xFF;
-    dictionary[dictLen++] = len;
-    dictionary[dictLen++] = type;
-    memcpy(&dictionary[dictLen], data, len);
-    dictLen += len;
+  if (dictLen + 6 > DICT_SIZE) {
+    outputStream->println("⚠️ Dictionary full (int)");
+    return;
   }
+
+  dictionary[dictLen++] = 0xFF;
+  dictionary[dictLen++] = 0xFF;
+  dictionary[dictLen++] = len;
+  dictionary[dictLen++] = type;
+  memcpy(&dictionary[dictLen], data, len);
+  dictLen += len;
+}
+
 
   void compileToken(const String & token) {
    // === СПЕЦИАЛЬНАЯ ОБРАБОТКА ЦИКЛОВ ===
 
   if (token == "{") {
     if (loopDepth >= MAX_LOOP_NESTING) {
-      Serial.println("⚠️ Loop nesting too deep");
+      outputStream->println("⚠️ Loop nesting too deep");
       return;
     }
     loopStack[loopDepth].conditionStart = dictLen;
-//    Serial.print("conditionStart=");
-//    Serial.println(dictLen,HEX);
+//    outputStream->print("conditionStart=");
+//    outputStream->println(dictLen,HEX);
     return;
   }
 
   if (token == "while") {
     if (loopDepth >= MAX_LOOP_NESTING) {
-      Serial.println("⚠️ Loop nesting error");
+      outputStream->println("⚠️ Loop nesting error");
       return;
     }
 
@@ -194,7 +227,7 @@ void compileIntegerLiteral(const String& valueStr, const String& originalToken, 
 
   if (token == "}") {
     if (loopDepth == 0) {
-      Serial.println("⚠️ Unmatched }");
+      outputStream->println("⚠️ Unmatched }");
       return;
     }
     loopDepth--;
@@ -266,13 +299,13 @@ void compileIntegerLiteral(const String& valueStr, const String& originalToken, 
     uint16_t wordAddr = findWord(token);
     if (wordAddr != 0) {
       if (dictLen + 2 > DICT_SIZE) {
-        Serial.println("⚠️ Dictionary full (word ref)");
+        outputStream->println("⚠️ Dictionary full (word ref)");
         return;
       }
       dictionary[dictLen++] = (wordAddr >> 0) & 0xFF;
       dictionary[dictLen++] = (wordAddr >> 8) & 0xFF;
     } else {
-      Serial.printf("⚠️ Word not found: %s\n", token.c_str());
+      outputStream->printf("⚠️ Word not found: %s\n", token.c_str());
     }
   }
 
@@ -303,136 +336,6 @@ void executeLineTokens(String& line) {
   }
 }
 
-  void interpretTokenAsWord(const String & token) {
-    if (token.startsWith("\"") && token.endsWith("\"") && token.length() >= 2) {
-      String strContent = token.substring(1, token.length() - 1);
-      size_t len = strContent.length();
-      if (len > 255) {
-        Serial.println("⚠️ Строка слишком длинная");
-      } else {
-        storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)strContent.c_str(), (uint8_t)len, TYPE_STRING);
-        executeAt(ADDR_TMP_LIT);
-      }
-      return;
-    }
-
-    String tokenOrig = token;
-    ValueType forcedType = TYPE_UNDEFINED;
-    String tempToken = token;
-    if (tempToken.endsWith("i32")) {
-      forcedType = TYPE_INT;
-      tempToken.remove(tempToken.length() - 3);
-    }
-    else if (tempToken.endsWith("i16")) {
-      forcedType = TYPE_INT16;
-      tempToken.remove(tempToken.length() - 3);
-    }
-    else if (tempToken.endsWith("u16")) {
-      forcedType = TYPE_UINT16;
-      tempToken.remove(tempToken.length() - 3);
-    }
-    else if (tempToken.endsWith("i8")) {
-      forcedType = TYPE_INT8;
-      tempToken.remove(tempToken.length() - 2);
-    }
-    else if (tempToken.endsWith("u8")) {
-      forcedType = TYPE_UINT8;
-      tempToken.remove(tempToken.length() - 2);
-    }
-
-    if (tempToken.length() == 0) {
-      lookupAndExecute(tokenOrig);
-      return;
-    }
-
-    bool hasDot = false, isHex = false;
-    bool isNumber = isValidNumber(tempToken, hasDot, isHex);
-
-    if (!isNumber) {
-      lookupAndExecute(tokenOrig);
-      return;
-    }
-
-    if (hasDot) {
-      if (forcedType != TYPE_UNDEFINED) {
-        Serial.printf("⚠️ Float literals cannot have type suffixes: %s\n", tokenOrig.c_str());
-        return;
-      }
-      float f = tempToken.toFloat();
-      storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)&f, 4, TYPE_FLOAT);
-      executeAt(ADDR_TMP_LIT);
-    } else {
-      long val;
-      if (isHex) val = strtol(tempToken.c_str(), nullptr, 16);
-      else val = atol(tempToken.c_str());
-
-      uint8_t type, len;
-      uint8_t data[4];
-
-      if (forcedType == TYPE_UNDEFINED) {
-        if (isHex) {
-          if (val >= 0 && val <= UINT8_MAX) {
-            type = TYPE_UINT8;
-            len = 1;
-            data[0] = (uint8_t)val;
-          }
-          else if (val >= 0 && val <= UINT16_MAX) {
-            type = TYPE_UINT16;
-            len = 2;
-            uint16_t v16 = (uint16_t)val;
-            memcpy(data, &v16, 2);
-          }
-          else {
-            type = TYPE_INT;
-            len = 4;
-            int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-            memcpy(data, &v, 4);
-          }
-        } else {
-          type = TYPE_INT; len = 4; int32_t v = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val; memcpy(data, &v, 4);
-        }
-      } else {
-        switch (forcedType) {
-          case TYPE_INT8: {
-              type = TYPE_INT8; len = 1;
-              int8_t v8 = (val < INT8_MIN) ? INT8_MIN : (val > INT8_MAX) ? INT8_MAX : (int8_t)val;
-              data[0] = v8;
-              break;
-            }
-          case TYPE_UINT8: {
-              type = TYPE_UINT8; len = 1;
-              data[0] = (val < 0) ? 0 : (val > UINT8_MAX) ? UINT8_MAX : (uint8_t)val;
-              break;
-            }
-          case TYPE_INT16: {
-              type = TYPE_INT16; len = 2;
-              int16_t v16 = (val < INT16_MIN) ? INT16_MIN : (val > INT16_MAX) ? INT16_MAX : (int16_t)val;
-              memcpy(data, &v16, 2);
-              break;
-            }
-          case TYPE_UINT16: {
-              type = TYPE_UINT16; len = 2;
-              uint16_t u16 = (val < 0) ? 0 : (val > UINT16_MAX) ? UINT16_MAX : (uint16_t)val;
-              memcpy(data, &u16, 2);
-              break;
-            }
-          case TYPE_INT: {
-              type = TYPE_INT; len = 4;
-              int32_t v32 = (val < INT32_MIN) ? INT32_MIN : (val > INT32_MAX) ? INT32_MAX : (int32_t)val;
-              memcpy(data, &v32, 4);
-              break;
-            }
-          default: {
-              //Serial.printf("⚠️ Internal error: %s\n", originalToken.c_str());
-              return;
-            }
-        }
-      }
-
-      storeValueToVariable(ADDR_TMP_LIT, data, len, type);
-      executeAt(ADDR_TMP_LIT);
-    }
-  }
 
   void tokenizeLine(const String & line, String tokens[], int& tokenCount) {
     tokenCount = 0;
@@ -475,7 +378,7 @@ void executeLineTokens(String& line) {
 
     size_t headerSize = 2 + 1 + nameLen + 1 + 1;
     if (dictLen + headerSize > DICT_SIZE) {
-      Serial.println("⚠️ Dictionary full");
+      outputStream->println("⚠️ Dictionary full");
       return;
     }
 
@@ -496,7 +399,7 @@ void executeLineTokens(String& line) {
 
   void semicolonWord(uint16_t addr) {
     if (!compiling) {
-      Serial.println("⚠️ ; outside compilation");
+      outputStream->println("⚠️ ; outside compilation");
       return;
     }
 

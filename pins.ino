@@ -57,7 +57,7 @@ bool popPin(uint8_t* outPin) {
 void pinModeWord(uint16_t addr) {
   uint8_t pin;
   if (!popPin(&pin)) {
-    Serial.println("⚠️ pinMode: invalid pin");
+    outputStream->println("⚠️ pinMode: invalid pin");
     return;
   }
 
@@ -68,7 +68,7 @@ void pinModeWord(uint16_t addr) {
 
   uint8_t mode;
   if (!valueToUint8(modeType, modeLen, modeData, &mode)) {
-    Serial.println("⚠️ pinMode: invalid mode");
+    outputStream->println("⚠️ pinMode: invalid mode");
     return;
   }
 
@@ -78,7 +78,7 @@ void pinModeWord(uint16_t addr) {
 void digitalWriteWord(uint16_t addr) {
   uint8_t pin;
   if (!popPin(&pin)) {
-    Serial.println("⚠️ digitalWrite: invalid pin");
+    outputStream->println("⚠️ digitalWrite: invalid pin");
     return;
   }
 
@@ -107,7 +107,7 @@ void digitalWriteWord(uint16_t addr) {
     int16_t v; memcpy(&v, valueData, 2); val = v;
   }
   else {
-    Serial.println("⚠️ digitalWrite: invalid value");
+    outputStream->println("⚠️ digitalWrite: invalid value");
     return;
   }
 
@@ -117,7 +117,7 @@ void digitalWriteWord(uint16_t addr) {
 void analogWriteWord(uint16_t addr) {
   uint8_t pin;
   if (!popPin(&pin)) {
-    Serial.println("⚠️ analogWrite: invalid pin");
+    outputStream->println("⚠️ analogWrite: invalid pin");
     return;
   }
 
@@ -143,7 +143,7 @@ void analogWriteWord(uint16_t addr) {
     value = (int8_t)valueData[0];
   }
   else {
-    Serial.println("⚠️ analogWrite: invalid value type");
+    outputStream->println("⚠️ analogWrite: invalid value type");
     return;
   }
 
@@ -156,7 +156,7 @@ void analogWriteWord(uint16_t addr) {
 void digitalReadWord(uint16_t addr) {
   uint8_t pin;
   if (!popPin(&pin)) {
-    Serial.println("⚠️ digitalRead: invalid pin");
+    outputStream->println("⚠️ digitalRead: invalid pin");
     return;
   }
   int val = ::digitalRead(pin);
@@ -166,7 +166,7 @@ void digitalReadWord(uint16_t addr) {
 void analogReadWord(uint16_t addr) {
   uint8_t pin;
   if (!popPin(&pin)) {
-    Serial.println("⚠️ analogRead: invalid pin");
+    outputStream->println("⚠️ analogRead: invalid pin");
     return;
   }
   int val = ::analogRead(pin);
@@ -176,7 +176,7 @@ void analogReadWord(uint16_t addr) {
 void amvWord(uint16_t addr) {
   uint8_t pin;
   if (!popPin(&pin)) {
-    Serial.println("⚠️ amv: invalid pin");
+    outputStream->println("⚠️ amv: invalid pin");
     return;
   }
 
@@ -199,14 +199,14 @@ void pulseInFunc(uint16_t addr) {
   // 1. pin
   uint8_t pin;
   if (!popPin(&pin)) {
-    Serial.println("⚠️ pulseIn: invalid pin");
+    outputStream->println("⚠️ pulseIn: invalid pin");
     pushInt(0);
     return;
   }
 
   // 2. state (должен быть 0 или 1)
   if (stackTop < 2) {
-    Serial.println("⚠️ pulseIn: state expected");
+    outputStream->println("⚠️ pulseIn: state expected");
     pushInt(0);
     return;
   }
@@ -219,7 +219,7 @@ void pulseInFunc(uint16_t addr) {
   } else if (stType == TYPE_INT) {
     state = (popInt() != 0) ? 1 : 0;
   } else {
-    Serial.println("⚠️ pulseIn: state must be 0 or 1");
+    outputStream->println("⚠️ pulseIn: state must be 0 or 1");
     uint8_t len, type; popMetadata(len, type); stackTop -= len;
     pushInt(0);
     return;
@@ -228,7 +228,7 @@ void pulseInFunc(uint16_t addr) {
 
   // 3. timeout
   if (stackTop < 2) {
-    Serial.println("⚠️ pulseIn: timeout expected");
+    outputStream->println("⚠️ pulseIn: timeout expected");
     pushInt(0);
     return;
   }

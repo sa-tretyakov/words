@@ -2,6 +2,7 @@
 #include <cstring> // для strlen и memcpy
 #include <climits> // для INT8_MIN и т.п.
 #include <cctype>  // для isdigit
+
 #define FILESYSTEM SPIFFS
 #define FORMAT_FILESYSTEM false
 
@@ -32,16 +33,48 @@
 #endif
 #endif
 
+#include <WebServer.h>
+WebServer HTTP(80);
+File fsUploadFile;
 
+#include <WebSocketsServer.h>    //https://github.com/Links2004/arduinoWebSockets
+WebSocketsServer webSocket = WebSocketsServer(82);
+// ---------- ОПРЕДЕЛЕНИЕ КЛАССА ----------
+class WebSocketPrint : public Print {
+public:
+    WebSocketPrint(WebSocketsServer* ws) : webSocket(ws) {}
 
+    size_t write(uint8_t c) override {
+        buffer += (char)c;
+        return 1;
+    }
 
+    size_t write(const uint8_t *buf, size_t size) override {
+        buffer.concat((const char*)buf, size);
+        return size;
+    }
 
+    void flush() override {
+        if (webSocket && buffer.length() > 0) {
+            webSocket->broadcastTXT(buffer.c_str(), buffer.length());
+            buffer = "";
+        }
+    }
 
+private:
+    WebSocketsServer* webSocket;
+    String buffer;
+};
+WebSocketPrint wsPrint(&webSocket);
+String command;
 // ========================
 // Конфигурация стека
 // ========================
-Print* jsonOutput = &Serial; // по умолчанию — Serial
-File jsonFile;
+
+//Print* jsonOutput = &Serial; // по умолчанию — Serial
+//File jsonFile;
+File outputFile;
+Print* outputStream = &Serial;
 constexpr size_t STACK_SIZE = 2048;
 uint8_t stack[STACK_SIZE];
 size_t stackTop = 0; // указатель на первую свободную ячейку
@@ -444,9 +477,9 @@ uint16_t popUInt16() {
 
 void printBytes(const uint8_t* data, size_t len) {
   for (size_t i = 0; i < len; i++) {
-    if (i > 0) Serial.print(" ");
-    if (data[i] < 16) Serial.print("0");
-    Serial.print(data[i], HEX);
+    if (i > 0) outputStream->print(" ");
+    if (data[i] < 16) outputStream->print("0");
+    outputStream->print(data[i], HEX);
   }
 }
 
@@ -511,12 +544,12 @@ void setup() {
   stackTop = 0;
   Serial.begin(115200);
     for (int i=0; i <= 255; i++){
-Serial.println();
+  Serial.println();
    }
 
 
   if (!FILESYSTEM.begin()) {
-    Serial.println("FS Mount Failed");
+    outputStream->println("FS Mount Failed");
     return;
   }
 
@@ -546,14 +579,15 @@ Serial.println();
    debugInit();
 
    strInit();
-   wifiInit(); 
+   wifiInit();
+   webInit(); 
 
    i2cInit();
    currentContext = 0;   
-   tmp = "load startup.words"; // 0 = maxCont";
+   tmp = "load startup.wrd"; // 0 = maxCont";
    executeLine(tmp);
 
-   //Serial.println("Words>");
+   //outputStream->println("Words>");
    printStackCompact();
 
 
@@ -562,6 +596,7 @@ Serial.println();
 bool taskRunning = false; // ← добавь эту глобальную переменную в начало скетча
 
 void loop() {
+  //HTTP.handleClient();
   uint32_t now = millis();
   for (int i = 0; i < MAX_TASKS; i++) {
     if (tasks[i].active && now - tasks[i].lastRun >= tasks[i].interval) {
@@ -585,4 +620,16 @@ void loop() {
       printStackCompact();
     }
   }
+  while (command.indexOf('\n') >= 0) {
+  int idx = command.indexOf('\n');
+  String line = command.substring(0, idx);
+  command = command.substring(idx + 1); // +1 для '\n'
+  line.trim();
+  if (line.length() > 0) {
+    outputStream->print("→ ");
+    outputStream->println(line);
+    executeLine(line);
+    printStackCompact();    
+  }
+}
 }

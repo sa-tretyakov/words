@@ -1,11 +1,10 @@
 // --- НАЧАЛО: printStackCompact, обновлённая для TYPE_ADDRINFO с elemType ---
 void printStackCompact() {
   // --- Стек ---
-  //Serial.println();
-  Serial.print("context:");
-  Serial.print(currentContext);
+  outputStream->print("context:");
+  outputStream->print(currentContext);
   if (stackTop == 0) {
-    Serial.print(" []");
+    outputStream->print(" []");
   } else {
     // (ваш существующий код печати стека — без изменений)
     const int MAX_ELEMENTS = 256;
@@ -99,28 +98,28 @@ void printStackCompact() {
       tempTop = dataStart;
     }
 
-    Serial.print(" [");
+    outputStream->print(" [");
     for (int i = count - 1; i >= 0; i--) {
-      if (i < count - 1) Serial.print(' ');
-      Serial.print(elements[i].prefix);
-      Serial.print('(');
-      Serial.print(elements[i].repr);
-      Serial.print(')');
+      if (i < count - 1) outputStream->print(' ');
+      outputStream->print(elements[i].prefix);
+      outputStream->print('(');
+      outputStream->print(elements[i].repr);
+      outputStream->print(')');
     }
-    Serial.print(']');
+    outputStream->print(']');
   }
 
   // --- Состояние системы (seetime + задачи) ---
-  Serial.println(); // новая строка для состояния
-  Serial.print("⏱️ seetime: ");
-  Serial.print(seetimeMode ? "ON" : "OFF");
-  Serial.print(" | +task: ");
+  outputStream->println(); // новая строка для состояния
+  outputStream->print("⏱️ seetime: ");
+  outputStream->print(seetimeMode ? "ON" : "OFF");
+  outputStream->print(" | +task: ");
 
   // Собираем список активных задач
   bool first = true;
   for (int i = 0; i < MAX_TASKS; i++) {
     if (tasks[i].active) {
-      if (!first) Serial.print(", ");
+      if (!first) outputStream->print(", ");
       first = false;
 
       uint16_t wordAddr = tasks[i].wordAddr;
@@ -129,20 +128,20 @@ void printStackCompact() {
         if (nameLen > 0 && wordAddr + 3 + nameLen <= DICT_SIZE) {
           for (uint8_t j = 0; j < nameLen; j++) {
             char c = dictionary[wordAddr + 3 + j];
-            if (c >= 32 && c <= 126) Serial.print(c);
-            else Serial.print('?');
+            if (c >= 32 && c <= 126) outputStream->print(c);
+            else outputStream->print('?');
           }
-          Serial.print('(');
-          Serial.print(tasks[i].interval);
-          Serial.print("ms)");
+          outputStream->print('(');
+          outputStream->print(tasks[i].interval);
+          outputStream->print("ms)");
         }
       }
     }
   }
-  if (first) Serial.print("[]"); // нет задач
+  if (first) outputStream->print("[]"); // нет задач
 
-  Serial.println();
-  Serial.println("Words>");
+  outputStream->println();
+  outputStream->println("ok>");
 }
 // --- КОНЕЦ: printStackCompact, обновлённая для TYPE_ADDRINFO с elemType ---
 
@@ -168,7 +167,7 @@ void seetimeWord(uint16_t addr) {
   
   // Берём значение с вершины стека (оно уже там, потому что строка: "seetime true")
   if (!peekStackTop(&type, &len, &data)) {
-    Serial.println("⚠️ seetime: ожидается true или false после команды");
+    outputStream->println("⚠️ seetime: ожидается true или false после команды");
     return;
   }
 
@@ -181,8 +180,8 @@ void seetimeWord(uint16_t addr) {
   // Применяем режим
   seetimeMode = enable;
 
-  Serial.print("⏱️ seetime: ");
-  Serial.println(enable ? "ON" : "OFF");
+  outputStream->print("⏱️ seetime: ");
+  outputStream->println(enable ? "ON" : "OFF");
 }
 
 void whileFunc(uint16_t addr) {

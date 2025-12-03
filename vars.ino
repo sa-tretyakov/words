@@ -23,7 +23,7 @@ void contWord(uint16_t addr) {
   uint8_t nameType, nameLen;
   const uint8_t* nameData;
   if (!peekStackTop(&nameType, &nameLen, &nameData) || nameType != TYPE_NAME) {
-    Serial.println("⚠️ cont: ожидается имя");
+    outputStream->println("⚠️ cont: ожидается имя");
     return;
   }
   dropTop(0);
@@ -61,7 +61,7 @@ void contWord(uint16_t addr) {
   dictLen = nextOffset;
 
   // Опционально: можно сообщить пользователю
-  // Serial.printf("Контекст '%.*s' = %d активен\n", nameLen, nameData, maxCont);
+  // outputStream->printf("Контекст '%.*s' = %d активен\n", nameLen, nameData, maxCont);
 }
 void varWord(uint16_t callerAddr) {
   if (stackTop < 2) return;
@@ -76,7 +76,7 @@ void varWord(uint16_t callerAddr) {
   // Размер: next(2) + nameLen(1) + name(topLen) + storage(1) + context(1) + poolRef(4) + funcPtr(4)
   size_t recordSize = 2 + 1 + topLen + 1 + 1 + 4 + 4;
   if (dictLen + recordSize > DICT_SIZE) {
-    Serial.println("⚠️ Dictionary full");
+    outputStream->println("⚠️ Dictionary full");
     return;
   }
 
@@ -111,7 +111,7 @@ void constWord(uint16_t addr) {
 
   size_t recordSize = 2 + 1 + topLen + 1 + 1 + 4 + 4;
   if (dictLen + recordSize > DICT_SIZE) {
-    Serial.println("⚠️ Dictionary full");
+    outputStream->println("⚠️ Dictionary full");
     return;
   }
 
@@ -140,13 +140,13 @@ void arrayFunc(uint16_t addr) {
   uint8_t typeMarkerType, typeMarkerLen;
   const uint8_t* typeMarkerData;
   if (!peekStackTop(&typeMarkerType, &typeMarkerLen, &typeMarkerData)) {
-    Serial.println("⚠️ array: expected type marker (e.g., u8, i8, u16, i16, i32)");
+    outputStream->println("⚠️ array: expected type marker (e.g., u8, i8, u16, i16, i32)");
     uint8_t dummy[3] = {TYPE_UINT8, 0, 0};
     pushValue(dummy, 3, TYPE_ARRAY);
     return;
   }
   if (typeMarkerType != TYPE_MARKER) {
-     Serial.println("⚠️ array: expected type marker (e.g., u8, i8, u16, i16, i32), got type:"); Serial.println(typeMarkerType);
+     outputStream->println("⚠️ array: expected type marker (e.g., u8, i8, u16, i16, i32), got type:"); outputStream->println(typeMarkerType);
      uint8_t dummy[3] = {TYPE_UINT8, 0, 0};
      pushValue(dummy, 3, TYPE_ARRAY);
      dropTop(0);
@@ -164,7 +164,7 @@ void arrayFunc(uint16_t addr) {
   if (elemType != TYPE_UINT8 && elemType != TYPE_INT8 &&
       elemType != TYPE_UINT16 && elemType != TYPE_INT16 &&
       elemType != TYPE_INT) {
-    Serial.println("⚠️ array: element type must be u8, i8, u16, i16, or i32");
+    outputStream->println("⚠️ array: element type must be u8, i8, u16, i16, or i32");
     uint8_t dummy[3] = {TYPE_UINT8, 0, 0};
     pushValue(dummy, 3, TYPE_ARRAY);
     dropTop(0);
@@ -173,7 +173,7 @@ void arrayFunc(uint16_t addr) {
   dropTop(0);
 
   if (stackTop < 2) {
-    Serial.println("⚠️ array: expected count after type marker");
+    outputStream->println("⚠️ array: expected count after type marker");
     uint8_t dummy[3] = {elemType, 0, 0};
     pushValue(dummy, 3, TYPE_ARRAY);
     return;
@@ -181,7 +181,7 @@ void arrayFunc(uint16_t addr) {
 
   int32_t count_raw;
   if (!popInt32FromAny(&count_raw)) {
-     Serial.println("⚠️ array: count must be an integer");
+     outputStream->println("⚠️ array: count must be an integer");
      uint8_t dummy[3] = {elemType, 0, 0};
      pushValue(dummy, 3, TYPE_ARRAY);
      return;
@@ -189,17 +189,17 @@ void arrayFunc(uint16_t addr) {
 
   uint16_t count = 0;
   if (count_raw < 0) {
-      Serial.println("⚠️ array: count must be >= 0");
+      outputStream->println("⚠️ array: count must be >= 0");
       count = 0;
   } else if (count_raw > 65535) {
-      Serial.println("⚠️ array: count too large (max 65535)");
+      outputStream->println("⚠️ array: count too large (max 65535)");
       count = 65535;
   } else {
       count = (uint16_t)count_raw;
   }
 
   if (count == 0) {
-    Serial.println("⚠️ array: count must be > 0");
+    outputStream->println("⚠️ array: count must be > 0");
     count = 1;
   }
 
@@ -225,7 +225,7 @@ void letWord(uint16_t callerAddr) {
   // Размер записи: next(2) + nameLen(1) + name(topLen) + storage(1) + context(1) + poolRef(4) + funcPtr(4)
   size_t recordSize = 2 + 1 + topLen + 1 + 1 + 4 + 4;
   if (tempDictLen + recordSize > TEMP_DICT_SIZE) {
-    Serial.println("⚠️ Temp dictionary full");
+    outputStream->println("⚠️ Temp dictionary full");
     return;
   }
 

@@ -28,8 +28,8 @@ void printDictSection(
 ) {
   if (dictLen == 0) return;
 
-  Serial.println();
-  Serial.println(title);
+  outputStream->println();
+  outputStream->println(title);
   
   uint16_t ptr = 0;
   while (ptr < dictLen) {
@@ -43,35 +43,35 @@ void printDictSection(
     uint8_t storage = dict[ptr + 3 + nameLen];
     uint8_t context = dict[ptr + 3 + nameLen + 1];
 
-    Serial.printf("%s%04X->%s%04X: [%02d]", addrPrefix, ptr, addrPrefix, nextPtr, nameLen);
+    outputStream->printf("%s%04X->%s%04X: [%02d]", addrPrefix, ptr, addrPrefix, nextPtr, nameLen);
     
     for (uint8_t i = 0; i < nameLen; i++) {
       char c = dict[ptr + 3 + i];
-      if (c >= 32 && c <= 126) Serial.print(c);
-      else Serial.printf("\\x%02X", (uint8_t)c);
+      if (c >= 32 && c <= 126) outputStream->print(c);
+      else outputStream->printf("\\x%02X", (uint8_t)c);
     }
 
-    Serial.print("[");
+    outputStream->print("[");
     if (storage & 0x80) {
       uint8_t stype = storage & 0x7F;
-      if (stype == STORAGE_EMBEDDED) Serial.print("C");
-      else if (stype == STORAGE_NAMED) Serial.print("N");
-      else if (stype == STORAGE_POOLED) Serial.print("V");
-      else if (stype == STORAGE_CONST) Serial.print("K");
-      else if (stype == STORAGE_CONT) Serial.print("T");
-      else Serial.print("I");
+      if (stype == STORAGE_EMBEDDED) outputStream->print("C");
+      else if (stype == STORAGE_NAMED) outputStream->print("N");
+      else if (stype == STORAGE_POOLED) outputStream->print("V");
+      else if (stype == STORAGE_CONST) outputStream->print("K");
+      else if (stype == STORAGE_CONT) outputStream->print("T");
+      else outputStream->print("I");
     } else {
-      Serial.print("X");
+      outputStream->print("X");
     }
-    Serial.print("]");
-    Serial.printf("[%d]", context);
+    outputStream->print("]");
+    outputStream->printf("[%d]", context);
 
     uint16_t restStart = ptr + 3 + nameLen + 2;
     if (nextPtr > restStart) {
-      Serial.print(" ");
+      outputStream->print(" ");
       printBytes(&dict[restStart], nextPtr - restStart);
     }
-    Serial.println();
+    outputStream->println();
     ptr = nextPtr;
   }
 }
@@ -145,9 +145,9 @@ bool addInternalWord(const char* name, WordFunc func, uint8_t context) {
 }
 
 void wordsWord(uint16_t addr) {
-  Serial.print("Words in context ");
-  Serial.print(currentContext);
-  Serial.println(":");
+  outputStream->print("Words in context ");
+  outputStream->print(currentContext);
+  outputStream->println(":");
   
   uint16_t ptr = 0;
   int count = 0;
@@ -176,20 +176,20 @@ void wordsWord(uint16_t addr) {
     int wordLen = nameLen + 1;
 
     if (lineLen + wordLen > MAX_LINE_LEN && lineLen > 0) {
-      Serial.println();
+      outputStream->println();
       lineLen = 0;
     }
 
     for (uint8_t i = 0; i < nameLen; i++) {
-      Serial.print((char)dictionary[ptr + 3 + i]);
+      outputStream->print((char)dictionary[ptr + 3 + i]);
     }
-    Serial.print(' ');
+    outputStream->print(' ');
     lineLen += wordLen;
     count++;
 
     ptr = nextPtr;
   }
 
-  if (lineLen > 0) Serial.println();
-  Serial.printf("(%d words)\n", count);
+  if (lineLen > 0) outputStream->println();
+  outputStream->printf("(%d words)\n", count);
 }

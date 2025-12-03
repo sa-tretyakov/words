@@ -1,0 +1,31 @@
+io
+: ln
+print CRLF
+;
+main
+: help
+type "help.txt"
+;
+load wifi-config.json
+network
+modeSta
+onSta ssid ssidPass
+print
+ln
+print ipSta
+ln
+onHTTP
++task "HTTP" 1
+onSoket
++task "Soket" 1
+
+// load ex/servo_example.words
+// load ex/7seg_example.words
+load ex/blinker_example.words
+// load ex/MAX7219_example.words
+load ex/udp_example.words
+
+main
+ln print "Добро пожаловать!"
+ln print "Words ждет вас!"
+

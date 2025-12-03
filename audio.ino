@@ -12,7 +12,7 @@ void audioInit() {
 void toneWord(uint16_t addr) {
   // pin
   if (stackTop < 2) {
-    Serial.println("⚠️ tone: пин ожидается");
+    outputStream->println("⚠️ tone: пин ожидается");
     return;
   }
   uint8_t pin;
@@ -21,7 +21,7 @@ void toneWord(uint16_t addr) {
   }
   // частота
   if (stackTop < 2) {
-    Serial.println("⚠️ tone: частота ожидается");
+    outputStream->println("⚠️ tone: частота ожидается");
     return;
   }
   int32_t freq;
@@ -37,14 +37,14 @@ void toneWord(uint16_t addr) {
 void beepWord(uint16_t addr) {
   // пин
   if (stackTop < 2) {
-    Serial.println("⚠️ пикни: пин ожидается");
+    outputStream->println("⚠️ пикни: пин ожидается");
     return;
   }
   uint8_t pin = 0;
   if (!popAsUInt8(&pin)) return;
   // частота
   if (stackTop < 2) {
-    Serial.println("⚠️ пикни: частота (Гц) ожидается");
+    outputStream->println("⚠️ пикни: частота (Гц) ожидается");
     return;
   }
   int32_t freq = 0;
@@ -53,7 +53,7 @@ void beepWord(uint16_t addr) {
   if (freq > 10000) freq = 10000; // максимум 10 кГц
   // длительность
   if (stackTop < 2) {
-    Serial.println("⚠️ пикни: длительность (мс) ожидается");
+    outputStream->println("⚠️ пикни: длительность (мс) ожидается");
     return;
   }
   int32_t dur = 0;
@@ -65,12 +65,12 @@ void beepWord(uint16_t addr) {
 
 void noToneWord(uint16_t addr) {
   if (stackTop < 2) {
-    Serial.println("⚠️ noTone: pin expected");
+    outputStream->println("⚠️ noTone: pin expected");
     return;
   }
   uint8_t pin;
   if (!popAsUInt8(&pin)) {
-    Serial.println("⚠️ noTone: invalid pin");
+    outputStream->println("⚠️ noTone: invalid pin");
     return;
   }
   ::noTone(pin);

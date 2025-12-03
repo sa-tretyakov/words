@@ -39,7 +39,7 @@ void tmpLit() {
       poolRef = dataPoolPtr;
       dataPoolPtr += 256; // резервируем блок
     } else {
-      Serial.println("⚠️ dataPool full for tmpLit");
+      outputStream->println("⚠️ dataPool full for tmpLit");
     }
     memcpy(&pos[3 + nameLen + 2], &poolRef, 4);
 
@@ -155,7 +155,7 @@ void storeValueToVariable(uint16_t addr, const uint8_t* data, uint8_t len, uint8
     if (oldPoolRef == 0xFFFFFFFF) {
       // Выделяем блок максимального размера (256 байт)
       if (dataPoolPtr + 256 > DATA_POOL_SIZE) {
-        Serial.println("⚠️ dataPool full for tmpLit");
+        outputStream->println("⚠️ dataPool full for tmpLit");
         return;
       }
       uint16_t newOffset = dataPoolPtr;
@@ -190,7 +190,7 @@ void storeValueToVariable(uint16_t addr, const uint8_t* data, uint8_t len, uint8
   // Выделяем новое место
   uint16_t needed = 2 + len;
   if (dataPoolPtr + needed > DATA_POOL_SIZE) {
-    Serial.println("⚠️ dataPool full");
+    outputStream->println("⚠️ dataPool full");
     return;
   }
 

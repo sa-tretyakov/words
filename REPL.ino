@@ -160,7 +160,7 @@ void executeAt(uint16_t addr) {
       char nameBuf[33];
       memcpy(nameBuf, &dictionary[addr + 3], printLen);
       nameBuf[printLen] = '\0';
-      Serial.printf("⏱️ %s: %u µs\n", nameBuf, duration);
+      outputStream->printf("⏱️ %s: %u µs\n", nameBuf, duration);
       seetimeActive = false;
     }
   }
@@ -234,14 +234,14 @@ void executeLine(String& line) {
 
     startPos = commentEnd + 2;
   }
-}
+ }
 
 void bodyWord(uint16_t addr) {
   uint8_t type, len;
   const uint8_t* data;
   if (!peekStackTop(&type, &len, &data)) return;
   if (type != TYPE_STRING) {
-    Serial.println("⚠️ body: expected string in quotes");
+    outputStream->println("⚠️ body: expected string in quotes");
     return;
   }
   dropTop(0);
@@ -278,14 +278,14 @@ void bodyWord(uint16_t addr) {
   }
 
   if (!found) {
-    Serial.println("⚠️ body: word not found");
+    outputStream->println("⚠️ body: word not found");
     return;
   }
 
   uint8_t nameLen = dictionary[wordAddr + 2];
   uint8_t storage = dictionary[wordAddr + 3 + nameLen];
   if (storage != 0) {
-    Serial.println("⚠️ body: not an external word");
+    outputStream->println("⚠️ body: not an external word");
     return;
   }
 
@@ -390,15 +390,15 @@ void bodyWord(uint16_t addr) {
 
   // === Вывод адресов ===
   for (int i = 0; i < itemCount; i++) {
-    if (i > 0) Serial.print(" ");
-    Serial.printf("[%04X]", items[i].addr);
+    if (i > 0) outputStream->print(" ");
+    outputStream->printf("[%04X]", items[i].addr);
   }
-  if (itemCount > 0) Serial.println();
+  if (itemCount > 0) outputStream->println();
 
   // === Вывод имён ===
   for (int i = 0; i < itemCount; i++) {
-    if (i > 0) Serial.print(" ");
-    Serial.print(items[i].repr);
+    if (i > 0) outputStream->print(" ");
+    outputStream->print(items[i].repr);
   }
-  if (itemCount > 0) Serial.println();
+  if (itemCount > 0) outputStream->println();
 }

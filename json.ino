@@ -103,7 +103,7 @@ void loadJson(const char* jsonStr) {
 
 // --- НАЧАЛО: ПЕРЕПИСАННАЯ jsonWord ---
 void jsonWord(uint16_t addr) {
-  jsonOutput->print("{");
+  outputStream->print("{");
   uint16_t ptr = 0;
   bool first = true;
 
@@ -126,20 +126,20 @@ void jsonWord(uint16_t addr) {
         context == currentContext) {
 
       // Имя
-      if (!first) jsonOutput->print(",");
-      jsonOutput->print("\"");
+      if (!first) outputStream->print(",");
+      outputStream->print("\"");
       for (uint8_t i = 0; i < nameLen; i++) {
         char c = dictionary[ptr + 3 + i];
-        if (c == '"' || c == '\\') jsonOutput->print('\\');
-        jsonOutput->print(c);
+        if (c == '"' || c == '\\') outputStream->print('\\');
+        outputStream->print(c);
       }
-      jsonOutput->print("\":");
+      outputStream->print("\":");
 
       // Значение
       if (storageType == STORAGE_CONT || storageType == STORAGE_CONST) {
         const uint8_t* valData = &dictionary[ptr + 3 + nameLen + 2];
         int32_t v; memcpy(&v, valData, 4);
-        jsonOutput->print(v);
+        outputStream->print(v);
       }
       else { // STORAGE_POOLED или STORAGE_CONST
         uint32_t poolRef =
@@ -149,10 +149,10 @@ void jsonWord(uint16_t addr) {
           (dictionary[ptr + 3 + nameLen + 2 + 3] << 24);
 
         if (poolRef == 0xFFFFFFFF) {
-          jsonOutput->print("null");
+          outputStream->print("null");
         }
         else if (poolRef >= DATA_POOL_SIZE) {
-          jsonOutput->print("null");
+          outputStream->print("null");
         }
         else {
           uint8_t varType = dataPool[poolRef];
@@ -165,7 +165,7 @@ void jsonWord(uint16_t addr) {
               
               // 1. Проверяем, что 4-байтовый заголовок помещается
               if (poolRef + 4 > DATA_POOL_SIZE) {
-                   jsonOutput->print("null");
+                   outputStream->print("null");
               } else {
                   // 2. Читаем 4-байтовый заголовок
                   uint16_t dataLen = dataPool[poolRef + 1] | (dataPool[poolRef + 2] << 8); // DATALEN_L/H
@@ -176,48 +176,48 @@ void jsonWord(uint16_t addr) {
                   if (elemType == TYPE_UINT16 || elemType == TYPE_INT16) elemSize = 2;
                   else if (elemType == TYPE_INT) elemSize = 4;
                   else if (elemType != TYPE_UINT8 && elemType != TYPE_INT8) {
-                       jsonOutput->print("null"); // Неподдерживаемый тип элемента
+                       outputStream->print("null"); // Неподдерживаемый тип элемента
                   } else {
                       // 4. Вычисляем COUNT из DATALEN
                       if (dataLen % elemSize != 0) {
                           // Размер данных не кратен размеру элемента
-                          jsonOutput->print("null");
+                          outputStream->print("null");
                       } else {
                           uint16_t elemCount = dataLen / elemSize;
 
                           // 5. Проверяем, что данные (actual_data) помещаются
                           if (poolRef + 4 + dataLen > DATA_POOL_SIZE) { // 4 байта заголовка + dataLen байт данных
-                               jsonOutput->print("null"); // Данные выходят за пределы
+                               outputStream->print("null"); // Данные выходят за пределы
                           } else {
-                              jsonOutput->print("[");
+                              outputStream->print("[");
                               uint32_t dataStart = poolRef + 4; // Адрес начала actual_data
                               for (uint16_t i = 0; i < elemCount; i++) {
-                                  if (i > 0) jsonOutput->print(",");
+                                  if (i > 0) outputStream->print(",");
 
                                   uint32_t elemAddr = dataStart + i * elemSize;
 
                                   if (elemType == TYPE_UINT8) {
-                                      jsonOutput->print(dataPool[elemAddr]);
+                                      outputStream->print(dataPool[elemAddr]);
                                   } else if (elemType == TYPE_INT8) {
-                                      jsonOutput->print((int8_t)dataPool[elemAddr]);
+                                      outputStream->print((int8_t)dataPool[elemAddr]);
                                   } else if (elemType == TYPE_UINT16) {
                                       uint16_t v; memcpy(&v, &dataPool[elemAddr], 2);
-                                      jsonOutput->print(v);
+                                      outputStream->print(v);
                                   } else if (elemType == TYPE_INT16) {
                                       int16_t v; memcpy(&v, &dataPool[elemAddr], 2);
-                                      jsonOutput->print(v);
+                                      outputStream->print(v);
                                   } else if (elemType == TYPE_INT) {
                                       int32_t v; memcpy(&v, &dataPool[elemAddr], 4);
-                                      jsonOutput->print(v);
+                                      outputStream->print(v);
                                   } else if (elemType == TYPE_FLOAT) {
                                       float v; memcpy(&v, &dataPool[elemAddr], 4);
-                                      jsonOutput->print(v, 6);
+                                      outputStream->print(v, 6);
                                   } else {
                                       // Сюда не должно дойти, если тип проверен правильно
-                                      jsonOutput->print("null");
+                                      outputStream->print("null");
                                   }
                               }
-                              jsonOutput->print("]");
+                              outputStream->print("]");
                           }
                       }
                   }
@@ -229,47 +229,47 @@ void jsonWord(uint16_t addr) {
             // Старый формат: [TYPE(1)] [LEN(1)] [DATA(len)]
             uint8_t varLen = dataPool[poolRef + 1]; // len после type
             if (poolRef + 2 + varLen > DATA_POOL_SIZE) {
-              jsonOutput->print("null");
+              outputStream->print("null");
             }
             else {
               const uint8_t* varData = &dataPool[poolRef + 2]; // Указатель на данные
 
               if (varType == TYPE_INT && varLen == 4) {
                 int32_t v; memcpy(&v, varData, 4);
-                jsonOutput->print(v);
+                outputStream->print(v);
               }
               else if (varType == TYPE_UINT8 && varLen == 1) {
-                jsonOutput->print(varData[0]);
+                outputStream->print(varData[0]);
               }
               else if (varType == TYPE_INT8 && varLen == 1) {
-                jsonOutput->print((int8_t)varData[0]);
+                outputStream->print((int8_t)varData[0]);
               }
               else if (varType == TYPE_UINT16 && varLen == 2) {
                 uint16_t v; memcpy(&v, varData, 2);
-                jsonOutput->print(v);
+                outputStream->print(v);
               }
               else if (varType == TYPE_INT16 && varLen == 2) {
                 int16_t v; memcpy(&v, varData, 2);
-                jsonOutput->print(v);
+                outputStream->print(v);
               }
               else if (varType == TYPE_FLOAT && varLen == 4) {
                 float v; memcpy(&v, varData, 4);
-                jsonOutput->print(v, 6);
+                outputStream->print(v, 6);
               }
               else if (varType == TYPE_BOOL && varLen == 1) {
-                jsonOutput->print(varData[0] ? "true" : "false");
+                outputStream->print(varData[0] ? "true" : "false");
               }
               else if (varType == TYPE_STRING) {
-                jsonOutput->print("\"");
+                outputStream->print("\"");
                 for (uint8_t i = 0; i < varLen; i++) {
                   char c = varData[i];
-                  if (c == '"' || c == '\\') jsonOutput->print('\\');
-                  jsonOutput->print(c);
+                  if (c == '"' || c == '\\') outputStream->print('\\');
+                  outputStream->print(c);
                 }
-                jsonOutput->print("\"");
+                outputStream->print("\"");
               }
               else {
-                jsonOutput->print("null");
+                outputStream->print("null");
               }
             }
             // --- КОНЕЦ СТАРОЙ ЛОГИКИ ---
@@ -283,16 +283,16 @@ void jsonWord(uint16_t addr) {
     ptr = nextPtr;
   }
 
-  jsonOutput->print("}");
+  outputStream->print("}");
 }
 // --- КОНЕЦ: ПЕРЕПИСАННАЯ jsonWord ---
 
 
 
 void jsonToSerialWord(uint16_t addr) {
-  jsonOutput = &Serial;
-  if (jsonFile) {
-    jsonFile.close();
+  outputStream = &Serial;
+  if (outputFile) {
+    outputFile.close();
   }
 }
 
@@ -308,11 +308,11 @@ void jsonToFile(uint16_t addr) {
   memcpy(filename, nameData, nameLen);
   filename[nameLen] = '\0';
 
-  jsonFile = FILESYSTEM.open(filename, "w");
-  if (jsonFile) {
-    jsonOutput = &jsonFile;
+  outputFile = FILESYSTEM.open(filename, "w");
+  if (outputFile) {
+    outputStream = &outputFile;
   } else {
-    Serial.println("⚠️ jsonToFile: can't open file");
-    jsonOutput = &Serial;
+    outputStream->println("⚠️ jsonToFile: can't open file");
+    outputStream = &Serial;
   }
 }

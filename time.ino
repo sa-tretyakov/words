@@ -9,7 +9,7 @@ void timeInit() {
 void delayMicrosecondsFunc(uint16_t addr) {
   // Читаем количество микросекунд
   if (stackTop < 2) {
-    Serial.println("⚠️ delayMicroseconds: value expected");
+    outputStream->println("⚠️ delayMicroseconds: value expected");
     return;
   }
 
@@ -29,7 +29,7 @@ void delayMicrosecondsFunc(uint16_t addr) {
     int8_t v = popInt8();
     us = (v < 0) ? 0 : (uint32_t)v;
   } else {
-    Serial.println("⚠️ delayMicroseconds: integer expected");
+    outputStream->println("⚠️ delayMicroseconds: integer expected");
     // Удаляем неизвестный тип
     uint8_t len, t;
     popMetadata(len, t);

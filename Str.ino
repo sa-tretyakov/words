@@ -15,7 +15,7 @@ void strInit() {
 void charAtWord(uint16_t addr) {
   // 1. Проверяем, что есть хотя бы 2 элемента
   if (stackTop < 4) {
-    Serial.println("⚠️ charAt: строка и индекс ожидаются на стеке");
+    outputStream->println("⚠️ charAt: строка и индекс ожидаются на стеке");
     return;
   }
 
@@ -23,7 +23,7 @@ void charAtWord(uint16_t addr) {
   uint8_t strType = stack[stackTop - 1];
   uint8_t strLen = stack[stackTop - 2];
   if (strType != TYPE_STRING) {
-    Serial.println("⚠️ charAt: верх стека должен быть строкой");
+    outputStream->println("⚠️ charAt: верх стека должен быть строкой");
     return;
   }
   if (strLen > stackTop - 2) {
@@ -37,7 +37,7 @@ void charAtWord(uint16_t addr) {
 
   // 3. Берём ИНДЕКС (теперь на верху)
   if (stackTop < 2) {
-    Serial.println("⚠️ charAt: индекс отсутствует");
+    outputStream->println("⚠️ charAt: индекс отсутствует");
     return;
   }
 
@@ -64,7 +64,7 @@ void charAtWord(uint16_t addr) {
     index = v;
   }
   else {
-    Serial.println("⚠️ charAt: индекс должен быть целым");
+    outputStream->println("⚠️ charAt: индекс должен быть целым");
     dropTop(0);
     return;
   }
@@ -73,7 +73,7 @@ void charAtWord(uint16_t addr) {
 
   // 4. Проверка границ
   if (index < 0 || index >= strLen) {
-    Serial.println("⚠️ charAt: индекс вне диапазона");
+    outputStream->println("⚠️ charAt: индекс вне диапазона");
     pushUInt8(0);
     return;
   }
@@ -95,13 +95,13 @@ void charWord(uint16_t addr) {
   else if (type == TYPE_INT && len == 4) {
     int32_t v; memcpy(&v, data, 4);
     if (v < 0 || v > 255) {
-      Serial.println("⚠️ char: value out of range 0-255");
+      outputStream->println("⚠️ char: value out of range 0-255");
       return;
     }
     code = (uint8_t)v;
   }
   else {
-    Serial.println("⚠️ char: expected uint8 or int");
+    outputStream->println("⚠️ char: expected uint8 or int");
     return;
   }
   
@@ -120,7 +120,7 @@ void charWord(uint16_t addr) {
 
 void lenWord(uint16_t addr) {
   if (stackTop < 2) {
-    Serial.println("⚠️ len: значение отсутствует");
+    outputStream->println("⚠️ len: значение отсутствует");
     return;
   }
 
@@ -158,7 +158,7 @@ void lenWord(uint16_t addr) {
 
 void digitWord(uint16_t addr) {
   if (stackTop < 2) {
-    Serial.println("⚠️ digit: значение отсутствует");
+    outputStream->println("⚠️ digit: значение отсутствует");
     return;
   }
 
@@ -201,7 +201,7 @@ void digitWord(uint16_t addr) {
   if (result >= 0) {
     pushInt(result);
   } else {
-    Serial.println("⚠️ digit: символ не является цифрой '0'-'9'");
+    outputStream->println("⚠️ digit: символ не является цифрой '0'-'9'");
     pushInt(0); // или pushInt(-1) для ошибки
   }
 }
