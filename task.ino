@@ -3,9 +3,85 @@ void taskInit() {
   executeLine(tmp);
   addInternalWord("+task", addTaskWord);
   addInternalWord("-task", removeTaskWord);
+  addInternalWord("+loop", addLoopWord);
+  addInternalWord("-loop", removeLoopWord);
   tmp = "main";
   executeLine(tmp);
 }
+
+void addLoopWord(uint16_t addr) {
+  // Имя (строка)
+  uint8_t nameType, nameLen;
+  const uint8_t* nameData;
+  if (!peekStackTop(&nameType, &nameLen, &nameData) || nameType != TYPE_STRING) {
+    dropTop(0);
+    outputStream->println("⚠️ +loop: expected word name in quotes");
+    return;
+  }
+  dropTop(0);
+
+  String name((char*)nameData, nameLen);
+
+  // Поиск слова
+  uint16_t wordAddr = findWordAddress(name.c_str());
+  if (wordAddr == 0xFFFF) {
+    outputStream->printf("⚠️ +loop: word '%s' not found\n", name.c_str());
+    return;
+  }
+
+  // Добавление (без дубликатов, если нужно — можно добавить)
+  if (loopWordCount < MAX_LOOP_WORDS) {
+    loopWords[loopWordCount++] = wordAddr;
+    //outputStream->printf("+loop: added '%s'\n", name.c_str());
+  } else {
+    outputStream->println("⚠️ +loop: queue full");
+  }
+}
+
+void removeLoopWord(uint16_t addr) {
+  // Имя (строка)
+  uint8_t nameType, nameLen;
+  const uint8_t* nameData;
+  if (!peekStackTop(&nameType, &nameLen, &nameData) || nameType != TYPE_STRING) {
+    dropTop(0);
+    outputStream->println("⚠️ -loop: expected word name in quotes");
+    return;
+  }
+  dropTop(0);
+
+  String name((char*)nameData, nameLen);
+
+  // Поиск слова в словаре, чтобы получить его адрес
+  uint16_t wordAddr = findWordAddress(name.c_str());
+  if (wordAddr == 0xFFFF) {
+    outputStream->printf("⚠️ -loop: word '%s' not found in dictionary\n", name.c_str());
+    return;
+  }
+
+  // Поиск ПОСЛЕДНЕГО вхождения в loopWords (идём с конца)
+  int8_t lastIdx = -1;
+  for (int8_t i = loopWordCount - 1; i >= 0; i--) {
+    if (loopWords[i] == wordAddr) {
+      lastIdx = i;
+      break;
+    }
+  }
+
+  if (lastIdx == -1) {
+    outputStream->printf("⚠️ -loop: word '%s' not in +loop queue\n", name.c_str());
+    return;
+  }
+
+  // Удаляем элемент по индексу lastIdx
+  for (uint8_t j = lastIdx; j < loopWordCount - 1; j++) {
+    loopWords[j] = loopWords[j + 1];
+  }
+  loopWordCount--;
+
+  //outputStream->printf("-loop: removed last occurrence of '%s'\n", name.c_str());
+}
+
+
 void addTaskWord(uint16_t addr) {
   uint8_t type, len;
   const uint8_t* data;

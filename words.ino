@@ -71,8 +71,6 @@ String command;
 // Конфигурация стека
 // ========================
 
-//Print* jsonOutput = &Serial; // по умолчанию — Serial
-//File jsonFile;
 File outputFile;
 Print* outputStream = &Serial;
 constexpr size_t STACK_SIZE = 2048;
@@ -107,9 +105,6 @@ bool seetimeActive = false;   // уже идёт замер (защита от �
 // ========================
 // Настройки
 // ========================
-#define DICT_SIZE 32768
-#define DATA_POOL_SIZE 32768
-
 // Тип хранения (зарезервировано для будущего)
 #define STORAGE_EMBEDDED 0
 #define STORAGE_NAMED    1
@@ -120,11 +115,17 @@ bool seetimeActive = false;   // уже идёт замер (защита от �
 // ========================
 // Буферы
 // ========================
+#define DICT_SIZE 32768
 uint8_t dictionary[DICT_SIZE];
 uint16_t dictLen = 0;
 
+#define DATA_POOL_SIZE 32768
 uint8_t dataPool[DATA_POOL_SIZE];
 uint16_t dataPoolPtr = 0;
+
+#define LOCAL_POOL_SIZE 8192
+uint8_t localPool[LOCAL_POOL_SIZE];
+uint16_t localPoolPtr = 0;
 
 #define TEMP_DICT_SIZE 512
 uint8_t tempDictionary[TEMP_DICT_SIZE];
@@ -174,6 +175,9 @@ struct Task {
 
 Task tasks[MAX_TASKS];
 
+#define MAX_LOOP_WORDS 8
+uint16_t loopWords[MAX_LOOP_WORDS];
+uint8_t loopWordCount = 0;
 
 // ========================
 // Вспомогательные функции стека
@@ -596,8 +600,17 @@ void setup() {
 bool taskRunning = false; // ← добавь эту глобальную переменную в начало скетча
 
 void loop() {
-  //HTTP.handleClient();
   uint32_t now = millis();
+//  1. +loop слова (постоянное выполнение)
+  for (uint8_t i = 0; i < loopWordCount; i++) {
+    if (!taskRunning) {
+      taskRunning = true;
+      executeAt(loopWords[i]);
+      taskRunning = false;
+    }
+  }
+
+  // 2. Затем — задачи с таймером (+task)
   for (int i = 0; i < MAX_TASKS; i++) {
     if (tasks[i].active && now - tasks[i].lastRun >= tasks[i].interval) {
       if (!taskRunning) {
@@ -606,7 +619,6 @@ void loop() {
         taskRunning = false;
         tasks[i].lastRun = now;
       }
-      // Если задача уже выполняется — пропускаем вызов
     }
   }
 

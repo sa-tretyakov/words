@@ -145,26 +145,6 @@ void dumpDataPool(uint16_t offset, uint16_t len) {
   outputStream->println();
 }
 
-void dumpDataPoolWord(uint16_t addr) {
-  outputStream->printf("dataPool (used %u/%u):\n", dataPoolPtr, DATA_POOL_SIZE);
-  
-  // Заголовок: смещения 0-F
-  outputStream->print("     ");
-  for (int i = 0; i < 16; i++) {
-    outputStream->printf(" %02X", i);
-  }
-  outputStream->println();
-
-  for (uint16_t i = 0; i < dataPoolPtr; i++) {
-    if (i % 16 == 0) {
-      if (i > 0) outputStream->println();
-      outputStream->printf("%04X:", i);
-    }
-    outputStream->printf(" %02X", dataPool[i]);
-  }
-  if (dataPoolPtr % 16 != 0) outputStream->println();
-  outputStream->println();
-}
 
 void nopFunc(uint16_t addr){
   

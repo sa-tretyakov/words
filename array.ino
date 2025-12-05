@@ -306,7 +306,15 @@ void handleAssignment(uint16_t addr) {
       return;
     }
   }
-
+ // === ОСНОВНОЕ ИЗМЕНЕНИЕ: TYPE_NAME → TYPE_STRING ===
+  if (Type == TYPE_NAME) {
+    // Преобразуем имя в строку и сохраняем как TYPE_STRING
+    if (Len <= 255) {
+      storeValueToVariable(addr, Data, Len, TYPE_STRING);
+    }
+    dropTop(0);
+    return;
+  }
   // Создание массива
   if (Type == TYPE_ARRAY && Len == 3) {
     createArrayAndAssign(addr, Data[0], Data[1] | (Data[2] << 8));

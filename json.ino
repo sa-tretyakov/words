@@ -4,10 +4,106 @@ void jsonInit() {
   addInternalWord("json>", jsonWord);
   addInternalWord("json>serial", jsonToSerialWord);
   addInternalWord("json>file", jsonToFile);
+  addInternalWord("json-set", jsonSetWord);
+  addInternalWord("json>var", jsonToVarWord);
   tmp = "main";
   executeLine(tmp);
 }
 
+void jsonSetWord(uint16_t addr) {
+    // 2. Извлекаем key (теперь на верху)
+  String key;
+  if (!popStringFromStack(key)) return;
+  
+  // 1. Извлекаем value (должен быть на верху!)
+  uint8_t valType, valLen;
+  const uint8_t* valData;
+  if (!peekStackTop(&valType, &valLen, &valData)) return;
+  dropTop(0);
+
+
+
+  // 3. Преобразуем значение в JSON-литерал
+  String valStr;
+  if (valType == TYPE_STRING) {
+    String raw((char*)valData, valLen);
+    raw.replace("\"", "\\\"");  // экранируем кавычки
+    valStr = "\"" + raw + "\"";
+  }
+  else if (valType == TYPE_BOOL) {
+    valStr = (valData[0] != 0) ? "true" : "false";
+  }
+  else if (valType == TYPE_INT && valLen == 4) {
+    int32_t v; memcpy(&v, valData, 4); valStr = String(v);
+  }
+  else if (valType == TYPE_UINT8 && valLen == 1) {
+    valStr = String(valData[0]);
+  }
+  else if (valType == TYPE_INT8 && valLen == 1) {
+    valStr = String((int8_t)valData[0]);
+  }
+  else if (valType == TYPE_UINT16 && valLen == 2) {
+    uint16_t v; memcpy(&v, valData, 2); valStr = String(v);
+  }
+  else if (valType == TYPE_INT16 && valLen == 2) {
+    int16_t v; memcpy(&v, valData, 2); valStr = String(v);
+  }
+  else if (valType == TYPE_FLOAT && valLen == 4) {
+    float v; memcpy(&v, valData, 4); valStr = String(v, 6);
+  }
+  else {
+    valStr = "null";
+  }
+
+  // 4. Читаем текущий JSON из tmpLit
+  uint8_t varType, varLen;
+  const uint8_t* varData;
+  String current = "{}";
+  if (readVariableValue(ADDR_TMP_LIT, &varType, &varLen, &varData)) {
+    if (varType == TYPE_STRING && varLen > 0) {
+      current = String((char*)varData, varLen);
+      if (!current.startsWith("{")) current = "{}";
+    }
+  }
+
+  // 5. Формируем новый JSON
+  String newJson;
+  if (current == "{}") {
+    newJson = "{\"" + key + "\":" + valStr + "}";
+  } else {
+    // удаляем закрывающую }
+    newJson = current.substring(0, current.length() - 1);
+    // добавляем запятую, если не пустой объект
+    if (current.length() > 2) newJson += ",";
+    // добавляем новую пару
+    newJson += "\"" + key + "\":" + valStr + "}";
+  }
+
+  // 6. Сохраняем обратно в tmpLit
+  if (newJson.length() <= 255) {
+    storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)newJson.c_str(), (uint8_t)newJson.length(), TYPE_STRING);
+  } else {
+    outputStream->println("⚠️ json-set: JSON too long");
+  }
+}
+
+void jsonToVarWord(uint16_t addr) {
+  // 1. Читаем JSON из tmpLit
+  uint8_t varType, varLen;
+  const uint8_t* varData;
+  if (!readVariableValue(ADDR_TMP_LIT, &varType, &varLen, &varData)) return;
+  if (varType != TYPE_STRING) return;
+
+  String json((char*)varData, varLen);
+  if (json.length() == 0 || !json.startsWith("{")) return;
+
+  // 2. Загружаем переменные
+  loadJson(json.c_str());
+
+  // 3. Очищаем tmpLit → делаем его пустой строкой
+  const char* empty = "";
+  storeValueToVariable(ADDR_TMP_LIT, (uint8_t*)empty, 0, TYPE_STRING);
+}
 
 void loadJson(const char* jsonStr) {
   if (!jsonStr) return;

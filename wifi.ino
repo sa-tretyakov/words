@@ -264,7 +264,7 @@ void scanFunc(uint16_t addr) {
 
 
 void udpBeginWord(uint16_t addr) {
-  outputStream->println("--- udpBeginWord (NEW) ---");
+  //outputStream->println("--- udpBeginWord (NEW) ---");
 
   // 1. Прочитать индекс UDP-объекта (верхний элемент стека)
   // Используем popAsUInt8, так как индекс должен быть u8
@@ -272,17 +272,17 @@ void udpBeginWord(uint16_t addr) {
   if (!popAsUInt8(&index)) {
     outputStream->println("⚠️ udpBegin: invalid UDP index (must be u8 compatible)");
     pushBool(false);
-    outputStream->println("--- udpBeginWord END (invalid index) ---");
+    //outputStream->println("--- udpBeginWord END (invalid index) ---");
     return;
   }
 
   if (index >= 5) {
     outputStream->println("⚠️ udpBegin: UDP index out of range (0-4)");
     pushBool(false);
-    outputStream->println("--- udpBeginWord END (index > 4) ---");
+    //outputStream->println("--- udpBeginWord END (index > 4) ---");
     return;
   }
-  outputStream->printf("DEBUG: Read index as %u\n", index);
+  //outputStream->printf("DEBUG: Read index as %u\n", index);
 
   // 2. Прочитать номер порта (теперь он на вершине стека)
   // Используем popInt32FromAny, чтобы поддержать разные числовые типы
@@ -293,7 +293,7 @@ void udpBeginWord(uint16_t addr) {
     outputStream->println("--- udpBeginWord END (invalid port) ---");
     return;
   }
-  outputStream->printf("DEBUG: Read portValue as %d (0x%X)\n", portValue, (uint16_t)portValue);
+  //outputStream->printf("DEBUG: Read portValue as %d (0x%X)\n", portValue, (uint16_t)portValue);
 
   if (portValue < 1 || portValue > 65535) {
     outputStream->printf("⚠️ udpBegin: port out of range (1-65535). Got %d\n", portValue);
@@ -319,11 +319,11 @@ void udpBeginWord(uint16_t addr) {
   pushBool(success);
 
   if (success) {
-    outputStream->printf("UDP[%d] listening on port %u\n", index, port);
+    // outputStream->printf("UDP[%d] listening on port %u\n", index, port);
   } else {
     outputStream->printf("Failed to begin UDP[%d] on port %u\n", index, port);
   }
-  outputStream->println("--- udpBeginWord END (success/fail) ---");
+  //outputStream->println("--- udpBeginWord END (success/fail) ---");
 }
 
 void udpAvailableWord(uint16_t addr) {
@@ -354,7 +354,7 @@ void udpAvailableWord(uint16_t addr) {
 
 
 void udpBeginMulticastWord(uint16_t addr) {
-    outputStream->println("--- udpBeginMulticastWord (FINAL ORDER) ---");
+    //outputStream->println("--- udpBeginMulticastWord (FINAL ORDER) ---");
         // 3. Прочитать индекс UDP-объекта (следующий элемент после строки - TYPE_UINT8)
     uint8_t udpIndex;
     if (!popAsUInt8(&udpIndex) || udpIndex >= 5) {
@@ -402,7 +402,7 @@ void udpBeginMulticastWord(uint16_t addr) {
          return;
     }
 
-    outputStream->printf("DEBUG: Attempting to beginMulticast on UDP[%d] for MulticastIP=%s, Port=%u\n", udpIndex, multicastIP.toString().c_str(), port);
+    //outputStream->printf("DEBUG: Attempting to beginMulticast on UDP[%d] for MulticastIP=%s, Port=%u\n", udpIndex, multicastIP.toString().c_str(), port);
 
     // 6. Вызвать beginMulticast
     bool success = udp_obj[udpIndex].beginMulticast(multicastIP, port);
@@ -411,11 +411,11 @@ void udpBeginMulticastWord(uint16_t addr) {
     pushBool(success);
 
     if (success) {
-        outputStream->printf("UDP[%d] listening for multicast on %s:%u\n", udpIndex, multicastIP.toString().c_str(), port);
+        // outputStream->printf("UDP[%d] listening for multicast on %s:%u\n", udpIndex, multicastIP.toString().c_str(), port);
     } else {
         outputStream->printf("Failed to beginMulticast on UDP[%d] for %s:%u\n", udpIndex, multicastIP.toString().c_str(), port);
     }
-    outputStream->println("--- udpBeginMulticastWord END (success/fail) ---");
+    //outputStream->println("--- udpBeginMulticastWord END (success/fail) ---");
 }
 
 void udpReadArrayWord(uint16_t addr) {

@@ -1,8 +1,8 @@
 // --- НАЧАЛО: printStackCompact, обновлённая для TYPE_ADDRINFO с elemType ---
 void printStackCompact() {
   // --- Стек ---
-  outputStream->print("context:");
-  outputStream->print(currentContext);
+  //  outputStream->print("context:");
+  //  outputStream->print(currentContext);
   if (stackTop == 0) {
     outputStream->print(" []");
   } else {
@@ -25,69 +25,103 @@ void printStackCompact() {
       String repr;
 
       switch (type) {
-        case TYPE_INT: if (len == 4) { int32_t v; memcpy(&v, &stack[dataStart], 4); repr = String(v); prefix = 'I'; } break;
-        case TYPE_FLOAT: if (len == 4) { float v; memcpy(&v, &stack[dataStart], 4); repr = String(v, 6); prefix = 'F'; } break;
+        case TYPE_INT: if (len == 4) {
+            int32_t v;
+            memcpy(&v, &stack[dataStart], 4);
+            repr = String(v);
+            prefix = 'I';
+          } break;
+        case TYPE_FLOAT: if (len == 4) {
+            float v;
+            memcpy(&v, &stack[dataStart], 4);
+            repr = String(v, 6);
+            prefix = 'F';
+          } break;
         case TYPE_STRING: {
-          repr = "";
-          for (size_t i = 0; i < len; i++) {
-            char c = stack[dataStart + i];
-            repr += (c >= 32 && c <= 126) ? c : '?';
+            repr = "";
+            for (size_t i = 0; i < len; i++) {
+              char c = stack[dataStart + i];
+              repr += (c >= 32 && c <= 126) ? c : '?';
+            }
+            prefix = 'S';
+            break;
           }
-          prefix = 'S';
-          break;
-        }
-        case TYPE_BOOL: if (len == 1) { repr = stack[dataStart] ? "true" : "false"; prefix = 'B'; } break;
-        case TYPE_INT8: { int8_t v = static_cast<int8_t>(stack[dataStart]); repr = String(v); prefix = '8'; } break;
-        case TYPE_UINT8: { uint8_t v = stack[dataStart]; repr = String(v); prefix = 'U'; } break;
-        case TYPE_INT16: { int16_t v; memcpy(&v, &stack[dataStart], 2); repr = String(v); prefix = 'W'; } break;
-        case TYPE_UINT16: { uint16_t v; memcpy(&v, &stack[dataStart], 2); repr = String(v); prefix = 'w'; } break;
+        case TYPE_BOOL: if (len == 1) {
+            repr = stack[dataStart] ? "true" : "false";
+            prefix = 'B';
+          } break;
+        case TYPE_INT8: {
+            int8_t v = static_cast<int8_t>(stack[dataStart]);
+            repr = String(v);
+            prefix = '8';
+          } break;
+        case TYPE_UINT8: {
+            uint8_t v = stack[dataStart];
+            repr = String(v);
+            prefix = 'U';
+          } break;
+        case TYPE_INT16: {
+            int16_t v;
+            memcpy(&v, &stack[dataStart], 2);
+            repr = String(v);
+            prefix = 'W';
+          } break;
+        case TYPE_UINT16: {
+            uint16_t v;
+            memcpy(&v, &stack[dataStart], 2);
+            repr = String(v);
+            prefix = 'w';
+          } break;
         case TYPE_NAME: {
-          repr = "";
-          for (size_t i = 0; i < len; i++) {
-            char c = stack[dataStart + i];
-            repr += (c >= 32 && c <= 126) ? c : '?';
+            repr = "";
+            for (size_t i = 0; i < len; i++) {
+              char c = stack[dataStart + i];
+              repr += (c >= 32 && c <= 126) ? c : '?';
+            }
+            prefix = 'N';
+            break;
           }
-          prefix = 'N';
-          break;
-        }
         case TYPE_ARRAY: {
-          if (len >= 3) {
-            uint8_t elemType = stack[dataStart];
-            uint16_t count = stack[dataStart + 1] | (stack[dataStart + 2] << 8);
-            String typeStr = (elemType == TYPE_UINT8) ? "u8" : (elemType == TYPE_INT8) ? "i8" : (elemType == TYPE_UINT16) ? "u16" : (elemType == TYPE_INT16) ? "i16" : (elemType == TYPE_INT) ? "i32" : "?";
-            repr = typeStr + "[" + String(count) + "]";
-            prefix = 'A';
-          } else { repr = "?"; prefix = 'A'; }
-          break;
-        }
+            if (len >= 3) {
+              uint8_t elemType = stack[dataStart];
+              uint16_t count = stack[dataStart + 1] | (stack[dataStart + 2] << 8);
+              String typeStr = (elemType == TYPE_UINT8) ? "u8" : (elemType == TYPE_INT8) ? "i8" : (elemType == TYPE_UINT16) ? "u16" : (elemType == TYPE_INT16) ? "i16" : (elemType == TYPE_INT) ? "i32" : "?";
+              repr = typeStr + "[" + String(count) + "]";
+              prefix = 'A';
+            } else {
+              repr = "?";
+              prefix = 'A';
+            }
+            break;
+          }
         // --- ИЗМЕНЁННЫЙ СЛУЧАЙ: TYPE_ADDRINFO ---
         case TYPE_ADDRINFO: { // Предположим, TYPE_ADDRINFO = 12
-          if (len == 5) { // ADDRINFO теперь должен занимать 5 байт
-            uint16_t addr = stack[dataStart] | (stack[dataStart + 1] << 8);
-            uint16_t size = stack[dataStart + 2] | (stack[dataStart + 3] << 8);
-            uint8_t elemType = stack[dataStart + 4];
-            // Преобразуем elemType в строку (можно сделать функцию typeNameToString для универсальности)
-            String elemTypeStr = (elemType == TYPE_UINT8) ? "u8" : (elemType == TYPE_INT8) ? "i8" :
-                                 (elemType == TYPE_UINT16) ? "u16" : (elemType == TYPE_INT16) ? "i16" :
-                                 (elemType == TYPE_INT) ? "i32" : "unk";
-            repr = "0x" + String(addr, HEX) + "," + String(size) + "," + elemTypeStr;
-            prefix = 'X'; // Префикс остаётся 'X'
-          } else {
-            repr = "?[bad_len:" + String(len) + "]";
-            prefix = 'X';
+            if (len == 5) { // ADDRINFO теперь должен занимать 5 байт
+              uint16_t addr = stack[dataStart] | (stack[dataStart + 1] << 8);
+              uint16_t size = stack[dataStart + 2] | (stack[dataStart + 3] << 8);
+              uint8_t elemType = stack[dataStart + 4];
+              // Преобразуем elemType в строку (можно сделать функцию typeNameToString для универсальности)
+              String elemTypeStr = (elemType == TYPE_UINT8) ? "u8" : (elemType == TYPE_INT8) ? "i8" :
+                                   (elemType == TYPE_UINT16) ? "u16" : (elemType == TYPE_INT16) ? "i16" :
+                                   (elemType == TYPE_INT) ? "i32" : "unk";
+              repr = "0x" + String(addr, HEX) + "," + String(size) + "," + elemTypeStr;
+              prefix = 'X'; // Префикс остаётся 'X'
+            } else {
+              repr = "?[bad_len:" + String(len) + "]";
+              prefix = 'X';
+            }
+            break;
           }
-          break;
-        }
         // --- КОНЕЦ ИЗМЕНЁННОГО СЛУЧАЯ ---
         case TYPE_MARKER: {
-          repr = "";
-          for (size_t i = 0; i < len; i++) {
-            char c = stack[dataStart + i];
-            repr += (c >= 32 && c <= 126) ? c : '?';
+            repr = "";
+            for (size_t i = 0; i < len; i++) {
+              char c = stack[dataStart + i];
+              repr += (c >= 32 && c <= 126) ? c : '?';
+            }
+            prefix = 'M';
+            break;
           }
-          prefix = 'M';
-          break;
-        }
       }
 
       if (prefix != '?' || type == TYPE_MARKER) { // TYPE_MARKER может иметь len=1, что ломает цикл, если он '?'.
@@ -109,11 +143,53 @@ void printStackCompact() {
     outputStream->print(']');
   }
 
+  // Находим имя текущего контекста
+  String contextName = "";
+  uint16_t ptr = 0;
+  while (ptr < dictLen) {
+    if (ptr + 2 > DICT_SIZE) break;
+    uint16_t nextPtr = dictionary[ptr] | (dictionary[ptr + 1] << 8);
+    if (nextPtr == 0 || nextPtr <= ptr || nextPtr > DICT_SIZE) break;
+
+    uint8_t nameLen = dictionary[ptr + 2];
+    if (nameLen == 0 || ptr + 3 + nameLen + 2 > DICT_SIZE) {
+      ptr = nextPtr;
+      continue;
+    }
+
+    uint8_t storage = dictionary[ptr + 3 + nameLen];
+    uint8_t storageType = storage & 0x7F;
+
+    if (storageType == STORAGE_CONT) {
+      // Читаем значение контекста (4 байта после заголовка)
+      uint32_t ctxValue =
+        dictionary[ptr + 3 + nameLen + 2 + 0] |
+        (dictionary[ptr + 3 + nameLen + 2 + 1] << 8) |
+        (dictionary[ptr + 3 + nameLen + 2 + 2] << 16) |
+        (dictionary[ptr + 3 + nameLen + 2 + 3] << 24);
+
+      if ((uint8_t)ctxValue == currentContext) {
+        contextName = String((char*)&dictionary[ptr + 3], nameLen);
+        break;
+      }
+    }
+
+    ptr = nextPtr;
+  }
+
+
   // --- Состояние системы (seetime + задачи) ---
   outputStream->println(); // новая строка для состояния
-  outputStream->print("⏱️ seetime: ");
+  // Вывод
+  // outputStream->print("context:");
+  if (contextName.length() > 0) {
+    outputStream->print(contextName);
+  } else {
+    outputStream->print(currentContext);
+  }
+  outputStream->print("| ⏱seetime: ");
   outputStream->print(seetimeMode ? "ON" : "OFF");
-  outputStream->print(" | +task: ");
+  outputStream->print(" | +task ");
 
   // Собираем список активных задач
   bool first = true;
@@ -141,6 +217,30 @@ void printStackCompact() {
   if (first) outputStream->print("[]"); // нет задач
 
   outputStream->println();
+  // Вывод +loop очереди
+outputStream->print(" | +loop: ");
+if (loopWordCount == 0) {
+  outputStream->print("[]");
+} else {
+  bool firstLoop = true;
+  for (uint8_t i = 0; i < loopWordCount; i++) {
+    if (!firstLoop) outputStream->print(", ");
+    firstLoop = false;
+
+    uint16_t wordAddr = loopWords[i];
+    if (wordAddr + 2 < DICT_SIZE) {
+      uint8_t nameLen = dictionary[wordAddr + 2];
+      if (nameLen > 0 && wordAddr + 3 + nameLen <= DICT_SIZE) {
+        for (uint8_t j = 0; j < nameLen; j++) {
+          char c = dictionary[wordAddr + 3 + j];
+          if (c >= 32 && c <= 126) outputStream->print(c);
+          else outputStream->print('?');
+        }
+      }
+    }
+  }
+}
+  outputStream->println();
   outputStream->println("ok>");
 }
 // --- КОНЕЦ: printStackCompact, обновлённая для TYPE_ADDRINFO с elemType ---
@@ -155,7 +255,7 @@ void contFunc(uint16_t addr) {
     (dictionary[addr + 3 + nameLen + 2 + 1] << 8) |
     (dictionary[addr + 3 + nameLen + 2 + 2] << 16) |
     (dictionary[addr + 3 + nameLen + 2 + 3] << 24);
-  
+
   // Устанавливаем текущий контекст
   currentContext = (uint8_t)value;
 }
@@ -164,7 +264,7 @@ void contFunc(uint16_t addr) {
 void seetimeWord(uint16_t addr) {
   uint8_t type, len;
   const uint8_t* data;
-  
+
   // Берём значение с вершины стека (оно уже там, потому что строка: "seetime true")
   if (!peekStackTop(&type, &len, &data)) {
     outputStream->println("⚠️ seetime: ожидается true или false после команды");
@@ -202,7 +302,7 @@ void whileFunc(uint16_t addr) {
 
   // 3. Преобразуем условие в bool
 
-bool condition = valueToBool(condType, condLen, condData);
+  bool condition = valueToBool(condType, condLen, condData);
 
   // 4. Если условие ЛОЖНО — выходим из цикла (делаем goto с offsetExit)
   if (!condition) {
