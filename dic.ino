@@ -145,9 +145,9 @@ bool addInternalWord(const char* name, WordFunc func, uint8_t context) {
 }
 
 void wordsWord(uint16_t addr) {
-  outputStream->print("Words in context ");
-  outputStream->print(currentContext);
-  outputStream->println(":");
+//  outputStream->print("Words in context ");
+//  outputStream->print(currentContext);
+//  outputStream->println(":");
   
   uint16_t ptr = 0;
   int count = 0;
@@ -191,5 +191,5 @@ void wordsWord(uint16_t addr) {
   }
 
   if (lineLen > 0) outputStream->println();
-  outputStream->printf("(%d words)\n", count);
+//  outputStream->printf("(%d words)\n", count);
 }

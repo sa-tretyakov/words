@@ -34,7 +34,7 @@
 #endif
 
 #include <WebServer.h>
-WebServer HTTP(80);
+WebServer HTTP(81);
 File fsUploadFile;
 
 #include <WebSocketsServer.h>    //https://github.com/Links2004/arduinoWebSockets
@@ -80,6 +80,7 @@ uint8_t currentContext = 0; // текущий контекст (0 = global)
 uint8_t maxCont = 255;
 bool compiling = false;        // флаг компиляции
 uint16_t compileTarget = 0;    // смещение в словаре для текущего слова
+uint16_t compileStartDictLen = 0;  // точка отката при компиляции
 String cachedScanResult = "";
 bool insideMultilineComment = false;  // Комменты
 // Адрес временного слова (фиксируем при старте)
@@ -123,9 +124,22 @@ uint16_t dictLen = 0;
 uint8_t dataPool[DATA_POOL_SIZE];
 uint16_t dataPoolPtr = 0;
 
-#define LOCAL_POOL_SIZE 8192
-uint8_t localPool[LOCAL_POOL_SIZE];
-uint16_t localPoolPtr = 0;
+// ===== ЛОКАЛЬНЫЕ ПЕРЕМЕННЫЕ (ТОЛЬКО ДЛЯ КОМПИЛЯЦИИ) =====
+#define MAX_LOCALS 8
+
+struct LocalEntry {
+  char name[24];
+  uint16_t addrInDict;   // адрес, где будет FF FF
+  uint16_t refPositions[16]; // позиции в dictionary, где ссылка на эту переменную
+  uint8_t refCount;
+};
+LocalEntry locals[MAX_LOCALS];
+uint8_t localCount = 0;
+bool hasLocals = false;
+
+#define LOCAL_DATA_POOL_SIZE 2048
+uint8_t localDataPool[LOCAL_DATA_POOL_SIZE];
+uint16_t localDataPoolPtr = 0;
 
 #define TEMP_DICT_SIZE 512
 uint8_t tempDictionary[TEMP_DICT_SIZE];
@@ -154,6 +168,7 @@ enum ValueType : uint8_t {
 #define OP_MUL 2
 #define OP_DIV 3
 #define OP_MOD 4  // ← остаток от деления
+#define OP_XOR 5
 
 // Сравнения
 #define CMP_EQ 0  // ==
@@ -554,7 +569,7 @@ void setup() {
 
   if (!FILESYSTEM.begin()) {
     outputStream->println("FS Mount Failed");
-    return;
+    //return;
   }
 
   tmpLit();
@@ -575,6 +590,7 @@ void setup() {
   ioInit();
   gpioInit();
   audioInit();
+  spiInit();
   ledsInit();
   timeInit();
   jsonInit();
@@ -584,17 +600,15 @@ void setup() {
 
    strInit();
    wifiInit();
+   udpInit();
+   tcpInit();
    webInit(); 
 
    i2cInit();
    currentContext = 0;   
    tmp = "load startup.wrd"; // 0 = maxCont";
    executeLine(tmp);
-
-   //outputStream->println("Words>");
    printStackCompact();
-
-
 }
 
 bool taskRunning = false; // ← добавь эту глобальную переменную в начало скетча
@@ -626,10 +640,13 @@ void loop() {
     String line = Serial.readStringUntil('\n');
     line.trim();
     if (line.length() > 0) {
-      Serial.print("→ ");
-      Serial.println(line);
+      outputStream->print("→ ");
+      outputStream->println(line);
       executeLine(line);
       printStackCompact();
+      if (outputStream == &wsPrint) {
+  wsPrint.flush();
+}
     }
   }
   while (command.indexOf('\n') >= 0) {
@@ -641,7 +658,10 @@ void loop() {
     outputStream->print("→ ");
     outputStream->println(line);
     executeLine(line);
-    printStackCompact();    
+    printStackCompact(); 
+    if (outputStream == &wsPrint) {
+  wsPrint.flush();
+}   
   }
 }
 }

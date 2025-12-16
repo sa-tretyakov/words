@@ -1,7 +1,4 @@
 /*
-Запустить пример можно командой:
-load ex/loops_example.words
-
 Words поддерживает два естественных синтаксиса циклов только в компелированых словах:
 */
 
@@ -58,3 +55,6 @@ countUp
 countUp i = 5
 countOnce i = 5
 countDown i = 10
+
+// Запустить пример можно командой:
+// load ex/loops_example.words

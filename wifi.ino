@@ -6,7 +6,7 @@
 #include <WiFiUdp.h>
 WiFiUDP udp_obj[5]; // <-- Теперь массив из 5 объектов
 
-void webInit() {
+void wifiInit() {
    String tmp = "cont network";
    executeLine(tmp);
   addInternalWord("modeStaAp", modeStaApFunc);
@@ -21,10 +21,6 @@ void webInit() {
   addInternalWord("ipAp", ipApFunc);
   addInternalWord("scan", scanFunc);
   addInternalWord("wifiOff", wifiOffFunc);
-  addInternalWord("udpBegin", udpBeginWord);
-  addInternalWord("udpBeginMulticast", udpBeginMulticastWord);
-  addInternalWord("udpAvailable", udpAvailableWord);
-  addInternalWord("udpReadArray", udpReadArrayWord); 
   tmp = "main";
   executeLine(tmp);
 }
@@ -262,9 +258,20 @@ void scanFunc(uint16_t addr) {
   WiFi.scanDelete();
 }
 
+void udpInit() {
+   String tmp = "cont udp";
+   executeLine(tmp);
+  addInternalWord("udpBegin", udpBeginWord);
+  addInternalWord("udpBeginMulticast", udpBeginMulticastWord);
+  addInternalWord("udpAvailable", udpAvailableWord);
+  addInternalWord("udpReadArray", udpReadArrayWord);
+  addInternalWord("udpWrite", udpWriteAnyFunc);  
+  tmp = "main";
+  executeLine(tmp);
+}
 
 void udpBeginWord(uint16_t addr) {
-  //outputStream->println("--- udpBeginWord (NEW) ---");
+  outputStream->println("--- udpBeginWord (NEW) ---");
 
   // 1. Прочитать индекс UDP-объекта (верхний элемент стека)
   // Используем popAsUInt8, так как индекс должен быть u8
@@ -272,7 +279,7 @@ void udpBeginWord(uint16_t addr) {
   if (!popAsUInt8(&index)) {
     outputStream->println("⚠️ udpBegin: invalid UDP index (must be u8 compatible)");
     pushBool(false);
-    //outputStream->println("--- udpBeginWord END (invalid index) ---");
+    outputStream->println("--- udpBeginWord END (invalid index) ---");
     return;
   }
 
@@ -476,4 +483,352 @@ void udpReadArrayWord(uint16_t addr) {
 
     // Возвращаем успех
     pushBool(bytesRead >= 0);
+}
+
+
+void udpWriteAnyFunc(uint16_t addr) {
+  // 1. Первый аргумент: индекс сокета (udpsoc)
+  uint8_t udpIndex;
+  if (!popAsUInt8(&udpIndex) || udpIndex >= 5) {
+    pushBool(false);
+    return;
+  }
+
+  // 2. Второй аргумент: значение (любого типа)
+  uint8_t type, len;
+  const uint8_t* data;
+  if (!peekStackTop(&type, &len, &data)) {
+    dropTop(0);
+    pushBool(false);
+    return;
+  }
+
+  // ----------- TYPE_ADDRINFO: массив из dataPool ------------
+  if (type == TYPE_ADDRINFO && len == 5) {
+    dropTop(0);
+
+    uint16_t address = data[0] | (data[1] << 8);
+    uint16_t totalBytes = data[2] | (data[3] << 8);
+    uint8_t elemType = data[4];
+
+    uint8_t elemSize = 1;
+    if (elemType == TYPE_UINT16 || elemType == TYPE_INT16) elemSize = 2;
+    else if (elemType == TYPE_INT || elemType == TYPE_FLOAT) elemSize = 4;
+
+    if (totalBytes % elemSize != 0) { pushBool(false); return; }
+    uint16_t totalCount = totalBytes / elemSize;
+    if (address >= DATA_POOL_SIZE || address + totalBytes > DATA_POOL_SIZE) { pushBool(false); return; }
+
+    // Читаем количество элементов (не байт!)
+    uint32_t count = totalCount;
+    uint8_t countType, countLen;
+    const uint8_t* countData;
+    if (peekStackTop(&countType, &countLen, &countData)) {
+      if (countType == TYPE_UINT8 && countLen == 1) {
+        count = countData[0];
+        dropTop(0);
+      }
+      else if (countType == TYPE_INT && countLen == 4) {
+        memcpy(&count, countData - 3, 4);
+        dropTop(0);
+      }
+    }
+    if (count > totalCount) count = totalCount;
+    uint32_t bytesToSend = count * elemSize;
+    if (address + bytesToSend > DATA_POOL_SIZE) { pushBool(false); return; }
+
+    // Отправка через UDP
+    int sent = udp_obj[udpIndex].write(&dataPool[address], bytesToSend);
+    pushBool(sent == (int)bytesToSend);
+    return;
+  }
+
+  // ----------- TYPE_STRING: строка со стека ------------
+  if (type == TYPE_STRING) {
+    dropTop(0);
+    if (len > stackTop) { pushBool(false); return; }
+    const char* str = (const char*)&stack[stackTop - len];
+    int sent = udp_obj[udpIndex].write((const uint8_t*)str, len);
+    stackTop -= len;
+    pushBool(sent == (int)len);
+    return;
+  }
+
+  // ----------- Целые и float: отправляем все байты ------------
+  if ((type == TYPE_UINT8 && len == 1) ||
+      (type == TYPE_INT8 && len == 1) ||
+      (type == TYPE_UINT16 && len == 2) ||
+      (type == TYPE_INT16 && len == 2) ||
+      (type == TYPE_INT && len == 4) ||
+      (type == TYPE_BOOL && len == 1) ||
+      (type == TYPE_FLOAT && len == 4)) {
+    dropTop(0);
+    // Отправляем напрямую из стека (младший байт первый)
+    int sent = udp_obj[udpIndex].write(data - (len - 1), len);
+    pushBool(sent == len);
+    return;
+  }
+
+  // ----------- Неподдерживаемый тип ------------
+  dropTop(0);
+  pushBool(false);
+}
+
+WiFiServer tcpServers[5];
+WiFiClient tcpClients[5];
+bool tcpServerActive[5] = {false};
+
+
+void tcpInit() {
+   String tmp = "cont tcp";
+   executeLine(tmp);
+  addInternalWord("tcpBegin", tcpBeginFunc);
+  addInternalWord("tcpAccept", tcpAcceptFunc);
+  addInternalWord("tcpReadArray", tcpReadArrayFunc);
+  addInternalWord("tcpWrite", tcpWriteFunc);
+  addInternalWord("tcpClose", tcpCloseFunc);
+  addInternalWord("tcpAvailable", tcpAvailableFunc);
+  tmp = "main";
+  executeLine(tmp);
+}
+
+void tcpBeginFunc(uint16_t addr) {
+  // 1. Читаем индекс сервера (u8)
+  uint8_t index;
+  if (!popAsUInt8(&index) || index >= 5) {
+    pushBool(false);
+    return;
+  }
+
+  // 2. Читаем порт (число)
+  int32_t portValue;
+  if (!popInt32FromAny(&portValue) || portValue < 1 || portValue > 65535) {
+    pushBool(false);
+    return;
+  }
+  uint16_t port = (uint16_t)portValue;
+
+  // 3. Проверяем, не запущен ли уже
+  if (tcpServerActive[index]) {
+    tcpServers[index].stop(); // на всякий случай
+    pushBool(false);
+    return;
+  }
+
+  // 4. Запускаем сервер
+  tcpServers[index].begin(port);
+  tcpServerActive[index] = true;
+
+  pushBool(true);
+}
+
+
+void tcpAcceptFunc(uint16_t addr) {
+  uint8_t serverIndex;
+  if (!popAsUInt8(&serverIndex) || serverIndex >= 5) {
+    pushUInt8(0); // 0 = нет клиента
+    return;
+  }
+
+  if (!tcpServerActive[serverIndex]) {
+    pushUInt8(0);
+    return;
+  }
+
+  // Ищем свободный слот (0..4)
+  int8_t slot = -1;
+  for (int i = 0; i < 5; i++) {
+    if (!tcpClients[i] || !tcpClients[i].connected()) {
+      slot = i;
+      break;
+    }
+  }
+
+  if (slot == -1) {
+    pushUInt8(0); // нет свободных слотов
+    return;
+  }
+
+  // Принимаем клиент напрямую в слот
+  tcpClients[slot] = tcpServers[serverIndex].available();
+
+  if (tcpClients[slot]) {
+    pushUInt8(slot + 1); // возвращаем 1..5
+  } else {
+    pushUInt8(0);
+  }
+}
+
+void tcpReadArrayFunc(uint16_t addr) {
+  // 1. Читаем индекс клиента (1..5)
+  uint8_t clientIndex;
+  if (!popAsUInt8(&clientIndex) || clientIndex < 1 || clientIndex > 5) {
+    pushBool(false);
+    return;
+  }
+  clientIndex--; // → 0..4
+
+  if (!tcpClients[clientIndex] || !tcpClients[clientIndex].connected()) {
+    pushBool(false);
+    return;
+  }
+
+  // 2. Буфер (TYPE_ADDRINFO)
+  uint8_t type, len;
+  const uint8_t* data;
+  if (!peekStackTop(&type, &len, &data) || type != TYPE_ADDRINFO || len != 5) {
+    dropTop(0);
+    pushBool(false);
+    return;
+  }
+  dropTop(0);
+
+  uint16_t address = data[0] | (data[1] << 8);
+  uint16_t bufferLen = data[2] | (data[3] << 8);
+  uint8_t elemType = data[4];
+
+  if ((elemType != TYPE_UINT8 && elemType != TYPE_INT8) ||
+      address >= DATA_POOL_SIZE || address + bufferLen > DATA_POOL_SIZE) {
+    pushBool(false);
+    return;
+  }
+
+  // 3. Читаем ВСЁ, что доступно (не до \r!)
+  size_t available = tcpClients[clientIndex].available();
+  if (available == 0) {
+    pushBool(false);
+    return;
+  }
+
+  size_t toRead = available;
+  if (toRead > bufferLen) toRead = bufferLen;
+
+  size_t bytesRead = tcpClients[clientIndex].read(&dataPool[address], toRead);
+
+  pushBool(bytesRead > 0);
+}
+
+void tcpWriteFunc(uint16_t addr) {
+  // 1. Читаем индекс клиента (1..5)
+  uint8_t clientIndex;
+  if (!popAsUInt8(&clientIndex) || clientIndex < 1 || clientIndex > 5) {
+    pushBool(false);
+    return;
+  }
+  clientIndex--; // → 0..4
+
+  if (!tcpClients[clientIndex] || !tcpClients[clientIndex].connected()) {
+    pushBool(false);
+    return;
+  }
+
+  // 2. Получаем значение со стека
+  uint8_t type, len;
+  const uint8_t* data;
+  if (!peekStackTop(&type, &len, &data)) {
+    dropTop(0);
+    pushBool(false);
+    return;
+  }
+
+  // ----------- TYPE_ADDRINFO: массив из dataPool ------------
+  if (type == TYPE_ADDRINFO && len == 5) {
+    dropTop(0);
+
+    uint16_t address = data[0] | (data[1] << 8);
+    uint16_t totalBytes = data[2] | (data[3] << 8);
+    uint8_t elemType = data[4];
+
+    uint8_t elemSize = 1;
+    if (elemType == TYPE_UINT16 || elemType == TYPE_INT16) elemSize = 2;
+    else if (elemType == TYPE_INT || elemType == TYPE_FLOAT) elemSize = 4;
+
+    if (totalBytes % elemSize != 0) { pushBool(false); return; }
+    if (address >= DATA_POOL_SIZE || address + totalBytes > DATA_POOL_SIZE) {
+      pushBool(false);
+      return;
+    }
+
+    // Читаем количество элементов (опционально)
+    uint32_t count = totalBytes / elemSize;
+    uint8_t countType, countLen;
+    const uint8_t* countData;
+    if (peekStackTop(&countType, &countLen, &countData)) {
+      if (countType == TYPE_UINT8 && countLen == 1) {
+        count = countData[0];
+        dropTop(0);
+      }
+      else if (countType == TYPE_INT && countLen == 4) {
+        memcpy(&count, countData - 3, 4);
+        dropTop(0);
+      }
+    }
+    uint32_t bytesToSend = count * elemSize;
+    if (bytesToSend > totalBytes) bytesToSend = totalBytes;
+
+    size_t sent = tcpClients[clientIndex].write(&dataPool[address], bytesToSend);
+    pushBool(sent == bytesToSend);
+    return;
+  }
+
+  // ----------- TYPE_STRING: строка со стека ------------
+if (type == TYPE_STRING) {
+  size_t dataStart = stackTop - 2 - len;  // как в printTop
+  const char* str = (const char*)&stack[dataStart];
+  
+  // Отладка (опционально):
+//   Serial.print(len);
+//   Serial.print(" ");
+//   Serial.write((const uint8_t*)str, len);
+
+  size_t sent = tcpClients[clientIndex].write((const uint8_t*)str, len);
+  dropTop(0);
+  pushBool(sent == len);
+  return;
+}
+
+  // ----------- Целые и float: отправляем все байты ------------
+  if ((type == TYPE_UINT8 && len == 1) ||
+      (type == TYPE_INT8 && len == 1) ||
+      (type == TYPE_UINT16 && len == 2) ||
+      (type == TYPE_INT16 && len == 2) ||
+      (type == TYPE_INT && len == 4) ||
+      (type == TYPE_BOOL && len == 1) ||
+      (type == TYPE_FLOAT && len == 4)) {
+    dropTop(0);
+    size_t sent = tcpClients[clientIndex].write(data - (len - 1), len);
+    pushBool(sent == len);
+    return;
+  }
+
+  // ----------- Неподдерживаемый тип ------------
+  dropTop(0);
+  pushBool(false);
+}
+
+void tcpCloseFunc(uint16_t addr) {
+  uint8_t clientIndex;
+  if (!popAsUInt8(&clientIndex) || clientIndex < 1 || clientIndex > 5) {
+    return;
+  }
+  clientIndex--;
+  if (tcpClients[clientIndex]) {
+    tcpClients[clientIndex].stop();
+    tcpClients[clientIndex] = WiFiClient(); // сброс
+  }
+}
+
+void tcpAvailableFunc(uint16_t addr) {
+  uint8_t clientIndex;
+  if (!popAsUInt8(&clientIndex) || clientIndex < 1 || clientIndex > 5) {
+    pushUInt16(0);
+    return;
+  }
+  clientIndex--;
+  if (tcpClients[clientIndex] && tcpClients[clientIndex].connected()) {
+    size_t avail = tcpClients[clientIndex].available();
+    pushUInt16((uint16_t)(avail > 65535 ? 65535 : avail));
+  } else {
+    pushUInt16(0);
+  }
 }

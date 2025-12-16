@@ -399,6 +399,21 @@ void readVariableAsValue(uint16_t addr) {
   uint8_t storage = dictionary[addr + 3 + nameLen];
   uint8_t storageType = storage & 0x7F;
 
+  // Обработка TYPE_NAME-констант (poolRef = 0xFFFFFFFE)
+  if (storageType == STORAGE_CONST) {
+    uint32_t poolRef =
+      dictionary[addr + 3 + nameLen + 2 + 0] |
+      (dictionary[addr + 3 + nameLen + 2 + 1] << 8) |
+      (dictionary[addr + 3 + nameLen + 2 + 2] << 16) |
+      (dictionary[addr + 3 + nameLen + 2 + 3] << 24);
+
+    if (poolRef == 0xFFFFFFFE) {
+      const char* name = (const char*)&dictionary[addr + 3];
+      pushValue((const uint8_t*)name, nameLen, TYPE_NAME);
+      return;
+    }
+  }
+
   if (storageType == STORAGE_CONT) {
     const uint8_t* valData = &dictionary[addr + 3 + nameLen + 2];
     pushValue(valData, 4, TYPE_INT);

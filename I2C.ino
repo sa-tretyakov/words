@@ -2,11 +2,11 @@
 void i2cInit() {
      String tmp = "cont i2c";
    executeLine(tmp);
-addInternalWord("i2cBegin", i2cBeginFunc,currentContext);
-addInternalWord("i2cWrite", i2cWriteFunc,currentContext);
-addInternalWord("i2cWriteReg", i2cWriteRegFunc,currentContext);
-addInternalWord("i2cReadReg", i2cReadRegFunc,currentContext);
-addInternalWord("i2cBeginPins", i2cBeginPinsFunc,currentContext);
+addInternalWord("i2cBegin", i2cBeginFunc);
+addInternalWord("i2cWrite", i2cWriteFunc);
+addInternalWord("i2cWriteReg", i2cWriteRegFunc);
+addInternalWord("i2cReadReg", i2cReadRegFunc);
+addInternalWord("i2cBeginPins", i2cBeginPinsFunc);
 
 }
 void i2cBeginPinsFunc(uint16_t addr) {

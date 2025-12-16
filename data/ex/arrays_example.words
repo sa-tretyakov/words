@@ -24,7 +24,7 @@
 
 // Создаём массив из 10 байт
 var buf
-buf = array 10u8
+buf = array u8 10u8
 
 // Запись значений
 buf [ 0 ] = 255u8
@@ -34,15 +34,15 @@ buf [ 2 ] = 64u8
 // Чтение и вывод
 print "buf[0] = "
 print buf [ 0 ]
-print CRLF
+ln
 
 print "buf[1] = "
 print buf [ 1 ]
-print CRLF
+ln
 
 // Работа с другими типами
 var nums
-nums = array 5i16
+nums = array i16 5u8 // массив элементов i16 в количестве до 255 так как 5u8 - пять элементов
 
 nums [ 0 ] = 1000
 nums [ 1 ] = -500
@@ -53,19 +53,20 @@ print nums [ 2 ]
 print CRLF
 
 // Массивы в JSON
-print "Текущий контекст в JSON:" CRLF
+print "Текущий контекст в JSON:"
+ln
 json
-print CRLF
+ln
 
 // Пример: копирование массива (вручную)
 var src
-src = array 3u8
-src [ 0 ] = 10u8
-src [ 1 ] = 20u8
-src [ 2 ] = 30u8
+src = array u8 3u8
+src [ 0 ] = 10
+src [ 1 ] = 20
+src [ 2 ] = 30
 
 var dst
-dst = array 3u8
+dst = array u8 3u8
 
 : copyArray
   dst [ 0 ] = src [ 0 ]
@@ -77,4 +78,4 @@ copyArray
 
 print "dst[1] = "
 print dst [ 1 ]
-print CRLF
+ln

@@ -1,7 +1,7 @@
 cont blink
 // Мигает светодиодом в фоновом режиме 
 var blink_pin
-blink_pin = 13u8
+blink_pin = pins [ 13 ] // 13u8
 var blink_state
 blink_state = 0u8
 : tblink
@@ -16,6 +16,6 @@ digitalWrite blink_pin blink_state
 -task "tblink"
 ;
 blink_on 100
-// Загрузите коммандой load ex/blinker_example.words
-// будет мигать с задоной частотой
 main
+// Загрузите коммандой load ex/blinker_example.words
+// будет мигать с заданой частотой

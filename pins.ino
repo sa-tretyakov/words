@@ -1,9 +1,9 @@
 void ledsInit() {
   String tmp = "cont leds";
   executeLine(tmp);
-  addInternalWord("ledcSetup", ledcSetupWord,currentContext);
-  addInternalWord("ledcAttach", ledcAttachWord,currentContext);
-  addInternalWord("ledcWrite", ledcWriteWord,currentContext);
+  addInternalWord("ledcSetup", ledcSetupWord);
+  addInternalWord("ledcAttach", ledcAttachWord);
+  addInternalWord("ledcWrite", ledcWriteWord);
 }
 
 void ledcSetupWord(uint16_t addr) {
@@ -46,6 +46,9 @@ void gpioInit() {
   executeLine(tmp);
 
 }
+
+
+
 bool popPin(uint8_t* outPin) {
   uint8_t pinType, pinLen;
   const uint8_t* pinData;
@@ -262,4 +265,171 @@ void shiftOutWord(uint16_t addr) {
   if (!popInt32FromAny(&value)) return;
   uint8_t val = (uint8_t)(value & 0xFF);
   ::shiftOut(dataPin, clockPin, bitOrder, val);
+}
+
+SPISettings currentSPISettings;
+void spiInit() {
+  String tmp = "cont spi";
+  executeLine(tmp);
+  addInternalWord("spiBegin", spiBeginFunc);
+  addInternalWord("spiSettings", spiSettingsFunc);
+  addInternalWord("spiBeginTransaction", spiBeginTransactionFunc);
+  addInternalWord("spiTransfer", spiTransferFunc);
+  addInternalWord("spiEndTransaction", spiEndTransactionFunc);
+}
+
+void spiBeginFunc(uint16_t addr) {
+  uint8_t SCK; if (!popAsUInt8(&SCK)) return; 
+  uint8_t MISO; if (!popAsUInt8(&MISO)) return;
+  uint8_t MOSI; if (!popAsUInt8(&MOSI)) return;
+  uint8_t SS; if (!popAsUInt8(&SS)) return;
+  SPI.begin(SCK, MISO, MOSI, SS);
+}
+
+void spiSettingsFunc(uint16_t addr) {
+  uint8_t mode; if (!popAsUInt8(&mode)) return;
+  uint8_t bitOrder; if (!popAsUInt8(&bitOrder)) return;
+  int32_t clock; if (!popInt32FromAny(&clock)) return;
+  currentSPISettings = SPISettings(clock, bitOrder, mode);
+}
+void spiBeginTransactionFunc(uint16_t addr) {
+SPI.beginTransaction(currentSPISettings);
+}
+
+
+void spiTransferFunc(uint16_t addr) {
+  // Объявляем переменные для анализа верхнего элемента стека
+  uint8_t type, len;
+  const uint8_t* data;
+
+  // Пытаемся получить информацию о верхнем элементе стека:
+  // - type: тип значения (TYPE_INT, TYPE_STRING и т.д.)
+  // - len: длина данных в байтах
+  // - data: указатель на конец (последний байт) данных значения на стеке
+  if (!peekStackTop(&type, &len, &data)) {
+    // Если стек пуст или повреждён — снимаем "мусор" (если есть) и выходим
+    dropTop(0);
+    return;
+  }
+
+  // ----------- Обработка массива (TYPE_ADDRINFO) ------------
+  // TYPE_ADDRINFO — специальный тип, описывающий массив в dataPool (5 байт: адрес, длина, тип элемента)
+// ----------- TYPE_ADDRINFO: массив из dataPool ------------
+if (type == TYPE_ADDRINFO && len == 5) {
+  dropTop(0); // убрали TYPE_ADDRINFO
+
+  uint16_t address = data[0] | (data[1] << 8);      // адрес данных
+  uint16_t totalBytes = data[2] | (data[3] << 8);   // полная длина в байтах
+  uint8_t elemType = data[4];                       // тип элемента
+
+  // Определяем размер одного элемента
+  uint8_t elemSize = 1;
+  if (elemType == TYPE_UINT16 || elemType == TYPE_INT16) elemSize = 2;
+  else if (elemType == TYPE_INT || elemType == TYPE_FLOAT) elemSize = 4;
+  // TYPE_UINT8, TYPE_INT8, TYPE_BOOL → 1 байт
+
+  // Проверяем корректность длины
+  if (totalBytes % elemSize != 0) return;
+  uint16_t totalCount = totalBytes / elemSize;
+
+  // Проверяем границы dataPool
+  if (address >= DATA_POOL_SIZE || address + totalBytes > DATA_POOL_SIZE) {
+    return;
+  }
+
+  // Читаем количество элементов (не байт!) со стека
+  uint32_t count = totalCount; // по умолчанию — весь массив
+  uint8_t countType, countLen;
+  const uint8_t* countData;
+  if (peekStackTop(&countType, &countLen, &countData)) {
+    if (countType == TYPE_UINT8 && countLen == 1) {
+      count = countData[0];
+      dropTop(0);
+    }
+    else if (countType == TYPE_INT && countLen == 4) {
+      memcpy(&count, countData - 3, 4);
+      dropTop(0);
+    }
+  }
+
+  // Ограничиваем по количеству элементов
+  if (count > totalCount) count = totalCount;
+
+  // Вычисляем количество байт для отправки
+  uint32_t bytesToSend = count * elemSize;
+  if (address + bytesToSend > DATA_POOL_SIZE) return;
+
+  // Отправляем
+  for (uint32_t i = 0; i < bytesToSend; i++) {
+    SPI.transfer(dataPool[address + i]);
+  }
+  return;
+}
+  // ----------- Обработка строки (TYPE_STRING) ------------
+  if (type == TYPE_STRING) {
+    // Снимаем со стека строку (данные + len + type)
+    dropTop(0);
+    // Дополнительная проверка: не выходит ли длина за границы стека
+    if (len > stackTop) return;
+
+    // Указатель на начало строки в стеке (data указывает на конец, поэтому вычисляем начало)
+    const char* str = (const char*)&stack[stackTop - len];
+
+    // Отправляем каждый символ строки через SPI
+    for (uint8_t i = 0; i < len; i++) {
+      SPI.transfer(str[i]);
+    }
+
+    // Удаляем данные строки из стека (len байт — данные уже убраны dropTop, но здесь уточнение)
+    stackTop -= len;
+    return;
+  }
+
+  // ----------- Обработка целых чисел и bool ------------
+  // Поддерживаем все целочисленные типы и bool
+  if ((type == TYPE_UINT8 && len == 1) ||
+      (type == TYPE_INT8 && len == 1) ||
+      (type == TYPE_UINT16 && len == 2) ||
+      (type == TYPE_INT16 && len == 2) ||
+      (type == TYPE_INT && len == 4) ||
+      (type == TYPE_BOOL && len == 1)) {
+    // Снимаем значение со стека
+    dropTop(0);
+
+    // Отправляем байты значения в порядке little-endian:
+    // data указывает на последний байт значения на стеке,
+    // поэтому читаем назад: data[0], data[-1], data[-2]...
+    for (uint8_t i = 0; i < len; i++) {
+      SPI.transfer(data[-(int)i]);
+    }
+    return;
+  }
+
+  // ----------- Обработка чисел с плавающей точкой (float) ------------
+  if (type == TYPE_FLOAT && len == 4) {
+    // Снимаем значение со стека
+    dropTop(0);
+
+    // Восстанавливаем float из 4 байт (little-endian: младший байт первый)
+    float f;
+    memcpy(&f, data - 3, 4); // data указывает на 4-й байт, поэтому отступаем на 3 назад
+
+    // Приводим float к массиву байтов
+    uint8_t* bytes = (uint8_t*)&f;
+
+    // Отправляем все 4 байта через SPI
+    for (int i = 0; i < 4; i++) {
+      SPI.transfer(bytes[i]);
+    }
+    return;
+  }
+
+  // ----------- Обработка неизвестного типа ------------
+  // Если тип не поддерживается — просто убираем его со стека и выходим
+  dropTop(0);
+}
+
+
+void spiEndTransactionFunc(uint16_t addr) {
+   SPI.endTransaction();
 }

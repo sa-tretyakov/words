@@ -1,4 +1,4 @@
-void wifiInit() {
+void webInit() {
    String tmp = "cont web";
    executeLine(tmp);
   addInternalWord("onHTTP", initHTTP);
@@ -256,14 +256,18 @@ void initWebSocket(uint16_t addr) {
   webSocket.onEvent(webSocketEvent);
 }
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  String tmp;
 
   switch (type) {
     case WStype_DISCONNECTED:
+      tmp = "out>serial";
+      executeLine(tmp);
       break;
     case WStype_CONNECTED: {
         IPAddress ip = webSocket.remoteIP(num);
         //USE_outputStream->printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
-
+          tmp = "out>ws";
+  executeLine(tmp);
         // send message to client
         String broadcast =invitationPrint();
         webSocket.sendTXT(num, broadcast);

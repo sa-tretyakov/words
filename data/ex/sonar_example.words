@@ -21,9 +21,9 @@ pulseIn — измеряет длительность импульса на ци
 
 // Настройка пинов
 var pinTrig
-pinTrig = 13u8
+pinTrig = pins [ 13 ] 
 var pinEcho
-pinEcho = 14u8
+pinEcho = pins [ 7 ]
 
 // Параметры импульса
 var imp

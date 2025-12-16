@@ -1,0 +1,14 @@
+load wifi-config.json // Напишите в файле свои данные
+network
+print "Подключаюсь к сети "
+ln print ssid
+modeSta
+onSta ssid ssidPass
+->
+print "STA Start "
+print ipSta
+ln
+onHTTP
++loop "HTTP"
+onSoket
++loop "Soket"

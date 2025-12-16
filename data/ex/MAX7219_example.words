@@ -55,11 +55,11 @@ pic_8x8 [ ] = 0x3C 0x42 0xA5 0x81 0x81 0x81 0x42 0x3C
 
 // pins
 var DATA_8x8
-DATA_8x8 = 21u8
+DATA_8x8 = pins [ 8 ]
 var CLK_8x8
-CLK_8x8 = 14u8
+CLK_8x8 = pins [ 7 ]
 var LATCH_8x8
-LATCH_8x8 = 18u8
+LATCH_8x8 = pins [ 2 ]
 pinMode LATCH_8x8 OUTPUT
 pinMode CLK_8x8 OUTPUT
 pinMode DATA_8x8 OUTPUT

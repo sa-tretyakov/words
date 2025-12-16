@@ -18,7 +18,8 @@ counter = 0
 // Простая задача
 : tick
   counter = counter + 1
-  print "Tick: " counter CRLF
+  print "Tick: " 
+  print counter
 ;
 
 // Запуск: каждые 500 мс
@@ -26,7 +27,7 @@ counter = 0
 
 // Другая задача
 : heartbeat
-  print "❤️" CRLF
+  print "❤️"
 ;
 
 +Task "heartbeat" 2000
@@ -34,7 +35,8 @@ counter = 0
 // Остановка задачи через 10 секунд
 : stopTick
   -Task "tick"
-  print "Задача 'tick' остановлена" CRLF
+  print "Задача 'tick' остановлена"
+  ln  
 ;
 
 // Запустить остановку через 10 сек

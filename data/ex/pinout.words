@@ -1,0 +1,33 @@
+
+cont live
+cont options
+
+// PINOUT led1 14 1 0
+cont pinout
+var p_name
+var p_pin
+var p_state
+var p_inv
+
+
+
+: PINOUT 
+p_name =
+p_pin =
+p_state =
+p_inv =
+pinMode p_pin OUTPUT
+digitalWrite p_pin p_state
+json-set p_name p_state 
+json>var live
+json-set p_name + "pin" p_pin 
+json-set p_name + "inv" p_inv 
+json>var options
+print p_name
+ln print " настроен"
+;
+
+
+PINOUT led1 10u8 0u8 1u8
+PINOUT led2 11u8 0u8 1u8
+main

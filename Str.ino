@@ -7,11 +7,35 @@ void strInit() {
   addInternalWord("len", lenWord);
   addInternalWord("digit", digitWord);
   addInternalWord(">str", toStrWord);
+  addInternalWord("chip", chipWord);
   tmp = "main";
   executeLine(tmp);
 
 }
+void chipWord(uint16_t addr) {
+  const char* chipName;
 
+#if defined(CONFIG_IDF_TARGET_ESP32)
+  chipName = "esp32";
+#elif defined(CONFIG_IDF_TARGET_ESP32S2)
+  chipName = "esp32-s2";
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+  chipName = "esp32-s3";
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+  chipName = "esp32-c3";
+#elif defined(CONFIG_IDF_TARGET_ESP32C2)
+  chipName = "esp32-c2";
+#elif defined(CONFIG_IDF_TARGET_ESP32C6)
+  chipName = "esp32-c6";
+#elif defined(CONFIG_IDF_TARGET_ESP32H2)
+  chipName = "esp32-h2";
+#else
+  chipName = "esp32-?";
+#endif
+
+  // Положить строку в стек
+  pushString(chipName); // или ваша функция, например: pushString(chipName);
+}
 void charAtWord(uint16_t addr) {
   // 1. Проверяем, что есть хотя бы 2 элемента
   if (stackTop < 4) {

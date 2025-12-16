@@ -7,11 +7,11 @@ seg_num = array u8 5u8
 seg_num [ ] = 0xF1 0xF2 0xF4 0xF8 0xF0
 // pins
 var DATA_DIO
-DATA_DIO = 21u8
+DATA_DIO = pins [ 8 ]
 var CLK_DIO
-CLK_DIO = 14u8
+CLK_DIO = pins [ 7 ]
 var LATCH_DIO
-LATCH_DIO = 19u8
+LATCH_DIO = pins [ 4 ]
 pinMode LATCH_DIO OUTPUT
 pinMode CLK_DIO OUTPUT
 pinMode DATA_DIO OUTPUT

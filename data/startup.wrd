@@ -6,26 +6,34 @@ main
 : help
 type "help.txt"
 ;
-load wifi-config.json
-network
-modeSta
-onSta ssid ssidPass
-print
-ln
-print ipSta
-ln
-onHTTP
-+task "HTTP" 1
-onSoket
-+task "Soket" 1
+// загружаем массив соответствия pin плата
+// используем protoshield переделаный под 3.3 вольт
+var shielde
+shielde = chip
+shielde += "/protoshield.wrd"
+load shielde
+
+ln print "Добро пожаловать!"
 
 // load ex/servo_example.words
-// load ex/7seg_example.words
 load ex/blinker_example.words
-// load ex/MAX7219_example.words
-load ex/udp_example.words
+// load ex/7seg_example.words
+// load ex/max7219_example.words
+load ex/net.words
+// load web/udp_example.words
+// load ex/udp_example.words
+// load ex/pinout.words
 
 main
-ln print "Добро пожаловать!"
 ln print "Words ждет вас!"
+
+/*
+: test
+x =
+y =
+x = y
+ln print x
+ln print y
+;
+*/
 

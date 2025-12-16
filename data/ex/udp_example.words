@@ -1,29 +1,35 @@
 // echo -n "Hello ESP!" | nc -u -w1 192.168.2.93 1900
-cont udp
-var udpsoc
-udpsoc = 0u8
-udpBegin udpsoc 0x76C
-// udpBeginMulticast udpsoc 0x76C "239.255.255.250"
-var udpBuffer
+cont udp // Новый контекст 
+
+var udpsoc var udpBuffer // Сокет и буфер данных 
+udpsoc = 0u8 
 udpBuffer = array u8 1500u16 // Массив 1500 байт типа u8
+var packet_size var udpcount // Рамер данных и счетчик байт так как пока нет локальных переменных 
+
+// udpBegin udpsoc 0x76C
+udpBeginMulticast udpsoc 0x76C "239.255.255.250" // принимаем широковещательные посылки 1900 порт
 print "UDP Start "
 ln print
-var packet_size
-var udpcount
-udpcount = 0u16
-: udptest
-packet_size = udpAvailable udpsoc
-if packet_size != 0u16
+
+
+: udpRead                                 // Это слово будет читать данные из порта
+udpcount = 0u16                           // счетчик 0
+packet_size = udpAvailable udpsoc         // есть ли пакет
+if packet_size != 0u16                    // Если есть пакет есть выполним все до конца слова
 print "получено "
 print  packet_size
 print " байт "
 ln
-udpReadArray udpsoc udpBuffer packet_size
-while udpcount < packet_size {
-print char udpBuffer [ udpcount ]
-udpcount += 1u16
+udpReadArray udpsoc udpBuffer packet_size // данные в буфер и печатать для отладки
+->                                        // Удалим результат проверки со стека
+while udpcount < packet_size {            // пока счетчик меньеше размера пакета
+print char udpBuffer [ udpcount ]         // печатаем
+udpcount += 1u16                          // следующий символ
 }
 ln
+ln print "End poket"
 ;
-+task "udptest" 100
+
+
+// +loop "udpRead"
 main

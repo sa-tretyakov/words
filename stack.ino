@@ -1,8 +1,6 @@
 // --- НАЧАЛО: printStackCompact, обновлённая для TYPE_ADDRINFO с elemType ---
 void printStackCompact() {
   // --- Стек ---
-  //  outputStream->print("context:");
-  //  outputStream->print(currentContext);
   if (stackTop == 0) {
     outputStream->print(" []");
   } else {

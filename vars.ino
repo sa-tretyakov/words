@@ -3,6 +3,7 @@ void varsInit() {
   executeLine(tmp);
   addInternalWord("var", varWord);
   addInternalWord("const", constWord);
+  addInternalWord("name", nameWord);
   addInternalWord("array", arrayFunc);
   addMarkerWord("[");
   addMarkerWord("]");
@@ -99,6 +100,7 @@ void varWord(uint16_t callerAddr) {
   dictLen = nextOffset;
   stackTop = nameStart;
 }
+
 void constWord(uint16_t addr) {
   if (stackTop < 2) return;
   uint8_t topLen = stack[stackTop - 2];
@@ -126,6 +128,42 @@ void constWord(uint16_t addr) {
   pos[3 + topLen + 1] = currentContext; // context
 
   uint32_t poolRef = 0xFFFFFFFF; // ← именно так
+  memcpy(&pos[3 + topLen + 2], &poolRef, 4);
+
+  uint32_t funcAddr = (uint32_t)mychoiceFunc;
+  memcpy(&pos[3 + topLen + 2 + 4], &funcAddr, 4);
+
+  dictLen = nextOffset;
+  stackTop = nameStart;
+}
+
+void nameWord(uint16_t addr) {
+  if (stackTop < 2) return;
+  uint8_t topLen = stack[stackTop - 2];
+  uint8_t topType = stack[stackTop - 1];
+  if (topType != TYPE_NAME) return;
+  if (topLen > stackTop - 2) return;
+
+  size_t nameStart = stackTop - 2 - topLen;
+  const char* name = (const char*)&stack[nameStart];
+
+  size_t recordSize = 2 + 1 + topLen + 1 + 1 + 4 + 4;
+  if (dictLen + recordSize > DICT_SIZE) {
+    outputStream->println("⚠️ Dictionary full");
+    return;
+  }
+
+  uint8_t* pos = &dictionary[dictLen];
+  uint16_t nextOffset = dictLen + recordSize;
+
+  pos[0] = (nextOffset >> 0) & 0xFF;
+  pos[1] = (nextOffset >> 8) & 0xFF;
+  pos[2] = topLen;
+  memcpy(&pos[3], name, topLen);
+  pos[3 + topLen] = 0x80 | STORAGE_CONST; // = 0x83
+  pos[3 + topLen + 1] = currentContext; // context
+
+  uint32_t poolRef = 0xFFFFFFFE; // ← именно так
   memcpy(&pos[3 + topLen + 2], &poolRef, 4);
 
   uint32_t funcAddr = (uint32_t)mychoiceFunc;

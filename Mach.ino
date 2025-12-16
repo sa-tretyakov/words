@@ -11,6 +11,7 @@ void mathInit() {
   addMarkerWord("*=");
   addMarkerWord("/=");
   addMarkerWord("%");
+  addMarkerWord("^");
  tmp = "main";
   executeLine(tmp);
 }
@@ -222,6 +223,75 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
   uint8_t varType, varLen;
   const uint8_t* varData;
   if (!readVariableValue(addr, &varType, &varLen, &varData)) {
+    return;
+  }
+
+  // === XOR (^) ===
+  if (op == OP_XOR) {
+    // === int32 ===
+    if (argType == TYPE_INT && varType == TYPE_INT && argLen == 4 && varLen == 4) {
+      uint32_t a, b;
+      memcpy(&a, argData, 4);   // правый (со стека)
+      memcpy(&b, varData, 4);   // левый (переменная)
+      dropTop(0);
+      uint32_t res = b ^ a;
+      pushInt((int32_t)res);
+      return;
+    }
+
+    // === int8 ===
+    if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      pushInt8((int8_t)(b ^ a));
+      return;
+    }
+
+    // === uint8 ===
+    if (argType == TYPE_UINT8 && varType == TYPE_UINT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      pushUInt8(b ^ a);
+      return;
+    }
+
+    // === int16 ===
+    if (argType == TYPE_INT16 && varType == TYPE_INT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      pushInt16((int16_t)(b ^ a));
+      return;
+    }
+
+    // === uint16 ===
+    if (argType == TYPE_UINT16 && varType == TYPE_UINT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      pushUInt16(b ^ a);
+      return;
+    }
+
+    // === bool ===
+    if (argType == TYPE_BOOL && varType == TYPE_BOOL && argLen == 1 && varLen == 1) {
+      bool a = (argData[0] != 0);
+      bool b = (varData[0] != 0);
+      dropTop(0);
+      pushBool(b ^ a);
+      return;
+    }
+
+    // Неподдерживаемая комбинация — пушим значение переменной
+    uint8_t Type, Len;
+    const uint8_t* Data;
+    if (readVariableValue(addr, &Type, &Len, &Data)) {
+      pushValue(Data, Len, Type);
+    }
     return;
   }
 
@@ -458,7 +528,7 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
       case OP_SUB: pushFloat(b - a); break;
       case OP_MUL: pushFloat(b * a); break;
       case OP_DIV: pushFloat(a != 0.0f ? b / a : 0.0f); break;
-      // % не поддерживается для float — игнорируем
+      // % и ^ не поддерживаются для float
     }
     return;
   }
@@ -488,7 +558,7 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
     return;
   }
 
-  // === Общий fallback для целых типов (разные типы) ===
+  // === Общий fallback для целых типов (разные типы) — только для % ===
   if (op == OP_MOD &&
       (argType == TYPE_INT || argType == TYPE_UINT8 || argType == TYPE_INT8 ||
        argType == TYPE_UINT16 || argType == TYPE_INT16) &&
@@ -527,7 +597,6 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
     pushValue(Data, Len, Type);
   }
 }
-
 
 void applyCompareOp(uint8_t op) {
   uint8_t rightType, rightLen;
@@ -651,4 +720,79 @@ void applyCompareOp(uint8_t op) {
   }
 
   pushBool(result);
+}
+
+void xorWord(uint16_t addr) {
+    (void)addr; // XOR — стековая операция, addr не используется
+
+    // Получаем правый операнд (верх стека)
+    uint8_t rightType, rightLen;
+    const uint8_t* rightData;
+    if (!peekStackTop(&rightType, &rightLen, &rightData)) {
+        return; // недостаточно аргументов
+    }
+    dropTop(0); // снимаем правый
+
+    // Получаем левый операнд
+    uint8_t leftType, leftLen;
+    const uint8_t* leftData;
+    if (!peekStackTop(&leftType, &leftLen, &leftData)) {
+        // Восстанавливаем правый, если левого нет
+        pushValue(rightData, rightLen, rightType);
+        return;
+    }
+    dropTop(0); // снимаем левый
+
+    // === Обработка bool ===
+    if (leftType == TYPE_BOOL && rightType == TYPE_BOOL &&
+        leftLen == 1 && rightLen == 1) {
+        bool a = (leftData[0] != 0);
+        bool b = (rightData[0] != 0);
+        pushBool(a ^ b);
+        return;
+    }
+
+    // === Обработка 8-битных целых ===
+    if ((leftType == TYPE_UINT8 || leftType == TYPE_INT8) &&
+        (rightType == TYPE_UINT8 || rightType == TYPE_INT8) &&
+        leftLen == 1 && rightLen == 1) {
+        uint8_t a = leftData[0];
+        uint8_t b = rightData[0];
+        pushUInt8(a ^ b); // результат беззнаковый (биты)
+        return;
+    }
+
+    // === Обработка 16-битных целых ===
+    if ((leftType == TYPE_UINT16 || leftType == TYPE_INT16) &&
+        (rightType == TYPE_UINT16 || rightType == TYPE_INT16) &&
+        leftLen == 2 && rightLen == 2) {
+        uint16_t a, b;
+        memcpy(&a, leftData, 2);
+        memcpy(&b, rightData, 2);
+        uint16_t res = a ^ b;
+        // Пушим как uint16 — XOR не сохраняет знак
+        if (stackTop + 2 + 2 <= STACK_SIZE) {
+            memcpy(&stack[stackTop], &res, 2);
+            stackTop += 2;
+            stack[stackTop++] = 2;        // len
+            stack[stackTop++] = TYPE_UINT16; // тип
+        }
+        return;
+    }
+
+    // === Обработка 32-битных (TYPE_INT) ===
+    if (leftType == TYPE_INT && rightType == TYPE_INT &&
+        leftLen == 4 && rightLen == 4) {
+        uint32_t a, b;
+        memcpy(&a, leftData, 4);
+        memcpy(&b, rightData, 4);
+        uint32_t res = a ^ b;
+        pushInt((int32_t)res); // биты те же, тип остаётся TYPE_INT
+        return;
+    }
+
+    // === Неподдерживаемые типы: возвращаем операнды обратно ===
+    // Возвращаем в исходном порядке: сначала левый, потом правый
+    pushValue(leftData, leftLen, leftType);
+    pushValue(rightData, rightLen, rightType);
 }

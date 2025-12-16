@@ -1,0 +1,63 @@
+// Перейти в контекст TCP
+tcp
+
+var httpServ
+httpServ = 0
+var httpServPort
+httpServPort = 80
+
+// Создать буфер для запроса
+var request
+request = array u8 1024u16
+
+// Создать ответ
+var responseHTTP var contentType var contentLength var connectionClose var response 
+responseHTTP = "HTTP/1.1 200 OK" + CRLF
+contentType = "Content-Type: text/plain" + CRLF
+contentLength = "Content-Length: 17" + CRLF
+connectionClose = "Connection: close" + CRLF2
+response = "Hello from Words!" 
+
+// Запустить сервер на порту 80 (сервер №0)
+tcpBegin httpServ httpServPort
+print "TCP Start "
+print
+ln
+
+var clientServ
+var tcpcount
+// Обработчик HTTP-запроса
+: httpHendle
+  tcpcount = 0u16
+  tcpAccept httpServ        // принять клиента от сервера 0
+  clientServ = 
+  if clientServ != 0u8
+  tcpReadArray clientServ request
+  ln print "->"
+  while tcpcount < 32u16 {            // пока счетчик меньеше размера пакета
+ print char request [ tcpcount ]         // печатаем
+ tcpcount += 1u16                          // следующий символ
+ }
+   tcpWrite clientServ responseHTTP
+  ->  
+  tcpWrite clientServ contentType
+  ->  
+  tcpWrite clientServ contentLength
+  ->  
+  tcpWrite clientServ connectionClose
+  ->
+  tcpWrite clientServ response
+  ->
+  tcpClose clientServ
+  ln
+  ln print
+;
+
+// Запустить обработчик в фоне каждые 10 мс
++loop "httpHendle"
+
+// Вернуться в основной контекст
+main
+
+// Запустить пример можно командой
+// load ex/web_example.words

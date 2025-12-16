@@ -13,80 +13,12 @@ var maxClients = 4
 use global
 
 
-
-var led = 2
-var statLed = 0
-pinMode led OUTPUT
-: triger
-! statLed
-digitalWrite led statLed
-->
-;
-addTick 500 "triger"
-
-var timeTick. = 2000
-: 2000s
-timeTick. = timeTick. - 100
-. timeTick.
-->
-;
-: startTime
-addTick 500 "2000s"
-;
-var tach = 0
-pinMode tach INPUT_PULLUP
-: read
-. digitalRead tach
-;
-/*
-addTick 50 "read"
-delTick "read"
+cont ssdp
+var 
+ssdp0 = "M-SEARCH * HTTP/1.1" + CRLF
+ssdp1 = "Host:239.255.255.250:1900" + CRLF
+ssdp2 = "ST:upnp:rootdevice" + CRLF
+ssdp3 = "Man:"ssdp:discover"" + CRLF
+ssdp4 = "MX:3" + CRLF
 
 
-var CR = ""
-var LF = ""
-var CRLF = ""
-CR = char 13
-LF = char 10
-CRLF = CR + LF
-cont ssdp-c
-var search = "M-SEARCH * HTTP/1.1"
-search = search + CRLF
-search = search + "Host:239.255.255.250:1900"
-search = search + CRLF
-search = search + "ST:upnp:rootdevice"
-search = search + CRLF
-search = search + "Man:"ssdp:discover""
-search = search + CRLF
-search = search + "MX:3"
-search = search + CRLF
-search = search + CRLF
-var sock = -1
-sock = udpOpen 1900
-. udpRecv sock
-
-
-. "apple" < "banana"   
-. "hello" == "world"   
-. "hello" == "hello"   
-. 5 >= 3               
-. 2.5 != 2             
-. "10" > "2"           
-
-
-var x = 0
-var y = 6
-x = 6 * 10
-. x
-: hi
-if x == y
-then: 
-. "Eqwals"
-else: 
-. "no Eqwals"
-:if
-. "Stop"
-;
-
-
-*/
