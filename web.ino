@@ -13,34 +13,36 @@ void webInit() {
 }
 
 
-//const static char webphort[] PROGMEM =
-const String webForth =
-  "<!DOCTYPE html>\n\r"
-  "<html>\n\r"
-  " <head>\n\r"
-  "  <meta charset=\"UTF-8\">\n\r"
-  "  <title>Forth console</title>\n\r"
-  " </head>\n\r"
-  " <body>\n\r"
-  "  <script>\n\r"
-  "   var connection = new WebSocket(\"ws://\"+window.location.host+\":82\", ['arduino']);\n\r"
-  "   connection.onmessage = function (e) {\n\r"
-  "    console.log('Server: ', e.data);\n\r"
-  "    document.getElementById('console').value += e.data;\n\r"
-  "    document.getElementById(\"console\").scrollTop = document.getElementById(\"console\").scrollHeight;\n\r"
-  "   }\n\r"
-  "   function onChange() {\n\r"
-  "    if (window.event.keyCode === 13) {\n\r"
-  "     var console = document.getElementById(\"console\").value;\n\r"
-  "     connection.send(console.split('ok>')[console.split('ok>').length-1]);\n\r"
-  "     return true;\n\r"
-  "    }\n\r"
-  "   }\n\r"
-  "  </script>\n\r"
-  "  <textarea id=\"console\" style=\"width:100%;height:100%;\" onkeypress=\"onChange();\" cols=\"30\" rows=\"30\"></textarea>\n\r"
-  " </body>\n\r"
-  "</html>\n\r";
-  
+const char webForth[] PROGMEM = R"raw(<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Forth console</title>
+</head>
+<body>
+<script>
+let ws;
+function connect(){
+  ws = new WebSocket("ws:/"+"/"+location.hostname+":82",["arduino"]);
+  ws.onmessage = e => { c.value += e.data; c.scrollTop = c.scrollHeight; };
+  ws.onclose = ws.onerror = () => setTimeout(connect, 2000);
+}
+connect();
+ 
+function sendCmd(e){
+  if(e.keyCode===13){
+    if (e.shiftKey) return;    
+    e.preventDefault();
+    let s = c.value.split("ok>").pop();
+    ws.readyState===1 ? ws.send(s) : c.value+="\n[Нет соединения]\n";
+  }
+}
+</script>
+ 
+<textarea id="c" cols="30" rows="30" style="width:100%;height:100%;" onkeypress="sendCmd(event)"></textarea>
+</body>
+</html>)raw";
+
 void initHTTP(uint16_t addr) {
   initFS();
    // Кэшировать файлы для быстрой работы

@@ -239,7 +239,8 @@ if (loopWordCount == 0) {
   }
 }
   outputStream->println();
-  outputStream->println("ok>");
+  outputStream->print(currentDir);
+  outputStream->println(" ok>");;
 }
 // --- КОНЕЦ: printStackCompact, обновлённая для TYPE_ADDRINFO с elemType ---
 

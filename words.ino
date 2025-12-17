@@ -34,7 +34,7 @@
 #endif
 
 #include <WebServer.h>
-WebServer HTTP(81);
+WebServer HTTP(80);
 File fsUploadFile;
 
 #include <WebSocketsServer.h>    //https://github.com/Links2004/arduinoWebSockets
@@ -78,6 +78,7 @@ uint8_t stack[STACK_SIZE];
 size_t stackTop = 0; // указатель на первую свободную ячейку
 uint8_t currentContext = 0; // текущий контекст (0 = global)
 uint8_t maxCont = 255;
+char currentDir[256] = "/";  // Начинаем с корня
 bool compiling = false;        // флаг компиляции
 uint16_t compileTarget = 0;    // смещение в словаре для текущего слова
 uint16_t compileStartDictLen = 0;  // точка отката при компиляции
@@ -567,11 +568,7 @@ void setup() {
    }
 
 
-  if (!FILESYSTEM.begin()) {
-    outputStream->println("FS Mount Failed");
-    //return;
-  }
-
+ 
   tmpLit();
   addInternalWord("cont", contWord);
      String tmp = "cont main";
@@ -605,6 +602,10 @@ void setup() {
    webInit(); 
 
    i2cInit();
+  if (!FILESYSTEM.begin()) {
+    outputStream->println("FS Mount Failed");
+    //return;
+  }  
    currentContext = 0;   
    tmp = "load startup.wrd"; // 0 = maxCont";
    executeLine(tmp);
