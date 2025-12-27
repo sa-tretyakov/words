@@ -17,6 +17,7 @@ ln print "Добро пожаловать!"
 
 // load ex/servo_example.words
 load ex/blinker_example.words
+load robot/8x8.wrd
 // load ex/7seg_example.words
 // load ex/max7219_example.words
 load ex/net.words

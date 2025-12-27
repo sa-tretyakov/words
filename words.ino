@@ -41,32 +41,33 @@ File fsUploadFile;
 WebSocketsServer webSocket = WebSocketsServer(82);
 // ---------- ОПРЕДЕЛЕНИЕ КЛАССА ----------
 class WebSocketPrint : public Print {
-public:
+  public:
     WebSocketPrint(WebSocketsServer* ws) : webSocket(ws) {}
 
     size_t write(uint8_t c) override {
-        buffer += (char)c;
-        return 1;
+      buffer += (char)c;
+      return 1;
     }
 
     size_t write(const uint8_t *buf, size_t size) override {
-        buffer.concat((const char*)buf, size);
-        return size;
+      buffer.concat((const char*)buf, size);
+      return size;
     }
 
     void flush() override {
-        if (webSocket && buffer.length() > 0) {
-            webSocket->broadcastTXT(buffer.c_str(), buffer.length());
-            buffer = "";
-        }
+      if (webSocket && buffer.length() > 0) {
+        webSocket->broadcastTXT(buffer.c_str(), buffer.length());
+        buffer = "";
+      }
     }
 
-private:
+  private:
     WebSocketsServer* webSocket;
     String buffer;
 };
 WebSocketPrint wsPrint(&webSocket);
 String command;
+
 // ========================
 // Конфигурация стека
 // ========================
@@ -225,74 +226,7 @@ void popMetadata(uint8_t& outLength, uint8_t& outType) {
   outType   = stack[stackTop + 1];
 }
 
-// ========================
-// PUSH функции
-// ========================
-void pushInt(int32_t value) {
-  const size_t dataLen = sizeof(int32_t);
-  if (isStackOverflow(dataLen + 2)) handleStackOverflow();
-  memcpy(&stack[stackTop], &value, dataLen);
-  stackTop += dataLen;
-  stack[stackTop++] = dataLen;
-  stack[stackTop++] = TYPE_INT;
-}
 
-void pushFloat(float value) {
-  const size_t dataLen = sizeof(float);
-  if (isStackOverflow(dataLen + 2)) handleStackOverflow();
-  memcpy(&stack[stackTop], &value, dataLen);
-  stackTop += dataLen;
-  stack[stackTop++] = dataLen;
-  stack[stackTop++] = TYPE_FLOAT;
-}
-
-void pushString(const char* str) {
-  if (!str) str = "";
-  size_t len = strlen(str);
-  if (len > 255) len = 255;
-  if (isStackOverflow(len + 2)) handleStackOverflow();
-  memcpy(&stack[stackTop], str, len);
-  stackTop += len;
-  stack[stackTop++] = static_cast<uint8_t>(len);
-  stack[stackTop++] = TYPE_STRING;
-}
-
-void pushBool(bool value) {
-  if (isStackOverflow(1 + 2)) handleStackOverflow();
-  stack[stackTop++] = value ? 1 : 0;
-  stack[stackTop++] = 1;
-  stack[stackTop++] = TYPE_BOOL;
-}
-
-void pushInt8(int8_t value) {
-  if (isStackOverflow(1 + 2)) handleStackOverflow();
-  stack[stackTop++] = static_cast<uint8_t>(value);
-  stack[stackTop++] = 1;
-  stack[stackTop++] = TYPE_INT8;
-}
-
-void pushUInt8(uint8_t value) {
-  if (isStackOverflow(1 + 2)) handleStackOverflow();
-  stack[stackTop++] = value;
-  stack[stackTop++] = 1;
-  stack[stackTop++] = TYPE_UINT8;
-}
-
-void pushInt16(int16_t value) {
-  if (isStackOverflow(2 + 2)) handleStackOverflow();
-  memcpy(&stack[stackTop], &value, 2);
-  stackTop += 2;
-  stack[stackTop++] = 2;
-  stack[stackTop++] = TYPE_INT16;
-}
-
-void pushUInt16(uint16_t value) {
-  if (isStackOverflow(2 + 2)) handleStackOverflow();
-  memcpy(&stack[stackTop], &value, 2);
-  stackTop += 2;
-  stack[stackTop++] = 2;
-  stack[stackTop++] = TYPE_UINT16;
-}
 
 // Проверяет, что на верхушке стека лежит маркер с заданным символом.
 // Если да — убирает его и возвращает true.
@@ -302,7 +236,7 @@ bool popMarkerIf(char expected) {
   if (stack[stackTop - 1] != TYPE_MARKER) return false;
   if (stack[stackTop - 2] != 1) return false;
   if (stack[stackTop - 3] != (uint8_t)expected) return false;
-  
+
   dropTop(0); // убирает маркер
   return true;
 }
@@ -434,23 +368,37 @@ bool popAsUInt8(uint8_t* out) {
 
   switch (type) {
     case TYPE_UINT8:
-      if (len == 1) { val = data[0]; }
+      if (len == 1) {
+        val = data[0];
+      }
       else return false;
       break;
     case TYPE_INT8:
-      if (len == 1) { val = (int8_t)data[0]; }
+      if (len == 1) {
+        val = (int8_t)data[0];
+      }
       else return false;
       break;
     case TYPE_UINT16:
-      if (len == 2) { uint16_t v; memcpy(&v, data, 2); val = v; }
+      if (len == 2) {
+        uint16_t v;
+        memcpy(&v, data, 2);
+        val = v;
+      }
       else return false;
       break;
     case TYPE_INT16:
-      if (len == 2) { int16_t v; memcpy(&v, data, 2); val = v; }
+      if (len == 2) {
+        int16_t v;
+        memcpy(&v, data, 2);
+        val = v;
+      }
       else return false;
       break;
     case TYPE_INT:
-      if (len == 4) { memcpy(&val, data, 4); }
+      if (len == 4) {
+        memcpy(&val, data, 4);
+      }
       else return false;
       break;
     default:
@@ -563,19 +511,20 @@ void setup() {
   dataPoolPtr = 0; // ← критически важно!
   stackTop = 0;
   Serial.begin(115200);
-    for (int i=0; i <= 255; i++){
-  Serial.println();
-   }
+  for (int i = 0; i <= 255; i++) {
+    Serial.println();
+  }
 
 
- 
+
   tmpLit();
   addInternalWord("cont", contWord);
-     String tmp = "cont main";
-   executeLine(tmp);
+  String tmp = "cont main";
+  executeLine(tmp);
   addInternalWord("goto", gotoFunc);
   addrGoto = findWordAddress("goto");
   addInternalWord("words", wordsWord);
+  addInternalWord("oops", oopsFunc);
   addInternalWord("`", printDictionary);
   addInternalWord("->", dropTop);
   addInternalWord(":", colonWord);
@@ -591,32 +540,32 @@ void setup() {
   ledsInit();
   timeInit();
   jsonInit();
-  taskInit();  
+  taskInit();
   filesInit();
-   debugInit();
+  debugInit();
 
-   strInit();
-   wifiInit();
-   udpInit();
-   tcpInit();
-   webInit(); 
+  strInit();
+  wifiInit();
+  udpInit();
+  tcpInit();
+  webInit();
 
-   i2cInit();
+  i2cInit();
   if (!FILESYSTEM.begin()) {
     outputStream->println("FS Mount Failed");
     //return;
-  }  
-   currentContext = 0;   
-   tmp = "load startup.wrd"; // 0 = maxCont";
-   executeLine(tmp);
-   printStackCompact();
+  }
+  currentContext = 0;
+  tmp = "load startup.wrd"; // 0 = maxCont";
+  executeLine(tmp);
+  printStackCompact();
 }
 
 bool taskRunning = false; // ← добавь эту глобальную переменную в начало скетча
 
 void loop() {
   uint32_t now = millis();
-//  1. +loop слова (постоянное выполнение)
+  //  1. +loop слова (постоянное выполнение)
   for (uint8_t i = 0; i < loopWordCount; i++) {
     if (!taskRunning) {
       taskRunning = true;
@@ -646,23 +595,24 @@ void loop() {
       executeLine(line);
       printStackCompact();
       if (outputStream == &wsPrint) {
-  wsPrint.flush();
-}
+        wsPrint.flush();
+      }
     }
   }
-  while (command.indexOf('\n') >= 0) {
-  int idx = command.indexOf('\n');
-  String line = command.substring(0, idx);
-  command = command.substring(idx + 1); // +1 для '\n'
+// Обрабатываем остаток, если он не пустой
+if (command.length() > 0) {
+  String line = command;
+  command = ""; // очищаем, чтобы не обрабатывать дваждно
   line.trim();
   if (line.length() > 0) {
-    outputStream->print("→ ");
-    outputStream->println(line);
+    //outputStream->print("→ ");
+    //outputStream->println(line);
+    outputStream->println();
     executeLine(line);
-    printStackCompact(); 
+    printStackCompact();
     if (outputStream == &wsPrint) {
-  wsPrint.flush();
-}   
+      wsPrint.flush();
+    }
   }
 }
 }

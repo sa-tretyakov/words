@@ -1,3 +1,72 @@
+// ========================
+// PUSH функции
+// ========================
+void pushInt(int32_t value) {
+  const size_t dataLen = sizeof(int32_t);
+  if (isStackOverflow(dataLen + 2)) handleStackOverflow();
+  memcpy(&stack[stackTop], &value, dataLen);
+  stackTop += dataLen;
+  stack[stackTop++] = dataLen;
+  stack[stackTop++] = TYPE_INT;
+}
+
+void pushFloat(float value) {
+  const size_t dataLen = sizeof(float);
+  if (isStackOverflow(dataLen + 2)) handleStackOverflow();
+  memcpy(&stack[stackTop], &value, dataLen);
+  stackTop += dataLen;
+  stack[stackTop++] = dataLen;
+  stack[stackTop++] = TYPE_FLOAT;
+}
+
+void pushString(const char* str) {
+  if (!str) str = "";
+  size_t len = strlen(str);
+  if (len > 255) len = 255;
+  if (isStackOverflow(len + 2)) handleStackOverflow();
+  memcpy(&stack[stackTop], str, len);
+  stackTop += len;
+  stack[stackTop++] = static_cast<uint8_t>(len);
+  stack[stackTop++] = TYPE_STRING;
+}
+
+void pushBool(bool value) {
+  if (isStackOverflow(1 + 2)) handleStackOverflow();
+  stack[stackTop++] = value ? 1 : 0;
+  stack[stackTop++] = 1;
+  stack[stackTop++] = TYPE_BOOL;
+}
+
+void pushInt8(int8_t value) {
+  if (isStackOverflow(1 + 2)) handleStackOverflow();
+  stack[stackTop++] = static_cast<uint8_t>(value);
+  stack[stackTop++] = 1;
+  stack[stackTop++] = TYPE_INT8;
+}
+
+void pushUInt8(uint8_t value) {
+  if (isStackOverflow(1 + 2)) handleStackOverflow();
+  stack[stackTop++] = value;
+  stack[stackTop++] = 1;
+  stack[stackTop++] = TYPE_UINT8;
+}
+
+void pushInt16(int16_t value) {
+  if (isStackOverflow(2 + 2)) handleStackOverflow();
+  memcpy(&stack[stackTop], &value, 2);
+  stackTop += 2;
+  stack[stackTop++] = 2;
+  stack[stackTop++] = TYPE_INT16;
+}
+
+void pushUInt16(uint16_t value) {
+  if (isStackOverflow(2 + 2)) handleStackOverflow();
+  memcpy(&stack[stackTop], &value, 2);
+  stackTop += 2;
+  stack[stackTop++] = 2;
+  stack[stackTop++] = TYPE_UINT16;
+}
+
 // --- НАЧАЛО: printStackCompact, обновлённая для TYPE_ADDRINFO с elemType ---
 void printStackCompact() {
   // --- Стек ---

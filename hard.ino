@@ -80,3 +80,7 @@ void nopFunc(uint16_t addr){
 void resetFunc(uint16_t addr){
   ESP.restart();
   }
+void oopsFunc(uint16_t addr){
+  stackTop = 0;
+  }
+ 

@@ -5,6 +5,9 @@
 #endif
 #include <WiFiUdp.h>
 WiFiUDP udp_obj[5]; // <-- Теперь массив из 5 объектов
+IPAddress lastRemoteIP[5];
+uint16_t lastRemotePort[5];
+bool lastPacketValid[5] = {false};
 
 void wifiInit() {
    String tmp = "cont network";
@@ -264,6 +267,8 @@ void udpInit() {
   addInternalWord("udpBegin", udpBeginWord);
   addInternalWord("udpBeginMulticast", udpBeginMulticastWord);
   addInternalWord("udpAvailable", udpAvailableWord);
+  addInternalWord("udpRemoteIP", udpRemoteIPWord);
+  addInternalWord("udpRemotePort", udpRemotePortWord);
   addInternalWord("udpReadArray", udpReadArrayWord);
   addInternalWord("udpWrite", udpWriteAnyFunc);  
   tmp = "main";
@@ -334,29 +339,71 @@ void udpBeginWord(uint16_t addr) {
 }
 
 void udpAvailableWord(uint16_t addr) {
-  // 1. Прочитать индекс UDP-объекта
+  // 1. Проверяем, что на стеке достаточно данных для извлечения u8 (тип + значение = 2 байта)
   if (stackTop < 2) {
     outputStream->println("⚠️ udpAvailable: UDP index expected");
-    pushUInt16(0); // Если ошибка - возвращаем 0
+    pushUInt16(0); // Ошибка — возвращаем 0 байт
     return;
   }
+
+  // 2. Извлекаем индекс сокета
   uint8_t index;
   if (!popAsUInt8(&index)) {
-    outputStream->println("⚠️ udpAvailable: invalid UDP index (0-4)");
+    outputStream->println("⚠️ udpAvailable: invalid UDP index (must be u8)");
     pushUInt16(0);
     return;
   }
+
   if (index >= 5) {
     outputStream->println("⚠️ udpAvailable: UDP index out of range (0-4)");
     pushUInt16(0);
     return;
   }
 
-  // 2. Проверить размер пакета
+  // 3. Пытаемся принять пакет
   int packetSize = udp_obj[index].parsePacket();
 
-  // 3. Положить результат (количество байт) на стек
-  pushUInt16((uint16_t)(packetSize > 0 ? packetSize : 0)); // Всегда положительное значение или 0
+  if (packetSize > 0) {
+    // 4. Сохраняем информацию об отправителе — КРИТИЧЕСКИ ВАЖНО сделать СРАЗУ после parsePacket()
+    lastRemoteIP[index] = udp_obj[index].remoteIP();
+    lastRemotePort[index] = udp_obj[index].remotePort();
+    lastPacketValid[index] = true;
+
+    // 5. Возвращаем размер пакета
+    pushUInt16((uint16_t)packetSize);
+  } else {
+    // Нет пакета — сбрасываем флаг
+    lastPacketValid[index] = false;
+    pushUInt16(0);
+  }
+}
+
+
+void udpRemoteIPWord(uint16_t addr) {
+  if (stackTop < 2) {
+    pushString("0.0.0.0");
+    return;
+  }
+  uint8_t index;
+  if (!popAsUInt8(&index) || index >= 5 || !lastPacketValid[index]) {
+    pushString("0.0.0.0");
+    return;
+  }
+  String ipStr = lastRemoteIP[index].toString();
+  pushString(ipStr.c_str());
+}
+
+void udpRemotePortWord(uint16_t addr) {
+  if (stackTop < 2) {
+    pushUInt16(0);
+    return;
+  }
+  uint8_t index;
+  if (!popAsUInt8(&index) || index >= 5 || !lastPacketValid[index]) {
+    pushUInt16(0);
+    return;
+  }
+  pushUInt16(lastRemotePort[index]);
 }
 
 
@@ -487,26 +534,56 @@ void udpReadArrayWord(uint16_t addr) {
 
 
 void udpWriteAnyFunc(uint16_t addr) {
-  // 1. Первый аргумент: индекс сокета (udpsoc)
+  // 1. Читаем индекс сокета (самый верхний элемент — последний в строке)
   uint8_t udpIndex;
   if (!popAsUInt8(&udpIndex) || udpIndex >= 5) {
     pushBool(false);
     return;
   }
 
-  // 2. Второй аргумент: значение (любого типа)
+  // 2. Читаем IP-адрес получателя (string)
+  String ipStr;
+  if (!popStringFromStack(ipStr)) {
+    pushBool(false);
+    return;
+  }
+
+  // 3. Читаем порт получателя
+  int32_t portValue;
+  if (!popInt32FromAny(&portValue) || portValue < 1 || portValue > 65535) {
+    pushBool(false);
+    return;
+  }
+  uint16_t port = (uint16_t)portValue;
+
+  // 4. Преобразуем IP
+  IPAddress ip;
+  if (!ip.fromString(ipStr)) {
+    pushBool(false);
+    return;
+  }
+
+  // 5. Подготавливаем отправку
+  if (!udp_obj[udpIndex].beginPacket(ip, port)) {
+    // Не удалось начать пакет — ничего со стека ещё не снято (кроме IP/порта/индекса)
+    pushBool(false);
+    return;
+  }
+
+  // 6. Теперь читаем данные (последний аргумент в строке — самый глубокий на стеке)
   uint8_t type, len;
   const uint8_t* data;
   if (!peekStackTop(&type, &len, &data)) {
+    udp_obj[udpIndex].endPacket();
     dropTop(0);
     pushBool(false);
     return;
   }
 
+  bool success = false;
+
   // ----------- TYPE_ADDRINFO: массив из dataPool ------------
   if (type == TYPE_ADDRINFO && len == 5) {
-    dropTop(0);
-
     uint16_t address = data[0] | (data[1] << 8);
     uint16_t totalBytes = data[2] | (data[3] << 8);
     uint8_t elemType = data[4];
@@ -515,63 +592,86 @@ void udpWriteAnyFunc(uint16_t addr) {
     if (elemType == TYPE_UINT16 || elemType == TYPE_INT16) elemSize = 2;
     else if (elemType == TYPE_INT || elemType == TYPE_FLOAT) elemSize = 4;
 
-    if (totalBytes % elemSize != 0) { pushBool(false); return; }
-    uint16_t totalCount = totalBytes / elemSize;
-    if (address >= DATA_POOL_SIZE || address + totalBytes > DATA_POOL_SIZE) { pushBool(false); return; }
+    if (totalBytes % elemSize != 0 ||
+        address >= DATA_POOL_SIZE ||
+        address + totalBytes > DATA_POOL_SIZE) {
+      udp_obj[udpIndex].endPacket();
+      dropTop(0);
+      pushBool(false);
+      return;
+    }
 
-    // Читаем количество элементов (не байт!)
-    uint32_t count = totalCount;
+    uint32_t count = totalBytes / elemSize; // по умолчанию — весь массив
+
+    // Опционально: читаем count (если лежит на стеке над массивом)
     uint8_t countType, countLen;
     const uint8_t* countData;
     if (peekStackTop(&countType, &countLen, &countData)) {
       if (countType == TYPE_UINT8 && countLen == 1) {
         count = countData[0];
         dropTop(0);
-      }
-      else if (countType == TYPE_INT && countLen == 4) {
+      } else if (countType == TYPE_INT && countLen == 4) {
         memcpy(&count, countData - 3, 4);
         dropTop(0);
       }
     }
-    if (count > totalCount) count = totalCount;
+    if (count > totalBytes / elemSize) count = totalBytes / elemSize;
     uint32_t bytesToSend = count * elemSize;
-    if (address + bytesToSend > DATA_POOL_SIZE) { pushBool(false); return; }
 
-    // Отправка через UDP
-    int sent = udp_obj[udpIndex].write(&dataPool[address], bytesToSend);
-    pushBool(sent == (int)bytesToSend);
-    return;
+    size_t sent = udp_obj[udpIndex].write(&dataPool[address], bytesToSend);
+    dropTop(0); // удаляем TYPE_ADDRINFO
+    udp_obj[udpIndex].endPacket();
+    success = (sent == bytesToSend);
   }
 
-  // ----------- TYPE_STRING: строка со стека ------------
-  if (type == TYPE_STRING) {
-    dropTop(0);
-    if (len > stackTop) { pushBool(false); return; }
+  // ----------- TYPE_STRING ------------
+  else if (type == TYPE_STRING) {
+    if (len > 0 && stackTop < len) {
+      udp_obj[udpIndex].endPacket();
+      dropTop(0);
+      pushBool(false);
+      return;
+    }
+
+    // Указатель на данные строки: последние `len` байт на стеке
     const char* str = (const char*)&stack[stackTop - len];
-    int sent = udp_obj[udpIndex].write((const uint8_t*)str, len);
-    stackTop -= len;
-    pushBool(sent == (int)len);
-    return;
+
+    // Отладка (опционально)
+    // Serial.print("UDP Send string: ");
+    // Serial.write((const uint8_t*)str, len);
+    // Serial.println();
+
+    size_t sent = udp_obj[udpIndex].write((const uint8_t*)str, len);
+    dropTop(0); // удаляем строку (тип + длина + данные — предполагается, что dropTop это делает)
+    udp_obj[udpIndex].endPacket();
+    success = (sent == len);
   }
 
-  // ----------- Целые и float: отправляем все байты ------------
-  if ((type == TYPE_UINT8 && len == 1) ||
-      (type == TYPE_INT8 && len == 1) ||
-      (type == TYPE_UINT16 && len == 2) ||
-      (type == TYPE_INT16 && len == 2) ||
-      (type == TYPE_INT && len == 4) ||
-      (type == TYPE_BOOL && len == 1) ||
-      (type == TYPE_FLOAT && len == 4)) {
+  // ----------- Простые типы: числа, bool, float ------------
+  else if ((type == TYPE_UINT8 && len == 1) ||
+           (type == TYPE_INT8 && len == 1) ||
+           (type == TYPE_UINT16 && len == 2) ||
+           (type == TYPE_INT16 && len == 2) ||
+           (type == TYPE_INT && len == 4) ||
+           (type == TYPE_BOOL && len == 1) ||
+           (type == TYPE_FLOAT && len == 4)) {
+    // Данные указывают на последний байт значения (little-endian стек?)
+    // В вашей системе, как в tcpWrite, данные хранятся "задом наперёд"
+    size_t sent = udp_obj[udpIndex].write(data - (len - 1), len);
     dropTop(0);
-    // Отправляем напрямую из стека (младший байт первый)
-    int sent = udp_obj[udpIndex].write(data - (len - 1), len);
-    pushBool(sent == len);
-    return;
+    udp_obj[udpIndex].endPacket();
+    success = (sent == len);
   }
 
   // ----------- Неподдерживаемый тип ------------
-  dropTop(0);
-  pushBool(false);
+  else {
+    udp_obj[udpIndex].endPacket();
+    dropTop(0);
+    pushBool(false);
+    return;
+  }
+
+  pushBool(success);
 }
 
 WiFiServer tcpServers[5];

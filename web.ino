@@ -269,7 +269,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         IPAddress ip = webSocket.remoteIP(num);
         //USE_outputStream->printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
           tmp = "out>ws";
-  executeLine(tmp);
+        executeLine(tmp);
         // send message to client
         String broadcast =invitationPrint();
         webSocket.sendTXT(num, broadcast);
@@ -281,11 +281,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         command += char(payload[i]);
       }
       command +=" ";
-       //command.replace("\r\n", "\n");
-       //command.replace("\n", " ");
-       //command.replace("  ", " ");
-       //if (command.length()==1 && command==" ") command="";
-       //outputStream->println(command);
       break;
   }
 }
