@@ -1,0 +1,15 @@
+// ———————————————————————
+// Устройстав на шилде load robot/my_robot_shild.wrd
+// ———————————————————————
+cont robot // создаем контекст робота
+// свяжим направление с пинами и насторим режим пинов
+var mPinL var mPinR
+mPinL = pins [ 5 ]
+mPinR = pins [ 6 ]
+pinMode mPinL OUTPUT
+pinMode mPinR OUTPUT
+// свяжим скорость моторов с пинами PWM
+var pPinL var pPinR
+pPinL = pins [ 7 ]
+pPinR = pins [ 8 ]
+

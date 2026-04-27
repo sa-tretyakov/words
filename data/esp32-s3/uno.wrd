@@ -1,0 +1,11 @@
+var pins var iopins
+pins = array u8 20
+iopins = array u8 20
+		      // | 0| | 1| | 2| | 3| | 4| | 5| | 6| | 7| | 8| | 9| |10| |11| |12| |13| |14| |15| |16| |17| |18| |19|
+pins [ ] =    44    43  18   17    19  20    3   14    20   46  10   11   13   12    2    1    7    6    5    4
+iopins [ ] =   0    0    0    0    0    0    0    0    0    0    0    0    0    0    0    0    0    0    0    0
+var wsled
+wsled = 48u8
+
+load "strip/rgb_init.wrd"
+brightness = 255u8

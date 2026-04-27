@@ -4,7 +4,7 @@ rtm
 // === ИНИЦИАЛИЗАЦИЯ ===
 var rtmPin var rtmChanal var rtmMode
 rtmChanal = 0
-rtmPin = 17
+rtmPin = 21
 rtmMode = 0
 rtmInit rtmChanal  rtmPin rtmMode
 
@@ -73,8 +73,10 @@ rtmSendBegin rtmChanal
 // fillPattern StripPixelBuf 0x1F
 +task "rtmAllBegin" 10
 oops
-
-load ex/rgb_effect.words
+// StripPixelBuf [ 0 ] = 0xFF
+// StripPixelBuf [ 4 ] = 0xFF00
+// StripPixelBuf [ 8 ] = 0xFF0000
+// load ex/rgb_effect.words
 ln 
 print "ex/rtm_example.words загружен" 
 ln

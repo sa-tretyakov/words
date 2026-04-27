@@ -1,5 +1,5 @@
 // load ex/rgb_effect.words
-
+-->>
 cont colors
 
 // создадим массив гамма корекции

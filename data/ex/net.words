@@ -2,8 +2,8 @@ cont wifi
 load wifi-config.json // Напишите в файле свои данные
 : wifiOk
 if ssid == ""
-ln print "Введите wifisave "ssid" "ssidPass""
-ln print "Запусти сеть start"
+ln print "Введите имя и пароль вашего роутера по примеру"
+ln print "wifisave "ssid" "ssidPass""
 ;
 : start
 if ssid != ""
@@ -15,6 +15,8 @@ onSta ssid ssidPass
 print "STA Start "
 print ipSta
 ln
+print "В браузере введите адрес http://"
+ln print ipSta
 onHTTP
 +loop "HTTP"
 onSoket
@@ -27,6 +29,8 @@ ssidPass =
 json>file "/wifi-config.json"
 json>
 json>serial
+ln print "Введите для запуска"
+ln print "start"
 main
 ;
 start

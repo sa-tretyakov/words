@@ -9,13 +9,14 @@ type "help.txt"
 // загружаем массив соответствия pin плата name
 var shielde
 shielde = chip
-shielde += "/wemosd1r32.wrd"
+print "Ваша плата "
+ln print chip
+shielde += "/uno.wrd"
 load shielde
 ln print shielde
 ln print "Добро пожаловать!"
 
 // load ex/servo_example.words
-load ex/blinker_example.words
 // load robot/8x8.wrd
 // load ex/7seg_example.words
 load ex/net.words
@@ -24,7 +25,6 @@ load ex/net.words
 // load ex/pinout.words
 
 main
-ln print "Words ждет вас!"
-// ln load ex/rtm_example.words
+ln ln print "Words ждет вас!"
 
 

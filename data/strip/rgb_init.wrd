@@ -1,6 +1,5 @@
 // load strip/rgb_init.wrd
 rtm
-
 // 1. Шаблон битов (всегда 8 значений u16)
 var rtmTimings
 rtmTimings = array u16 8
@@ -23,39 +22,36 @@ rtmFooter [ 1 ] = 12000u16 // 300 мкс
 rtmFooter [ 2 ] = 0u16
 rtmFooter [ 3 ] = 0u16
 
-cont rgb
-// === ИНИЦИАЛИЗАЦИЯ ===
-var stripPin var stripChanal
+cont strip
+var stripPin var stripChanal var stripMode
 stripChanal = 0
-stripPin = 17
+stripPin = 21
+
 var stripLeght
 stripLeght = 256
 var StripPixelBuf
 StripPixelBuf = array u8 stripLeght * 3
-: RGB // stripChanal stripPin rgbLeght
+
+: stripInit
 stripChanal = 
-stripPin = 
-stripLeght =
-rtmInit stripChanal  stripPin 0
-rtmClk stripChanal 0
+stripPin =
+rtmInit stripChanal stripPin 0
+rtmClk stripChanal 2
 rtmCarrier stripChanal 0 0 0 0
 rtmIdle stripChanal 1 0
-// Привязка протокола (один раз при старте)
-rtmSetProto  stripChanal rtmTimings      // ADDRINFO(адрес_протокола, 8, u16)
-rtmSetHeader stripChanal nullArray     // ADDRINFO(0, 0, u8)
-rtmSetFooter stripChanal rtmFooter     // ADDRINFO(адрес_футера, 4, u16)
+rtmSetProto  stripChanal rtmTimings     
+rtmSetHeader stripChanal nullArray     
+rtmSetFooter stripChanal rtmFooter     
 rtmSetData   stripChanal StripPixelBuf 
-rtmSendBegin stripChanal 
-oops
+
 ;
-// cont rgb
-// RGB 0 17 255
+stripInit 0 wsled
 
 
-// +task "rtmAllBegin" 10
-oops
 
-// load ex/rgb_effect.words
-ln 
-print "strip/rgb_init.wrd загружен" 
-ln
++task "rtmAllBegin" 10
+
+
+ln load ex/rgb_effect.words
+
+// ln print "strip/rgb_init.wrd загружен" 
