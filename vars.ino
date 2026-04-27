@@ -13,6 +13,9 @@ void varsInit() {
   addMarkerWord("u16");
   addMarkerWord("i16");
   addMarkerWord("i32");
+  addInternalWord("fillPattern", fillPatternFunc);
+  addInternalWord("mapScale", mapScaleWord);
+  addInternalWord("loadGamma", loadGammaWord);
    tmp = "main";
   executeLine(tmp);
 }

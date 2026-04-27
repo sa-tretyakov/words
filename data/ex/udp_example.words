@@ -1,5 +1,5 @@
 // echo -n "Hello ESP!" | nc -u -w1 192.168.2.93 1900
-cont udp // Новый контекст 
+udp // Новый контекст 
 
 var udpsoc var udpBuffer // Сокет и буфер данных 
 udpsoc = 0u8 
@@ -13,6 +13,7 @@ ln print
 
 
 : udpRead                                 // Это слово будет читать данные из порта
+out>serial
 udpcount = 0u16                           // счетчик 0
 packet_size = udpAvailable udpsoc         // есть ли пакет
 if packet_size != 0u16                    // Если есть пакет есть выполним все до конца слова
@@ -28,6 +29,7 @@ udpcount += 1u16                          // следующий символ
 }
 ln
 ln print "End poket"
+out>ws
 ;
 
 

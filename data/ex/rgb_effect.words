@@ -1,0 +1,59 @@
+// load ex/rgb_effect.words
+
+cont colors
+
+// создадим массив гамма корекции
+var GammaArr
+GammaArr = array u8 256
+// заполним массив числами с 
+loadGamma GammaArr 220
+// Создадим хранилише для для константы цвета
+var arrayColor
+arrayColor = array u8 3u8 
+arrayColor [ ] = 0x00 0x00 0x00  /
+// переменные для расчета 0xRRGGBB -к- R G B 
+var R var G var B var rgbTemp
+R = 0u8
+G = 0u8
+B = 0u8
+rgbTemp = 0
+// цвет в R B G rgbColor 0xRRGGBB (0xRRGGBB -- R G B )
+: rgbColor
+>i
+dup dup
+  rgbTemp =
+  B = rgbTemp % 256
+  rgbTemp =
+  rgbTemp = rgbTemp / 256
+  G = rgbTemp % 256
+  rgbTemp =
+  rgbTemp = rgbTemp / 65536
+  R = rgbTemp % 256
+;
+var GRB
+GRB = array u8 len StripPixelBuf
+var brightness
+brightness = 10u8
+
+// grbSet 0xRRGGBB 
+: grbSet
+rgbColor              // Преобразуем 
+arrayColor [ 0 ] = G  // Поместим цвет в шаблон 0xRRGGBB -- R G B
+arrayColor [ 1 ] = R
+arrayColor [ 2 ] = B
+fillPattern GRB arrayColor // Заполним массив заданным цветом
+mapScale GRB StripPixelBuf GammaArr brightness 
+;
+
+: Random_Full
+grbSet rand
+;
+: Random_Color
++task "Random_Full"
+;
+Random_Color 1000
+
+// -task "Random_Full"
+ln
+print "ex/rgb_effect.words загружен" 
+ln

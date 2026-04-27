@@ -1,3 +1,165 @@
+void loadGammaWord(uint16_t addr) {
+    // Стек (сверху вниз): dst_block → gamma_x100
+    uint16_t dst_addr, dst_len;
+    if (!popAddrInfo(&dst_addr, &dst_len)) return;
+    if (dst_len < 256) return;
+
+    uint16_t gamma_x100;
+    if (!popAsUInt16(&gamma_x100)) return;
+    if (gamma_x100 < 100 || gamma_x100 > 500) return;
+
+    uint16_t steps = gamma_x100 / 100;
+    if (steps > 5) steps = 5;
+    if (steps < 1) steps = 1;
+
+    // ✅ ИНДЕКС ПУЛА → РЕАЛЬНЫЙ RAM-УКАЗАТЕЛЬ
+    uint8_t* dst = &dataPool[dst_addr];
+
+    for (uint16_t i = 0; i < 256; i++) {
+        uint32_t res = i;
+        uint32_t v = i;
+        for (uint16_t k = 1; k < steps; k++) {
+            res = (res * v) / 255;
+        }
+        dst[i] = (res > 255) ? 255 : (uint8_t)res;
+    }
+}
+
+void mapScaleWord(uint16_t addr) {
+    // HDL: mapScale источник приёмник таблица яркость
+    // Стек (снизу→вверх): [яркость] [таблица] [приёмник] [источник]
+    // Извлечение (сверху→вниз): источник → приёмник → таблица → яркость
+
+    // 1. Источник
+    uint16_t src_addr, src_len;
+    if (!popAddrInfo(&src_addr, &src_len)) {
+        if (outputStream) outputStream->println("⚠️ mapScale: не удалось извлечь источник (ожидался блок)");
+        return;
+    }
+
+    // 2. Приёмник
+    uint16_t dst_addr, dst_len;
+    if (!popAddrInfo(&dst_addr, &dst_len)) {
+        if (outputStream) outputStream->println("⚠️ mapScale: не удалось извлечь приёмник (ожидался блок)");
+        return;
+    }
+    if (src_len != dst_len) {
+        if (outputStream) outputStream->printf("⚠️ mapScale: длины не совпадают (src=%d, dst=%d)\n", src_len, dst_len);
+        return;
+    }
+    if (src_len == 0) {
+        if (outputStream) outputStream->println("⚠️ mapScale: пустой блок (длина 0)");
+        return;
+    }
+
+    // 3. Таблица коррекции
+    uint16_t lut_addr, lut_len;
+    if (!popAddrInfo(&lut_addr, &lut_len)) {
+        if (outputStream) outputStream->println("⚠️ mapScale: не удалось извлечь таблицу (ожидался блок или 0)");
+        return;
+    }
+    // Если таблица указана, но короче 256 — предупреждаем, но не прерываем (может быть укороченная)
+    if (lut_addr != 0 && lut_len < 256) {
+        if (outputStream) outputStream->printf("⚠️ mapScale: таблица короткая (%d < 256), возможны артефакты\n", lut_len);
+    }
+
+    // 4. Яркость
+    uint8_t coeff;
+    if (!popAsUInt8(&coeff)) {
+        if (outputStream) outputStream->println("⚠️ mapScale: не удалось извлечь яркость (ожидалось uint8 0..255)");
+        return;
+    }
+
+    // Преобразование индексов пула в указатели
+    const uint8_t* src = &dataPool[src_addr];
+    uint8_t* dst       = &dataPool[dst_addr];
+    const uint8_t* lut = (lut_addr != 0) ? &dataPool[lut_addr] : nullptr;
+
+    // Быстрый путь: копирование без изменений
+    if (coeff == 255 && lut == nullptr) {
+        if (outputStream) outputStream->println("ℹ️ mapScale: быстрый путь — копирование (coeff=255, no LUT)");
+        memcpy(dst, src, src_len);
+        return;
+    }
+
+    // Быстрый путь: гашение
+    if (coeff == 0) {
+        if (outputStream) outputStream->println("ℹ️ mapScale: быстрый путь — гашение (coeff=0)");
+        memset(dst, 0, src_len);
+        return;
+    }
+
+    // Отладочный вывод перед циклом (можно закомментировать в продакшене)
+    // if (outputStream) outputStream->printf("▶ mapScale: len=%d, coeff=%d, lut=%s\n", src_len, coeff, lut ? "ON" : "OFF");
+
+    // Основной цикл: сначала коррекция, потом яркость
+    for (uint16_t i = 0; i < src_len; i++) {
+        uint8_t v = lut ? lut[src[i]] : src[i];
+        
+        // Округляем результат деления вместо отбрасывания дробной части
+        uint16_t res = (v * coeff + 128) >> 8;
+        
+        // Мягкий минимум: если источник был >0, результат минимум 1
+        dst[i] = (res == 0 && v > 0) ? 1 : res;
+    }
+}
+
+
+
+// fillPattern: dest src -- (void)
+// Заполняет dest значением или блоком src. Тип определяется по метаданным стека.
+void fillPatternFunc(uint16_t addr) {
+    uint16_t dst_addr, dst_len;
+    if (!popAddrInfo(&dst_addr, &dst_len)) return;
+
+    if (stackTop < 3) return; // Минимум: данные(≥1) + len + type
+
+    // 1. Читаем тип и длину шаблона ПРЯМО со стека
+    uint8_t src_type = stack[stackTop - 1];
+    uint8_t src_len  = stack[stackTop - 2];
+
+    uint8_t tmp_buf[8];        // Буфер для скаляров (u8/u16/u24/u32/float...)
+    uint16_t block_len = 0;
+    const uint8_t* src_ptr = nullptr;
+
+    // 2. Ветка по типу
+    if (src_type == TYPE_ADDRINFO) {  // ← Замени на свой константный тип ссылки
+        uint16_t tmp_addr;
+        if (!popAddrInfo(&tmp_addr, &block_len)) return;
+        src_ptr = &dataPool[tmp_addr];
+    } else {
+        // Скаляр: копируем байты в буфер и снимаем со стека
+        if (src_len > sizeof(tmp_buf)) { stackTop -= (src_len + 2); return; }
+        memcpy(tmp_buf, &stack[stackTop - 2 - src_len], src_len);
+        stackTop -= (src_len + 2);  // Атомарно снимаем скаляр
+        src_ptr = tmp_buf;
+        block_len = src_len;
+    }
+
+    // 3. Валидация
+    if (block_len == 0 || block_len > dst_len) {
+        outputStream->println("⚠️ fillPattern: шаблон больше буфера или пустой");
+        return;
+    }
+    if (src_type == TYPE_ADDRINFO) {
+        uint16_t src_addr = src_ptr - dataPool;
+        if (src_addr + block_len > DATA_POOL_SIZE) {
+            outputStream->println("⚠️ fillPattern: массив за пределами dataPool");
+            return;
+        }
+    }
+
+    // 4. Заполнение (универсальный цикл)
+    uint16_t full = dst_len / block_len;
+    uint16_t rem  = dst_len % block_len;
+
+    for (uint16_t i = 0; i < full; i++) {
+        memcpy(&dataPool[dst_addr + i * block_len], src_ptr, block_len);
+    }
+    if (rem > 0) {
+        memcpy(&dataPool[dst_addr + full * block_len], src_ptr, rem);
+    }
+}
 
 bool writeArrayElement(uint16_t poolRef, uint16_t elemCount, uint8_t elemType, int32_t index, const uint8_t* valueData, uint8_t valueType) {
   if (index < 0 || index >= elemCount) {

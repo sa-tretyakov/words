@@ -10,27 +10,37 @@
 #if FILESYSTEM == SPIFFS
 #include <FS.h>
 #endif
+
 #if FILESYSTEM == LittleFS
+#include "FS.h"
 #include <LittleFS.h>
 #endif
+
 #if FILESYSTEM == SD
 #include "SD.h"
 #include "SPI.h"
 #endif
+
 #else
+
 #if FILESYSTEM == FFat
 #include <FFat.h>
 #endif
+
 #if FILESYSTEM == SPIFFS
 #include <SPIFFS.h>
 #endif
+
 #if FILESYSTEM == LittleFS
 #include <LittleFS.h>
+#include "FS.h"
 #endif
+
 #if FILESYSTEM == SD
 #include "SD.h"
 #include "SPI.h"
 #endif
+
 #endif
 
 #include <WebServer.h>
@@ -172,6 +182,14 @@ enum ValueType : uint8_t {
 #define OP_MOD 4  // ← остаток от деления
 #define OP_XOR 5
 
+// логика
+#define OP_SHL 6
+#define OP_SHR 7
+#define OP_OR 8
+#define OP_AND 9
+
+
+
 // Сравнения
 #define CMP_EQ 0  // ==
 #define CMP_NE 1  // !=
@@ -240,6 +258,8 @@ bool popMarkerIf(char expected) {
   dropTop(0); // убирает маркер
   return true;
 }
+
+
 // Попытка извлечь любое целое число со стека и вернуть как int32_t
 // Возвращает true при успехе, false — при ошибке
 // Извлекает любое целое число со стека и возвращает как int32_t.
@@ -292,6 +312,51 @@ bool popInt32FromAny(int32_t* out) {
   *out = 0;
   return false;
 }
+
+// ==========================================
+// 1. ГИБКИЕ POP-ФУНКЦИИ (CLAMP + LOG)
+// ==========================================
+bool popAsUInt8(uint8_t* out) {
+    int32_t val; if (!popInt32FromAny(&val)) return false;
+    if (val > 255) { if (outputStream) outputStream->println("⚠️ popAsUInt8: clamped to 255"); *out = 255; }
+    else if (val < 0) { if (outputStream) outputStream->println("⚠️ popAsUInt8: clamped to 0"); *out = 0; }
+    else *out = (uint8_t)val;
+    return true;
+}
+
+bool popAsUInt16(uint16_t* out) {
+    int32_t val; if (!popInt32FromAny(&val)) return false;
+    if (val > 65535) { if (outputStream) outputStream->println("⚠️ popAsUInt16: clamped to 65535"); *out = 65535; }
+    else if (val < 0) { if (outputStream) outputStream->println("⚠️ popAsUInt16: clamped to 0"); *out = 0; }
+    else *out = (uint16_t)val;
+    return true;
+}
+
+bool popAsInt8(int8_t* out) {
+    int32_t val; if (!popInt32FromAny(&val)) return false;
+    if (val > 127) { if (outputStream) outputStream->println("⚠️ popAsInt8: clamped to 127"); *out = 127; }
+    else if (val < -128) { if (outputStream) outputStream->println("⚠️ popAsInt8: clamped to -128"); *out = -128; }
+    else *out = (int8_t)val;
+    return true;
+}
+
+bool popAsInt16(int16_t* out) {
+    int32_t val; if (!popInt32FromAny(&val)) return false;
+    if (val > 32767) { if (outputStream) outputStream->println("⚠️ popAsInt16: clamped to 32767"); *out = 32767; }
+    else if (val < -32768) { if (outputStream) outputStream->println("⚠️ popAsInt16: clamped to -32768"); *out = -32768; }
+    else *out = (int16_t)val;
+    return true;
+}
+
+// ==========================================
+// 2. ВНУТРЕННИЕ СЛОВА ( >type )
+// ==========================================
+void toU8Func(uint16_t addr) { uint8_t r; if(!popAsUInt8(&r)) return; pushUInt8(r); }
+void toU16Func(uint16_t addr) { uint16_t r; if(!popAsUInt16(&r)) return; pushUInt16(r); }
+void toI8Func(uint16_t addr)  { int8_t r;  if(!popAsInt8(&r)) return;  pushInt8(r); }
+void toI16Func(uint16_t addr) { int16_t r; if(!popAsInt16(&r)) return; pushInt16(r); }
+void toIntFunc(uint16_t addr) { int32_t r; if(!popInt32FromAny(&r)) return; pushInt(r); }
+
 // ========================
 // POP функции (для будущего использования)
 // ========================
@@ -352,64 +417,6 @@ int8_t popInt8() {
   return static_cast<int8_t>(stack[stackTop]);
 }
 
-// Пытается извлечь значение со стека и преобразовать его к uint8_t
-// Поддерживает: uint8, int8, uint16, int16, int32
-// Возвращает true при успехе, false — при ошибке или выходе за [0..255]
-bool popAsUInt8(uint8_t* out) {
-  if (stackTop < 2) return false;
-
-  uint8_t type = stack[stackTop - 1];
-  uint8_t len = stack[stackTop - 2];
-
-  if (len > stackTop - 2) return false;
-  const uint8_t* data = &stack[stackTop - 2 - len];
-
-  int32_t val = 0;
-
-  switch (type) {
-    case TYPE_UINT8:
-      if (len == 1) {
-        val = data[0];
-      }
-      else return false;
-      break;
-    case TYPE_INT8:
-      if (len == 1) {
-        val = (int8_t)data[0];
-      }
-      else return false;
-      break;
-    case TYPE_UINT16:
-      if (len == 2) {
-        uint16_t v;
-        memcpy(&v, data, 2);
-        val = v;
-      }
-      else return false;
-      break;
-    case TYPE_INT16:
-      if (len == 2) {
-        int16_t v;
-        memcpy(&v, data, 2);
-        val = v;
-      }
-      else return false;
-      break;
-    case TYPE_INT:
-      if (len == 4) {
-        memcpy(&val, data, 4);
-      }
-      else return false;
-      break;
-    default:
-      return false;
-  }
-
-  if (val < 0 || val > 255) return false;
-  *out = (uint8_t)val;
-  dropTop(0);
-  return true;
-}
 uint8_t popUInt8() {
   uint8_t len, type;
   popMetadata(len, type);
@@ -514,6 +521,7 @@ void setup() {
   for (int i = 0; i <= 255; i++) {
     Serial.println();
   }
+  //analogWriteResolution(10);
 
 
 
@@ -524,12 +532,22 @@ void setup() {
   addInternalWord("goto", gotoFunc);
   addrGoto = findWordAddress("goto");
   addInternalWord("words", wordsWord);
+  addMarkerWord("MARKER");
   addInternalWord("oops", oopsFunc);
   addInternalWord("`", printDictionary);
   addInternalWord("->", dropTop);
+  addInternalWord("dup", dupFunc);
+  addInternalWord("dup2", dup2Func);
+  addInternalWord("swap", swapFunc);
+  addInternalWord("hop", mychoiceFunc); 
   addInternalWord(":", colonWord);
   addInternalWord("reset", resetFunc);
   addInternalWord("nop", nopFunc);
+addInternalWord(">u8",  toU8Func);
+addInternalWord(">u16", toU16Func);
+addInternalWord(">i8",  toI8Func);
+addInternalWord(">i16", toI16Func);
+addInternalWord(">i",   toIntFunc);
   varsInit();
   logicsInit();
   mathInit();
@@ -543,6 +561,7 @@ void setup() {
   taskInit();
   filesInit();
   debugInit();
+  rtmInit();
 
   strInit();
   wifiInit();

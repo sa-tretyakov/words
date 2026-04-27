@@ -1,0 +1,80 @@
+// load ex/rtm_example.words
+rtm
+
+// === ИНИЦИАЛИЗАЦИЯ ===
+var rtmPin var rtmChanal var rtmMode
+rtmChanal = 0
+rtmPin = 17
+rtmMode = 0
+rtmInit rtmChanal  rtmPin rtmMode
+
+// === НАСТРОЙКА ТАЙМЕРА ===
+var rtmClkDiv
+rtmClkDiv = 2
+rtmClk rtmChanal rtmClkDiv
+
+
+//  === ОТКЛЮЧЕНИЕ НЕСУЩЕЙ (для WS2812) ===
+var rtmCarrierEn var rtmCarrierFreq var rtmCarrierDuty var rtmCarrierLevel
+rtmCarrierEn = 0
+rtmCarrierFreq = 0
+rtmCarrierDuty = 0
+rtmCarrierLevel = 0
+rtmCarrier rtmChanal rtmCarrierEn rtmCarrierFreq rtmCarrierDuty rtmCarrierLevel
+
+
+// === УРОВЕНЬ В ПРОСТОЕ (для стабильной работы) ===
+var rtmIdleEn var rtmIdleLevel
+rtmIdleEn = 1          // 1 = фиксировать уровень в простое
+rtmIdleLevel = 0       // 0 = LOW, 1 = HIGH
+rtmIdle rtmChanal rtmIdleEn rtmIdleLevel
+
+cont rgb
+// 1. Шаблон битов (всегда 8 значений u16)
+var rtmTimings
+rtmTimings = array u16 8
+// rtmProto [  ] = 0x01 0x0C 0x00 0x24 0x01 0x1C 0x00 0x18
+
+rtmTimings [ 0 ] = 1u16   // T0 Level0
+rtmTimings [ 1 ] = 12u16  // T0 Duration0 (300 нс)
+rtmTimings [ 2 ] = 0u16   // T0 Level1
+rtmTimings [ 3 ] = 36u16  // T0 Duration1 (900 нс)
+rtmTimings [ 4 ] = 1u16   // T1 Level0
+rtmTimings [ 5 ] = 28u16  // T1 Duration0 (700 нс)
+rtmTimings [ 6 ] = 0u16   // T1 Level1
+rtmTimings [ 7 ] = 24u16  // T1 Duration1 (600 нс)
+
+
+// 2. Заголовок (для WS2812 не нужен)
+
+
+// 3. Завершение (пауза >280 мкс = LOW)
+// 1 RMT-импульс = 4 u16: [L0, D0, L1, D1]
+var rtmFooter
+rtmFooter = array u16 4u16
+// rtmFooter [ ] = 0x0000 0x2EE0 0x0000 0x0000
+rtmFooter [ 0 ] = 0u16
+rtmFooter [ 1 ] = 12000u16 // 300 мкс
+rtmFooter [ 2 ] = 0u16
+rtmFooter [ 3 ] = 0u16
+
+// Привязка протокола (один раз при старте)
+rtmSetProto  rtmChanal rtmTimings      // ADDRINFO(адрес_протокола, 8, u16)
+rtmSetHeader rtmChanal nullArray     // ADDRINFO(0, 0, u8)
+rtmSetFooter rtmChanal rtmFooter     // ADDRINFO(адрес_футера, 4, u16)
+
+var StripPixelBuf
+// 10 светодиодов по 3 байта = 30 байт массива
+StripPixelBuf = array u8 3 * 256
+rtmSetData   rtmChanal StripPixelBuf           // ADDRINFO(адрес_данных, 30, u8)
+
+// очистить
+rtmSendBegin rtmChanal 
+// fillPattern StripPixelBuf 0x1F
++task "rtmAllBegin" 10
+oops
+
+load ex/rgb_effect.words
+ln 
+print "ex/rtm_example.words загружен" 
+ln

@@ -1,6 +1,7 @@
 void mathInit() {
   String tmp = "cont math";
   executeLine(tmp);
+  addMarkerWord(")");
   addMarkerWord("=");
   addMarkerWord("+");
   addMarkerWord("-");
@@ -12,6 +13,12 @@ void mathInit() {
   addMarkerWord("/=");
   addMarkerWord("%");
   addMarkerWord("^");
+  addMarkerWord("<<");
+  addMarkerWord(">>");
+  addMarkerWord("&");
+  addMarkerWord("|");
+  addInternalWord("not", notWord);  
+  addInternalWord("abs", absWord);  
  tmp = "main";
   executeLine(tmp);
 }
@@ -93,6 +100,54 @@ void notWord(uint16_t addr) {
     return;
   }
 }
+
+void absWord(uint16_t addr) {
+  // Нужно минимум 2 элемента на стеке: [длина, тип]
+  if (stackTop < 2) return;
+
+  uint8_t len = stack[stackTop - 2];
+  uint8_t type = stack[stackTop - 1];
+
+  // Обрабатываем только знаковые числовые типы
+  if (type == TYPE_INT8 && len == 1) {
+    int8_t val = popInt8();
+    // Избегаем переполнения: для -128 abs не определён в int8_t, но в embedded часто допускают
+    if (val < 0) {
+      // Обрезаем до максимального положительного, если нужно
+      pushInt8((val == -128) ? 127 : -val);
+    } else {
+      pushInt8(val);
+    }
+  }
+  else if (type == TYPE_INT16 && len == 2) {
+    int16_t val = popInt16();
+    if (val < 0) {
+      pushInt16((val == -32768) ? 32767 : -val);
+    } else {
+      pushInt16(val);
+    }
+  }
+  else if (type == TYPE_INT && len == 4) {
+    int32_t val = popInt();
+    if (val < 0) {
+      // Для int32_t: -2147483648 -> 2147483647 (стандартный компромисс)
+      pushInt((val == INT32_MIN) ? INT32_MAX : -val);
+    } else {
+      pushInt(val);
+    }
+  }
+  else if (type == TYPE_FLOAT && len == 4) {
+    float val = popFloat();
+    pushFloat(val < 0.0f ? -val : val);
+  }
+  else {
+    // Беззнаковые и логические типы — оставляем без изменений
+    // (или можно игнорировать — но для удобства вернём как есть)
+    // В вашем случае, вероятно, лучше ничего не делать
+    return;
+  }
+}
+
 
 bool compareResult(int cmp, uint8_t op) {
   switch (op) {
@@ -207,7 +262,6 @@ void storeValueToVariable(uint16_t addr, const uint8_t* data, uint8_t len, uint8
   dictionary[addr + 3 + nameLen + 2 + 3] = 0;
 }
 
-
 void applyBinaryOp(uint16_t addr, uint8_t op) {
   uint8_t argType, argLen;
   const uint8_t* argData;
@@ -228,27 +282,14 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
 
   // === XOR (^) ===
   if (op == OP_XOR) {
-    // === int32 ===
     if (argType == TYPE_INT && varType == TYPE_INT && argLen == 4 && varLen == 4) {
       uint32_t a, b;
-      memcpy(&a, argData, 4);   // правый (со стека)
-      memcpy(&b, varData, 4);   // левый (переменная)
+      memcpy(&a, argData, 4);
+      memcpy(&b, varData, 4);
       dropTop(0);
-      uint32_t res = b ^ a;
-      pushInt((int32_t)res);
+      pushInt((int32_t)(b ^ a));
       return;
     }
-
-    // === int8 ===
-    if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
-      uint8_t a = argData[0];
-      uint8_t b = varData[0];
-      dropTop(0);
-      pushInt8((int8_t)(b ^ a));
-      return;
-    }
-
-    // === uint8 ===
     if (argType == TYPE_UINT8 && varType == TYPE_UINT8 && argLen == 1 && varLen == 1) {
       uint8_t a = argData[0];
       uint8_t b = varData[0];
@@ -256,18 +297,13 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
       pushUInt8(b ^ a);
       return;
     }
-
-    // === int16 ===
-    if (argType == TYPE_INT16 && varType == TYPE_INT16 && argLen == 2 && varLen == 2) {
-      uint16_t a, b;
-      memcpy(&a, argData, 2);
-      memcpy(&b, varData, 2);
+    if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
       dropTop(0);
-      pushInt16((int16_t)(b ^ a));
+      pushInt8((int8_t)(b ^ a));
       return;
     }
-
-    // === uint16 ===
     if (argType == TYPE_UINT16 && varType == TYPE_UINT16 && argLen == 2 && varLen == 2) {
       uint16_t a, b;
       memcpy(&a, argData, 2);
@@ -276,8 +312,14 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
       pushUInt16(b ^ a);
       return;
     }
-
-    // === bool ===
+    if (argType == TYPE_INT16 && varType == TYPE_INT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      pushInt16((int16_t)(b ^ a));
+      return;
+    }
     if (argType == TYPE_BOOL && varType == TYPE_BOOL && argLen == 1 && varLen == 1) {
       bool a = (argData[0] != 0);
       bool b = (varData[0] != 0);
@@ -285,8 +327,208 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
       pushBool(b ^ a);
       return;
     }
+    uint8_t Type, Len;
+    const uint8_t* Data;
+    if (readVariableValue(addr, &Type, &Len, &Data)) {
+      pushValue(Data, Len, Type);
+    }
+    return;
+  }
 
-    // Неподдерживаемая комбинация — пушим значение переменной
+  // === OR (|) ===
+  if (op == OP_OR) {
+    if (argType == TYPE_INT && varType == TYPE_INT && argLen == 4 && varLen == 4) {
+      uint32_t a, b;
+      memcpy(&a, argData, 4);
+      memcpy(&b, varData, 4);
+      dropTop(0);
+      pushInt((int32_t)(b | a));
+      return;
+    }
+    if (argType == TYPE_UINT8 && varType == TYPE_UINT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      pushUInt8(b | a);
+      return;
+    }
+    if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      pushInt8((int8_t)(b | a));
+      return;
+    }
+    if (argType == TYPE_UINT16 && varType == TYPE_UINT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      pushUInt16(b | a);
+      return;
+    }
+    if (argType == TYPE_INT16 && varType == TYPE_INT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      pushInt16((int16_t)(b | a));
+      return;
+    }
+    uint8_t Type, Len;
+    const uint8_t* Data;
+    if (readVariableValue(addr, &Type, &Len, &Data)) {
+      pushValue(Data, Len, Type);
+    }
+    return;
+  }
+
+  // === AND (&) ===
+  if (op == OP_AND) {
+    if (argType == TYPE_INT && varType == TYPE_INT && argLen == 4 && varLen == 4) {
+      uint32_t a, b;
+      memcpy(&a, argData, 4);
+      memcpy(&b, varData, 4);
+      dropTop(0);
+      pushInt((int32_t)(b & a));
+      return;
+    }
+    if (argType == TYPE_UINT8 && varType == TYPE_UINT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      pushUInt8(b & a);
+      return;
+    }
+    if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      pushInt8((int8_t)(b & a));
+      return;
+    }
+    if (argType == TYPE_UINT16 && varType == TYPE_UINT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      pushUInt16(b & a);
+      return;
+    }
+    if (argType == TYPE_INT16 && varType == TYPE_INT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      pushInt16((int16_t)(b & a));
+      return;
+    }
+    uint8_t Type, Len;
+    const uint8_t* Data;
+    if (readVariableValue(addr, &Type, &Len, &Data)) {
+      pushValue(Data, Len, Type);
+    }
+    return;
+  }
+
+  // === SHL (<<) ===
+  if (op == OP_SHL) {
+    if (argType == TYPE_INT && varType == TYPE_INT && argLen == 4 && varLen == 4) {
+      uint32_t a, b;
+      memcpy(&a, argData, 4);
+      memcpy(&b, varData, 4);
+      dropTop(0);
+      uint32_t shift = a & 31;
+      pushInt((int32_t)(b << shift));
+      return;
+    }
+    if (argType == TYPE_UINT8 && varType == TYPE_UINT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      uint8_t shift = a & 7;
+      pushUInt8(b << shift);
+      return;
+    }
+    if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      uint8_t shift = a & 7;
+      pushInt8((int8_t)(b << shift));
+      return;
+    }
+    if (argType == TYPE_UINT16 && varType == TYPE_UINT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      uint16_t shift = a & 15;
+      pushUInt16(b << shift);
+      return;
+    }
+    if (argType == TYPE_INT16 && varType == TYPE_INT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      uint16_t shift = a & 15;
+      pushInt16((int16_t)(b << shift));
+      return;
+    }
+    uint8_t Type, Len;
+    const uint8_t* Data;
+    if (readVariableValue(addr, &Type, &Len, &Data)) {
+      pushValue(Data, Len, Type);
+    }
+    return;
+  }
+
+  // === SHR (>>) ===
+  if (op == OP_SHR) {
+    if (argType == TYPE_INT && varType == TYPE_INT && argLen == 4 && varLen == 4) {
+      uint32_t a, b;
+      memcpy(&a, argData, 4);
+      memcpy(&b, varData, 4);
+      dropTop(0);
+      uint32_t shift = a & 31;
+      pushInt((int32_t)((uint32_t)b >> shift));
+      return;
+    }
+    if (argType == TYPE_UINT8 && varType == TYPE_UINT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      uint8_t shift = a & 7;
+      pushUInt8(b >> shift);
+      return;
+    }
+    if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
+      uint8_t a = argData[0];
+      uint8_t b = varData[0];
+      dropTop(0);
+      uint8_t shift = a & 7;
+      pushInt8((int8_t)((uint8_t)b >> shift));
+      return;
+    }
+    if (argType == TYPE_UINT16 && varType == TYPE_UINT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      uint16_t shift = a & 15;
+      pushUInt16(b >> shift);
+      return;
+    }
+    if (argType == TYPE_INT16 && varType == TYPE_INT16 && argLen == 2 && varLen == 2) {
+      uint16_t a, b;
+      memcpy(&a, argData, 2);
+      memcpy(&b, varData, 2);
+      dropTop(0);
+      uint16_t shift = a & 15;
+      pushInt16((int16_t)((uint16_t)b >> shift));
+      return;
+    }
     uint8_t Type, Len;
     const uint8_t* Data;
     if (readVariableValue(addr, &Type, &Len, &Data)) {
@@ -298,8 +540,8 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
   // === int32 ===
   if (argType == TYPE_INT && varType == TYPE_INT && argLen == 4 && varLen == 4) {
     int32_t a, b;
-    memcpy(&a, argData, 4);   // правый операнд (со стека)
-    memcpy(&b, varData, 4);   // левый операнд (значение переменной)
+    memcpy(&a, argData, 4);
+    memcpy(&b, varData, 4);
     dropTop(0);
     switch (op) {
       case OP_ADD: pushInt(b + a); break;
@@ -307,14 +549,18 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
       case OP_MUL: pushInt(b * a); break;
       case OP_DIV: pushInt(a != 0 ? b / a : 0); break;
       case OP_MOD: pushInt(a != 0 ? b % a : 0); break;
+      default:
+        if (readVariableValue(addr, &varType, &varLen, &varData)) {
+          pushValue(varData, varLen, varType);
+        }
     }
     return;
   }
 
   // === int8 ===
   if (argType == TYPE_INT8 && varType == TYPE_INT8 && argLen == 1 && varLen == 1) {
-    int8_t a = (int8_t)argData[0];   // правый
-    int8_t b = (int8_t)varData[0];   // левый
+    int8_t a = (int8_t)argData[0];
+    int8_t b = (int8_t)varData[0];
     dropTop(0);
     switch (op) {
       case OP_ADD: {
@@ -358,14 +604,18 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
           }
           break;
         }
+      default:
+        if (readVariableValue(addr, &varType, &varLen, &varData)) {
+          pushValue(varData, varLen, varType);
+        }
     }
     return;
   }
 
   // === uint8 ===
   if (argType == TYPE_UINT8 && varType == TYPE_UINT8 && argLen == 1 && varLen == 1) {
-    uint8_t a = argData[0];   // правый
-    uint8_t b = varData[0];   // левый
+    uint8_t a = argData[0];
+    uint8_t b = varData[0];
     dropTop(0);
     switch (op) {
       case OP_ADD: {
@@ -408,6 +658,10 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
             pushUInt8(0);
           }
           break;
+        }
+      default:
+        if (readVariableValue(addr, &varType, &varLen, &varData)) {
+          pushValue(varData, varLen, varType);
         }
     }
     return;
@@ -461,6 +715,10 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
           }
           break;
         }
+      default:
+        if (readVariableValue(addr, &varType, &varLen, &varData)) {
+          pushValue(varData, varLen, varType);
+        }
     }
     return;
   }
@@ -513,6 +771,10 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
           }
           break;
         }
+      default:
+        if (readVariableValue(addr, &varType, &varLen, &varData)) {
+          pushValue(varData, varLen, varType);
+        }
     }
     return;
   }
@@ -520,15 +782,18 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
   // === float ===
   if (argType == TYPE_FLOAT && varType == TYPE_FLOAT && argLen == 4 && varLen == 4) {
     float a, b;
-    memcpy(&a, argData, 4);   // правый
-    memcpy(&b, varData, 4);   // левый
+    memcpy(&a, argData, 4);
+    memcpy(&b, varData, 4);
     dropTop(0);
     switch (op) {
       case OP_ADD: pushFloat(b + a); break;
       case OP_SUB: pushFloat(b - a); break;
       case OP_MUL: pushFloat(b * a); break;
       case OP_DIV: pushFloat(a != 0.0f ? b / a : 0.0f); break;
-      // % и ^ не поддерживаются для float
+      default:
+        if (readVariableValue(addr, &varType, &varLen, &varData)) {
+          pushValue(varData, varLen, varType);
+        }
     }
     return;
   }
@@ -537,13 +802,11 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
   if (op == OP_ADD && argType == TYPE_STRING && varType == TYPE_STRING) {
     uint8_t newLen = varLen + argLen;
     if (newLen > 255) newLen = 255;
-
     uint8_t result[255];
-    memcpy(result, varData, varLen);               // левый: значение переменной
+    memcpy(result, varData, varLen);
     uint8_t secondPart = (newLen > varLen) ? (newLen - varLen) : 0;
     if (secondPart > argLen) secondPart = argLen;
-    memcpy(result + varLen, argData, secondPart);  // правый: со стека
-
+    memcpy(result + varLen, argData, secondPart);
     dropTop(0);
     pushValue(result, newLen, TYPE_STRING);
     return;
@@ -551,21 +814,20 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
 
   // === bool (только сложение) ===
   if (op == OP_ADD && argType == TYPE_BOOL && varType == TYPE_BOOL && argLen == 1 && varLen == 1) {
-    int32_t a = argData[0] ? 1 : 0;   // правый
-    int32_t b = varData[0] ? 1 : 0;   // левый
+    int32_t a = argData[0] ? 1 : 0;
+    int32_t b = varData[0] ? 1 : 0;
     dropTop(0);
     pushInt(b + a);
     return;
   }
 
-  // === Общий fallback для целых типов (разные типы) — только для % ===
+  // === Общий fallback для % с разными целыми типами ===
   if (op == OP_MOD &&
       (argType == TYPE_INT || argType == TYPE_UINT8 || argType == TYPE_INT8 ||
        argType == TYPE_UINT16 || argType == TYPE_INT16) &&
       (varType == TYPE_INT || varType == TYPE_UINT8 || varType == TYPE_INT8 ||
        varType == TYPE_UINT16 || varType == TYPE_INT16)) {
 
-    // Преобразуем правый операнд (делитель)
     int32_t a = 0;
     if (argType == TYPE_INT && argLen == 4) memcpy(&a, argData, 4);
     else if (argType == TYPE_UINT8 && argLen == 1) a = argData[0];
@@ -573,7 +835,6 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
     else if (argType == TYPE_UINT16 && argLen == 2) { uint16_t v; memcpy(&v, argData, 2); a = v; }
     else if (argType == TYPE_INT16 && argLen == 2) { int16_t v; memcpy(&v, argData, 2); a = v; }
 
-    // Преобразуем левый операнд (делимое)
     int32_t b = 0;
     if (varType == TYPE_INT && varLen == 4) memcpy(&b, varData, 4);
     else if (varType == TYPE_UINT8 && varLen == 1) b = varData[0];
@@ -590,13 +851,15 @@ void applyBinaryOp(uint16_t addr, uint8_t op) {
     return;
   }
 
-  // Не поддерживается — кладём значение переменной
+  // === Не поддерживается ===
   uint8_t Type, Len;
   const uint8_t* Data;
   if (readVariableValue(addr, &Type, &Len, &Data)) {
     pushValue(Data, Len, Type);
   }
 }
+
+
 
 void applyCompareOp(uint8_t op) {
   uint8_t rightType, rightLen;

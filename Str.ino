@@ -4,7 +4,8 @@ void strInit() {
   // Слова GPIO
   addInternalWord("charAt", charAtWord);
   addInternalWord("char", charWord);
-  addInternalWord("len", lenWord);
+addInternalWord("len", lenWord);      // len → удаляет, возвращает размер
+addInternalWord("len?", lenPeekWord); // len! → оставляет, возвращает размер
   addInternalWord("digit", digitWord);
   addInternalWord(">str", toStrWord);
   addInternalWord("chip", chipWord);
@@ -25,6 +26,8 @@ void chipWord(uint16_t addr) {
   chipName = "esp32-c3";
 #elif defined(CONFIG_IDF_TARGET_ESP32C2)
   chipName = "esp32-c2";
+#elif defined(CONFIG_IDF_TARGET_ESP32C5)
+  chipName = "esp32-c5";  
 #elif defined(CONFIG_IDF_TARGET_ESP32C6)
   chipName = "esp32-c6";
 #elif defined(CONFIG_IDF_TARGET_ESP32H2)
@@ -142,44 +145,50 @@ void charWord(uint16_t addr) {
 }
 
 
-void lenWord(uint16_t addr) {
+// --- Вспомогательная: измеряет и кладёт размер на стек ---
+static void _lenCalc(bool dropOriginal) {
   if (stackTop < 2) {
-    outputStream->println("⚠️ len: значение отсутствует");
+    outputStream->println("⚠️ len: стек пуст");
     return;
   }
 
   uint8_t type = stack[stackTop - 1];
-  uint8_t len = stack[stackTop - 2];
+  uint8_t len_meta = stack[stackTop - 2];
 
-  // Защита от повреждённого стека
-  if (len > stackTop - 2) {
-    handleStackUnderflow();
-    return;
-  }
-
-  // Для массива: len = count * elemSize, но мы возвращаем длину блока данных
-  if (type == TYPE_ARRAY) {
-    if (len < 3) {
-      pushUInt16(0);
-      dropTop(0);
-      return;
-    }
-    const uint8_t* data = &stack[stackTop - 2 - len];
-    uint8_t elemType = data[0];
-    uint16_t count = data[1] | (data[2] << 8);
+  if (type == TYPE_ADDRINFO) {
+    if (len_meta < 5) { if (dropOriginal) dropTop(0); pushUInt16(0); return; }
+    const uint8_t* info = &stack[stackTop - 2 - len_meta];
+    uint16_t byte_len = info[2] | (info[3] << 8);
+    uint8_t elemType = info[4];
     uint8_t elemSize = 1;
     if (elemType == TYPE_UINT16 || elemType == TYPE_INT16) elemSize = 2;
     else if (elemType == TYPE_INT) elemSize = 4;
-    pushUInt16(count * elemSize);
-    dropTop(0);
+    if (dropOriginal) dropTop(0);
+    pushUInt16(byte_len / elemSize);
     return;
   }
 
-  // Для всех остальных типов: длина уже известна
-  dropTop(0);
-  pushUInt16(len);
+  if (type == TYPE_STRING) {
+    uint8_t str_len = stack[stackTop - 2];
+    if (dropOriginal) dropTop(0);
+    pushUInt16(str_len);
+    return;
+  }
+
+  // Скаляры
+  if (dropOriginal) dropTop(0);
+  pushUInt16(len_meta);
 }
 
+// --- len: измерить и УДАЛИТЬ исходное значение ---
+void lenWord(uint16_t addr) {
+  _lenCalc(true);  // dropOriginal = true
+}
+
+// --- len!: измерить и ОСТАВИТЬ исходное значение ---
+void lenPeekWord(uint16_t addr) {
+  _lenCalc(false);  // dropOriginal = false
+}
 void digitWord(uint16_t addr) {
   if (stackTop < 2) {
     outputStream->println("⚠️ digit: значение отсутствует");

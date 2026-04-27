@@ -1,128 +1,87 @@
 // ———————————————————————
 // ДВИЖЕНИЕ load robot/my_robot.wrd
 // ———————————————————————
+cont robot // создаем контекст робота
+// свяжим направление с пинами и насторим режим пинов
+var mPinL var mPinR
+mPinL = pins [ 5 ]
+mPinR = pins [ 6 ]
+pinMode mPinL OUTPUT
+pinMode mPinR OUTPUT
+// свяжим скорость моторов с пинами PWM
+var pPinL var pPinR
+pPinL = pins [ 7 ]
+pPinR = pins [ 8 ]
+// зададим начальные настройки для моторов
+var motorL var motorR
+motorL = HIGH
+motorR = HIGH
+var powerL var powerR
+powerL = 0
+powerR = 0
+// определяем слово устанавливаем на двигатель новые зачения
+: motorset
+digitalWrite mPinL motorL
+digitalWrite mPinR motorR
+analogWrite pPinL powerL
+analogWrite pPinR powerR
+;
+// выпорлнячем включение
+motorset 
+// переменные параметров движения
+var speedM // Целевая скорость
+var nowSpeedM // Текущая скорость
+var deltaSpeedM // Текущее привощение скорости
+var accelerationM // ускорение
+var decelerationM // замедление
+// установки по умолчанию
+speedM = 0
+nowSpeedM = 0
+accelerationM = 10
+decelerationM = -16
 
-cont robot
-const вперед const назад
-вперед = HIGN назад = LOW
-var направление var скорость
-скорость = 0u16
-направление = вперед
+// Как расчитать разгон
+: racing // разгон
+if speedM > nowSpeedM
+deltaSpeedM = accelerationM
+print deltaSpeedM
+print " "
+;
+// Как расчитать торможение
+: braking // торможение
+if speedM < nowSpeedM
+deltaSpeedM = decelerationM
+print deltaSpeedM
+print " "
+;
+// узнать направление
+: backM
 
+if speedM > nowSpeedM
 
-const left 
-const rignt
-const forward
-const backward
-forward = HIGN
-
-: forward_left
-digitalWrite motorL
-analogWrite  mspeedL
 ;
 
-: forward_rignt
-digitalWrite motorR
-analogWrite  mspeedR
-;
+// forward
 
-: backward_left
-digitalWrite motorL
-analogWrite  mspeedL
-;
-
-: backward_rignt
-digitalWrite motorR 
-analogWrite  mspeedR
-;
-
-
-
-
-
-
-: двигайся
-
-;
-
-: стоп
-;
-
-// ———————————————————————
-// ГЛАЗКИ (эмоции на матрице)
-// ———————————————————————
-
-: радость
-;
-
-: грусть
-;
-
-: звезда
-;
-
-: сердце
-;
-
-: удивление
-;
-
-: глазки_выкл
-;
-
-// ———————————————————————
-// ЗВУК
-// ———————————————————————
-
-: пиу
-;
-
-: гудок
-;
-
-: шум_вкл
-;
-
-: шум_выкл
-;
-
-// ———————————————————————
-// ЧУВСТВА (датчики)
-// ———————————————————————
-
-: стена_слева
-;
-
-: стена_справа
-;
-
-: свет_слева
-;
-
-: свет_справа
-;
-
-: дистанция
-;
-
-// ———————————————————————
-// ПОВЕДЕНИЕ
-// ———————————————————————
-
-: иди_на_свет
-;
-
-: избегай_стен
+: direction
+racing
+braking
 ;
 
 
-
-// ———————————————————————
-// ПРИВЕТСТВИЕ
-// ———————————————————————
-
-// радость
-// пиу
-
-print "Привет! Я — Словечко. Говори со мной!"
+: motor
+robot
+direction
+if speed != nowSpeed
+print nowSpeedM nowSpeedM = nowSpeedM + deltaSpeedM
 ln
+// json>
+flush
+main
+;
+: speed
+speedM =
+;
+
++task "motor" 100
+// -task "motor"

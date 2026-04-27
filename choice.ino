@@ -48,17 +48,35 @@ void mychoiceFunc(uint16_t addr) {
   }
 
   // Арифметические операции
-  if (Len == 1 && Data[0] == '+') { dropTop(0); applyBinaryOp(addr, OP_ADD); return; }
+  if (Len == 1 && Data[0] == '+') {
+    //Serial.println("OP_ADD");
+    dropTop(0); applyBinaryOp(addr, OP_ADD); return; }
   if (Len == 1 && Data[0] == '-') { dropTop(0); applyBinaryOp(addr, OP_SUB); return; }
   if (Len == 1 && Data[0] == '*') { dropTop(0); applyBinaryOp(addr, OP_MUL); return; }
   if (Len == 1 && Data[0] == '/') { dropTop(0); applyBinaryOp(addr, OP_DIV); return; }
-  if (Len == 1 && Data[0] == '%') { dropTop(0); applyBinaryOp(addr, OP_MOD); return; } // ← новая строка
-  if (Len == 1 && Data[0] == '^') { dropTop(0); applyBinaryOp(addr, OP_XOR); return; } // ← НОВАЯ СТРОК
+  if (Len == 1 && Data[0] == '%') { dropTop(0); applyBinaryOp(addr, OP_MOD); return; }
+  if (Len == 1 && Data[0] == '^') { dropTop(0); applyBinaryOp(addr, OP_XOR); return; }
 
-  // Сравнения — ИСПРАВЛЕНО: сначала кладём значение переменной, потом вызываем applyCompareOp
+  // Побитовые операции (односимвольные)
+  if (Len == 1 && Data[0] == '|') { dropTop(0); applyBinaryOp(addr, OP_OR);  return; }
+  if (Len == 1 && Data[0] == '&') { dropTop(0); applyBinaryOp(addr, OP_AND); return; }
+
+  // Побитовые сдвиги (двухсимвольные маркеры)
+  if (Len == 2 && Data[0] == '<' && Data[1] == '<') {
+    dropTop(0);
+    applyBinaryOp(addr, OP_SHL);
+    return;
+  }
+  if (Len == 2 && Data[0] == '>' && Data[1] == '>') {
+    dropTop(0);
+    applyBinaryOp(addr, OP_SHR);
+    return;
+  }
+
+  // Сравнения
   if (Len == 2 && Data[0] == '=' && Data[1] == '=') {
     dropTop(0);
-    readVariableAsValue(addr); // кладём значение переменной на стек
+    readVariableAsValue(addr);
     applyCompareOp(CMP_EQ);
     return;
   }
@@ -123,8 +141,7 @@ void mychoiceFunc(uint16_t addr) {
     return;
   }
 
-  // По умолчанию
+  // По умолчанию — просто прочитать значение переменной
   readVariableAsValue(addr);
 }
-
  

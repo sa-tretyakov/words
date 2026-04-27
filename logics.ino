@@ -14,7 +14,6 @@ void logicsInit() {
   addMarkerWord(">");
   addMarkerWord("<=");
   addMarkerWord(">=");
-  addInternalWord("not", notWord);  
   addInternalWord("true", [](uint16_t) { pushBool(true); });
   addInternalWord("false", [](uint16_t) { pushBool(false); });
     addMarkerWord("end");

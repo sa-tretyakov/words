@@ -46,10 +46,10 @@ function sendCmd(e){
 void initHTTP(uint16_t addr) {
   initFS();
    // Кэшировать файлы для быстрой работы
-  HTTP.serveStatic("/css/", SPIFFS, "/css/", "max-age=31536000"); // кеширование на 1 год
-  HTTP.serveStatic("/js/", SPIFFS, "/js/", "max-age=31536000"); // кеширование на 1 год
-  HTTP.serveStatic("/img/", SPIFFS, "/img/", "max-age=31536000"); // кеширование на 1 год
-  //HTTP.serveStatic("/lang/", SPIFFS, "/lang/", "max-age=31536000"); // кеширование на 1 год
+  HTTP.serveStatic("/css/", FILESYSTEM, "/css/", "max-age=31536000"); // кеширование на 1 год
+  HTTP.serveStatic("/js/", FILESYSTEM, "/js/", "max-age=31536000"); // кеширование на 1 год
+  HTTP.serveStatic("/img/", FILESYSTEM, "/img/", "max-age=31536000"); // кеширование на 1 год
+  //HTTP.serveStatic("/lang/", FILESYSTEM, "/lang/", "max-age=31536000"); // кеширование на 1 год
    // ------------------Редактор FORTH
    HTTP.on("/forth", HTTP_GET, []() {
     //String     webForth="ok";
@@ -107,22 +107,10 @@ String getContentType(String filename) {
   return "text/plain";
 }
 
-bool handleFileRead(String path) {
-  String setIndex =  "index.htm";
-  if (setIndex == "") setIndex = "index.htm";
-  if (path.endsWith("/")) path += setIndex;
-  String contentType = getContentType(path);
-  String pathWithGz = path + ".gz";
-  if (SPIFFS.exists(pathWithGz) || SPIFFS.exists(path)) {
-    if (SPIFFS.exists(pathWithGz))
-      path += ".gz";
-    File file = SPIFFS.open(path, "r");
-    size_t sent = HTTP.streamFile(file, contentType);
-    file.close();
-    return true;
-  }
-  return false;
-}
+
+
+
+
 
 void handleFileUpload() {
   if (HTTP.uri() != "/edit") return;
@@ -173,39 +161,31 @@ void handleFileCreate() {
   path = String();
 
 }
-
+bool handleFileRead(String path) {
+  String setIndex =  "index.htm";
+  if (setIndex == "") setIndex = "index.htm";
+  if (path.endsWith("/")) path += setIndex;
+  String contentType = getContentType(path);
+  String pathWithGz = path + ".gz";
+  if (SPIFFS.exists(pathWithGz) || SPIFFS.exists(path)) {
+    if (SPIFFS.exists(pathWithGz))
+      path += ".gz";
+    File file = SPIFFS.open(path, "r");
+    size_t sent = HTTP.streamFile(file, contentType);
+    file.close();
+    return true;
+  }
+  return false;
+}
 void handleFileList() {
   if (!HTTP.hasArg("dir")) {
-    //HTTP.send(500, "text/plain", "BAD ARGS");
     http500send("BAD ARGS");//
     return;
   }
   String path = HTTP.arg("dir");
-  //HTTP.send(200, "application/json", FileList(path));
   httpOkJson(FileList(path));
 }
 
-// Создаем список файлов каталога
-#if defined(ESP8266)
-String FileList(String path) {
-  Dir dir = SPIFFS.openDir(path);
-  path = String();
-  String output = "[";
-  while (dir.next()) {
-    File entry = dir.openFile("r");
-    if (output != "[") output += ',';
-    bool isDir = false;
-    output += "{\"type\":\"";
-    output += (isDir) ? "dir" : "file";
-    output += "\",\"name\":\"";
-    output += String(entry.name()).substring(1);
-    output += "\"}";
-    entry.close();
-  }
-  output += "]";
-  return output;
-}
-#else
 String FileList(String path) {
   File root = SPIFFS.open(path);
   path = String();
@@ -228,6 +208,157 @@ String FileList(String path) {
   output += "]";
   return output;
 }
+
+
+// Создаем список файлов каталога
+#if defined(ESP8266)
+String FileList(String path) {
+  Dir dir = SPIFFS.openDir(path);
+  path = String();
+  String output = "[";
+  while (dir.next()) {
+    File entry = dir.openFile("r");
+    if (output != "[") output += ',';
+    bool isDir = false;
+    output += "{\"type\":\"";
+    output += (isDir) ? "dir" : "file";
+    output += "\",\"name\":\"";
+    output += String(entry.name()).substring(1);
+    output += "\"}";
+    entry.close();
+  }
+  output += "]";
+  return output;
+}
+
+#else
+#if FILESYSTEM == SPIFFS
+
+#else
+bool handleFileRead(String path) {
+  Serial.println("handleFileRead: " + path);
+
+  // --- НАЧАЛО ИЗМЕНЕНИЙ ---
+  
+  // 1. Гарантируем, что путь начинается с "/"
+  if (!path.startsWith("/")) {
+    path = "/" + path;
+  }
+
+  // 2. Обработка путей, заканчивающихся на "/"
+  if (path.endsWith("/")) {
+    // Если это просто корень сайта "/", ищем index.html в корне
+    if (path == "/") {
+      path += "index.htm";
+    } 
+    // Если это подпапка (например, "/css/"), тоже ищем там index.html
+    else {
+      path += "index.htm";
+    }
+  }
+  
+  // --- КОНЕЦ ИЗМЕНЕНИЙ ---
+
+  // Определяем контент-тип сразу по запрошенному пути (например, /style.css)
+  String contentType = getContentType(path);
+  
+  // 3. Проверяем наличие обычного файла
+  if (FILESYSTEM.exists(path)) {
+    File file = FILESYSTEM.open(path, "r");
+    if (file) {
+      HTTP.streamFile(file, contentType);
+      file.close();
+      return true;
+    }
+  }
+
+  // 4. Если обычного файла нет, пробуем найти сжатую версию (.gz)
+  String pathGz = path + ".gz";
+  
+  if (FILESYSTEM.exists(pathGz)) {
+    //Serial.println("нашел gz: " + pathGz);
+    File file = FILESYSTEM.open(pathGz, "r");
+    if (file) {      
+      // Отправляем файл. 
+      HTTP.streamFile(file, contentType);      
+      file.close();
+      return true;
+    }
+  }
+  // 5. Файл не найден ни в обычном, ни в сжатом виде
+  return false;
+}
+void handleFileList() {
+  // 1. Проверяем, передан ли аргумент 'dir' (путь к папке)
+  if (!HTTP.hasArg("dir")) {
+    HTTP.send(500, "text/plain", "BAD ARGS");
+    return;
+  }
+
+  String path = HTTP.arg("dir");
+  
+  // Если путь пустой или некорректный, считаем это корнем
+  if (path.length() == 0) path = "/";
+
+  // 2. Открываем директорию
+  File root = FILESYSTEM.open(path);
+  
+  // Если открыли не директорию (например, файл), возвращаем ошибку
+  if (!root || !root.isDirectory()) {
+    HTTP.send(500, "text/plain", "NOT A DIRECTORY");
+    return;
+  }
+
+  // 3. Начинаем формировать JSON ответ
+  // Формат: [ {"type":"file","name":"index.html"}, {"type":"dir","name":"css"} ]
+  String output = "[";
+  bool first = true;
+
+  File file = root.openNextFile();
+  while (file) {
+    // Получаем имя файла/папки
+    String fileName = String(file.name());
+    
+    // file.name() возвращает полный путь, например "/css/style.css".
+    // Нам нужно оставить только имя последнего элемента.
+    int lastSlash = fileName.lastIndexOf('/');
+    if (lastSlash != -1) {
+      fileName = fileName.substring(lastSlash + 1);
+    }
+
+    // Пропускаем системные скрытые файлы (начинаются с точки), если нужно
+    // if (fileName.startsWith(".")) { file = root.openNextFile(); continue; }
+
+    if (!first) {
+      output += ",";
+    }
+    first = false;
+
+    output += "{\"type\":\"";
+    if (file.isDirectory()) {
+      output += "dir";
+    } else {
+      output += "file";
+    }
+    
+    output += "\",\"name\":\"";
+    output += fileName;
+    output += "\"}";
+
+    // Переходим к следующему файлу
+    file = root.openNextFile();
+  }
+  
+  output += "]";
+  
+  // Закрываем корневую директорию
+  root.close();
+
+  // 4. Отправляем результат
+  HTTP.sendHeader("Cache-Control", "no-cache"); // Чтобы браузер не кэшировал список файлов
+  HTTP.send(200, "application/json", output);
+}
+#endif
 #endif
 
 void httpOkText() {
@@ -273,6 +404,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         // send message to client
         String broadcast =invitationPrint();
         webSocket.sendTXT(num, broadcast);
+        flushOutputWord(0);
       }
       break;
     case WStype_TEXT:
@@ -286,6 +418,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 }
 
 String invitationPrint() {
+  printStackCompact();
   String stackSrt = "\r\n";
   stackSrt += "ok>";
   return stackSrt;

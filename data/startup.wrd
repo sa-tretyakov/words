@@ -6,35 +6,25 @@ main
 : help
 type "help.txt"
 ;
-// загружаем массив соответствия pin плата
-// используем protoshield переделаный под 3.3 вольт
+// загружаем массив соответствия pin плата name
 var shielde
 shielde = chip
-shielde += "/protoshield.wrd"
+shielde += "/wemosd1r32.wrd"
 load shielde
-
+ln print shielde
 ln print "Добро пожаловать!"
 
 // load ex/servo_example.words
 load ex/blinker_example.words
-load robot/8x8.wrd
+// load robot/8x8.wrd
 // load ex/7seg_example.words
-// load ex/max7219_example.words
 load ex/net.words
-// load web/udp_example.words
+// load ex/web_example.words
 // load ex/udp_example.words
 // load ex/pinout.words
 
 main
 ln print "Words ждет вас!"
+// ln load ex/rtm_example.words
 
-/*
-: test
-x =
-y =
-x = y
-ln print x
-ln print y
-;
-*/
 

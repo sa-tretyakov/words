@@ -1,13 +1,14 @@
 cont blink
 // Мигает светодиодом в фоновом режиме 
 var blink_pin
-blink_pin = pins [ 19 ]
+blink_pin = pins [ 14 ]
 var blink_state
 blink_state = 0u8
 : tblink
 pinMode blink_pin OUTPUT
 blink_state = not blink_state
 digitalWrite blink_pin blink_state
+// beep pins [ 7 ] 2400 50
 ;
 : blink_on
 +task "tblink"

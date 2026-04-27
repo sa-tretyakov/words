@@ -56,6 +56,78 @@ void dropTop(uint16_t addr) {
   stackTop = stackTop - 2 - len;
 }
 
+// dup: ( a -- a a ) дублирует вершину стека
+void dupFunc(uint16_t addr) {
+    // 1. Читаем метаданные с вершины стека
+    uint8_t type = stack[stackTop - 1];  // тип
+    uint8_t len  = stack[stackTop - 2];  // длина данных
+    
+    // 2. Полная длина элемента: данные + 2 байта метаданных
+    uint8_t total = len + 2;
+    
+    // 3. Проверка переполнения
+    if (stackTop + total > STACK_SIZE) return;
+    
+    // 4. Копируем весь блок (данные + метаданные)
+    memcpy(&stack[stackTop], &stack[stackTop - total], total);
+    
+    // 5. Сдвигаем указатель стека
+    stackTop += total;
+}
+
+// dup2: ( a b -- a b a b ) дублирует два верхних элемента
+void dup2Func(uint16_t addr) {
+    if (stackTop < 3) return;
+    
+    // 1. Длина верхнего элемента (Item1)
+    uint8_t len1 = stack[stackTop - 2];
+    uint8_t total1 = len1 + 2;
+    
+    if (stackTop < total1 + 3) return; // Второго элемента нет
+    
+    // 2. Длина второго элемента (Item2)
+    uint8_t len2 = stack[stackTop - total1 - 2];
+    uint8_t total2 = len2 + 2;
+    
+    // 3. Проверка переполнения
+    if (stackTop + total1 + total2 > STACK_SIZE) return;
+    
+    // 4. Копируем Item2, затем Item1 на вершину
+    // dest > src → memcpy безопасен
+    memcpy(&stack[stackTop], &stack[stackTop - total1 - total2], total2);
+    memcpy(&stack[stackTop + total2], &stack[stackTop - total1], total1);
+    
+    // 5. Обновляем указатель
+    stackTop += total1 + total2;
+}
+
+
+// Вспомогательная: реверс байтов в диапазоне [start, end)
+static void _reverse(uint8_t* start, uint8_t* end) {
+    while (start < --end) {
+        uint8_t t = *start; *start++ = *end; *end = t;
+    }
+}
+
+// swap: ( a b -- b a ) меняет местами два верхних элемента, in-place
+void swapFunc(uint16_t addr) {
+    if (stackTop < 6) return;  // минимум 2 элемента (3+3 байта)
+
+    // 1. Размеры блоков
+    uint8_t sizeB = stack[stackTop - 2] + 2;
+    uint8_t sizeA = stack[stackTop - sizeB - 2] + 2;
+    uint16_t addrA = stackTop - sizeA - sizeB;
+
+    // 2. Вращение [A][B] → [B][A] тремя реверсами
+    _reverse(&stack[addrA], &stack[addrA + sizeA]);           // реверс A
+    _reverse(&stack[addrA + sizeA], &stack[stackTop]);        // реверс B
+    _reverse(&stack[addrA], &stack[stackTop]);                // реверс всего блока
+}
+
+
+
+
+
 void dumpDataPool(uint16_t offset, uint16_t len) {
   if (offset + len > DATA_POOL_SIZE) {
     len = DATA_POOL_SIZE - offset;
@@ -80,6 +152,7 @@ void nopFunc(uint16_t addr){
 void resetFunc(uint16_t addr){
   ESP.restart();
   }
+  
 void oopsFunc(uint16_t addr){
   stackTop = 0;
   }

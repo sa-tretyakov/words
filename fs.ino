@@ -157,8 +157,14 @@ void cdWord(uint16_t addr) {
 
 
 void listFilesWord(uint16_t addr) {
-  String prefix = (strcmp(currentDir, "/") == 0) ? "/" : String(currentDir) + "/";
-  size_t prefixLen = prefix.length();
+  // Нормализуем currentDir: убираем дублирующие слеши, гарантируем формат
+  String dirPath = currentDir;
+  if (dirPath == "/") {
+    dirPath = "";  // LittleFS: корень = пустая строка при сравнении
+  } else if (dirPath.endsWith("/")) {
+    dirPath.remove(dirPath.length() - 1);  // убираем финальный /
+  }
+  size_t prefixLen = dirPath.length();
 
   const int MAX_ITEMS = 32;
   struct DirEntry {
@@ -169,63 +175,76 @@ void listFilesWord(uint16_t addr) {
   DirEntry items[MAX_ITEMS];
   int itemCount = 0;
 
-  // Открываем корень — всегда
-  File root = FILESYSTEM.open("/");
-  if (!root) {
-    outputStream->println("⚠️ Cannot open root");
+  // Открываем нужную директорию (не всегда корень!)
+  File dir = FILESYSTEM.open(currentDir);
+  if (!dir || !dir.isDirectory()) {
+    outputStream->printf("⚠️ Cannot open directory: %s\n", currentDir);
     return;
   }
 
-  File file = root.openNextFile();
+  File file = dir.openNextFile();
   while (file && itemCount < MAX_ITEMS) {
     const char* fullname = file.name();
-    if (strncmp(fullname, prefix.c_str(), prefixLen) == 0) {
-      const char* rel = fullname + prefixLen;
-      if (rel[0] == '\0') {
-        // skip self
+    
+    // 🔧 КЛЮЧЕВОЙ ФИКС: нормализация имени для сравнения
+    String entryName = fullname;
+    
+    // LittleFS может вернуть имя без ведущего /, SPIFFS — с /
+    // Убираем ведущий / для унификации, если он есть
+    if (entryName.startsWith("/")) {
+      entryName = entryName.substring(1);
+    }
+    
+    // Если мы в корне (currentDir = "/"), prefixLen = 0, сравниваем с начала
+    // Если в поддиректории, проверяем, что файл начинается с пути директории
+    bool isDirectChild = false;
+    
+    if (prefixLen == 0) {
+      // Корневая директория: берём всё, что не содержит /
+      isDirectChild = (strchr(entryName.c_str(), '/') == nullptr);
+    } else {
+      // Проверяем, что имя начинается с currentDir + /
+      String expectedPrefix = dirPath + "/";
+      if (entryName.startsWith(expectedPrefix)) {
+        String rel = entryName.substring(expectedPrefix.length());
+        isDirectChild = (strchr(rel.c_str(), '/') == nullptr);
+      }
+    }
+    
+    if (isDirectChild) {
+      // Извлекаем имя файла/директории
+      String displayName;
+      if (prefixLen == 0) {
+        displayName = entryName;
       } else {
-        const char* slash = strchr(rel, '/');
-        if (slash == nullptr) {
-          // Прямой элемент
-          if (strlen(rel) < sizeof(items[0].name)) {
-            strncpy(items[itemCount].name, rel, sizeof(items[0].name) - 1);
-            items[itemCount].name[sizeof(items[0].name) - 1] = '\0';
-            items[itemCount].isDir = file.isDirectory();
-            items[itemCount].size = file.size();
-            itemCount++;
+        String expectedPrefix = dirPath + "/";
+        displayName = entryName.substring(expectedPrefix.length());
+      }
+      
+      if (displayName.length() > 0 && displayName.length() < sizeof(items[0].name)) {
+        // Проверяем дубликаты (для поддиректорий)
+        bool exists = false;
+        for (int i = 0; i < itemCount; i++) {
+          if (strcmp(items[i].name, displayName.c_str()) == 0) {
+            exists = true;
+            break;
           }
-        } else {
-          // Подкаталог — добавляем, если ещё не добавлен
-          size_t len = slash - rel;
-          if (len < sizeof(items[0].name)) {
-            char subdir[64];
-            memcpy(subdir, rel, len);
-            subdir[len] = '\0';
-
-            // Проверяем, нет ли уже такого подкаталога
-            bool exists = false;
-            for (int i = 0; i < itemCount; i++) {
-              if (items[i].isDir && strcmp(items[i].name, subdir) == 0) {
-                exists = true;
-                break;
-              }
-            }
-            if (!exists) {
-              strncpy(items[itemCount].name, subdir, sizeof(items[0].name) - 1);
-              items[itemCount].name[sizeof(items[0].name) - 1] = '\0';
-              items[itemCount].isDir = true;
-              items[itemCount].size = 0;
-              itemCount++;
-            }
-          }
+        }
+        
+        if (!exists) {
+          strncpy(items[itemCount].name, displayName.c_str(), sizeof(items[0].name) - 1);
+          items[itemCount].name[sizeof(items[0].name) - 1] = '\0';
+          items[itemCount].isDir = file.isDirectory();
+          items[itemCount].size = file.size();
+          itemCount++;
         }
       }
     }
-    file = root.openNextFile();
+    file = dir.openNextFile();
   }
-  root.close();
+  dir.close();
 
-  // Вывод
+  // Вывод результатов
   if (itemCount == 0) {
     outputStream->println("(empty)");
   } else {
@@ -238,7 +257,6 @@ void listFilesWord(uint16_t addr) {
     }
   }
 }
-
 void catWord(uint16_t addr) {
   char filename[256];
   if (!popFilename(filename, sizeof(filename))) return;

@@ -1,7 +1,12 @@
 cont wifi
 load wifi-config.json // Напишите в файле свои данные
-
+: wifiOk
+if ssid == ""
+ln print "Введите wifisave "ssid" "ssidPass""
+ln print "Запусти сеть start"
+;
 : start
+if ssid != ""
 print "Подключаюсь к сети "
 ln print ssid
 modeSta
@@ -17,13 +22,12 @@ onSoket
 ;
 : wifisave
 wifi
+ssid =
+ssidPass =
 json>file "/wifi-config.json"
 json>
 json>serial
 main
 ;
-
-ln print "Введите ssid = "роутер""
-ln print "Введите ssidPass = "пароль""
-ln print "Введите wifisave чтоб сохранить"
-ln print "Запусти сеть start"
+start
+wifiOk
