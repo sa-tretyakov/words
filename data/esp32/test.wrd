@@ -1,0 +1,69 @@
+// проверка переменных
+
+a = 255u8 b = -120i8 c = 1200u16 d = -2400i16 e = 3600u32 j = 64000 l = -3600  h = 3.3 str = "tort" massiv = array u8 30u8
+q = "Hello"
+w = "Words"
+ln print q + w
+: testlit
+ln print "test Lit"
+; 
+: testextern
+ln print "test print"
+testlit
+EXIT
+testlit
+;
+
+x = 0
+: loop
+while x < 6u8 {
+ln print x
+x += 1
+}
+;
+pic_8x8 = array u8 8u8
+pic_8x8 [ ] = 0x00 0xE7 0xA5 0xE7 0x00 0x00 0x7E 0x00
+: arr1
+print pic_8x8 [ 0 ]
+print pic_8x8 [ 1 ]
+print pic_8x8 [ 2 ]
+print pic_8x8 [ 3 ]
+print pic_8x8 [ 4 ]
+print pic_8x8 [ 5 ]
+print pic_8x8 [ 6 ]
+print pic_8x8 [ 7 ]
+;
+
+: arr
+x = 0
+while x < 8u8 {
+ln print pic_8x8 [ x ]
+x += 1
+}
+;
+const ledLilon = 22
+pinMode ledLilon OUTPUT
+digitalWrite ledLilon LOW
+analogWrite ledLilon 240
+ln print digitalRead 2
+
+brightledLilon = 0u8
+: flash
+brightledLilon = 0u8
+while brightledLilon < 255 {
+analogWrite ledLilon brightledLilon
+brightledLilon += 1u8
+}
+
+;
+
+// : test_if
+// if x < 3 {
+//  print "мало"
+// }
+// else {
+//  print "норм"
+// }
+// ;
+
+

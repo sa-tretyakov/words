@@ -1,0 +1,35 @@
+// проверка переменных
+
+a = 255u8 b = -120i8 c = 1200u16 d = -2400i16 e = 3600u32 j = 64000 l = -3600  h = 3.3 str = "tort" massiv = array u8 30u8
+q = "Hello"
+w = "Words"
+ln print q + w
+: testlit
+ln print "test Lit"
+; 
+: testextern
+ln print "test print"
+testlit
+EXIT
+testlit
+;
+
+x = 0
+: loop
+while x < 6u8 {
+ln print x
+x += 1
+}
+;
+
+
+: test_if
+if x < 3u8 {
+print "мало"
+}
+if x >= 3u8 {
+print "норм"
+}
+;
+
+

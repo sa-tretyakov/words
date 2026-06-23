@@ -1,57 +1,72 @@
-// load strip/rgb_init.wrd
-rtm
-// 1. Шаблон битов (всегда 8 значений u16)
-var rtmTimings
-rtmTimings = array u16 8
-rtmTimings [ 0 ] = 1u16   // T0 Level0
-rtmTimings [ 1 ] = 12u16  // T0 Duration0 (300 нс)
-rtmTimings [ 2 ] = 0u16   // T0 Level1
-rtmTimings [ 3 ] = 36u16  // T0 Duration1 (900 нс)
-rtmTimings [ 4 ] = 1u16   // T1 Level0
-rtmTimings [ 5 ] = 28u16  // T1 Duration0 (700 нс)
-rtmTimings [ 6 ] = 0u16   // T1 Level1
-rtmTimings [ 7 ] = 24u16  // T1 Duration1 (600 нс)
+/* 
+  RMT Strip (Адресная лента WS28xx через RMT) — высокоуровневое управление лентой.
+  
+   Образ диалога с устройством
+   Этот файл является образом диалога, который обучает систему словам и поведению
+   для работы с адресной светодиодной лентой (WS2812/WS2815) через аппаратный 
+   модуль RMT (Remote Control Transceiver) в ESP32.
+   
+   RMT позволяет генерировать сложные временные диаграммы (биты 0 и 1) 
+   без участия процессора, что гарантирует стабильность сигнала и освобождает CPU.
+   Обучить модуль можно введя этот диалог: load strip/rgb_init.wrd <--
+*/
 
-// 2. Заголовок (для WS2812 не нужен)
-// 3. Завершение (пауза >280 мкс = LOW)
-// 1 RMT-импульс = 4 u16: [L0, D0, L1, D1]
-var rtmFooter
-rtmFooter = array u16 4u16
-rtmFooter [ 0 ] = 0u16
-rtmFooter [ 1 ] = 12000u16 // 300 мкс
-rtmFooter [ 2 ] = 0u16
-rtmFooter [ 3 ] = 0u16
+// 1. Загрузка палитры цветов (базовые константы 0xFF0000 и т.д.)
+load strip/colors.wrd 
 
-cont strip
-var stripPin var stripChanal var stripMode
-stripChanal = 0
-stripPin = 21
+// 2. Переход в контекст драйвера RMT (он уже создан в ядре системы)
+rtm 
 
-var stripLeght
-stripLeght = 256
-var StripPixelBuf
-StripPixelBuf = array u8 stripLeght * 3
+// === Аппаратный уровень: "Рисунок" импульсов для WS28xx ===
+// Мы не пишем код, мы описываем физику сигнала. RMT будет повторять это аппаратно.
 
-: stripInit
-stripChanal = 
-stripPin =
-rtmInit stripChanal stripPin 0
-rtmClk stripChanal 2
-rtmCarrier stripChanal 0 0 0 0
-rtmIdle stripChanal 1 0
-rtmSetProto  stripChanal rtmTimings     
-rtmSetHeader stripChanal nullArray     
-rtmSetFooter stripChanal rtmFooter     
-rtmSetData   stripChanal StripPixelBuf 
+// Шаблон битов (всегда 8 значений u16: 4 на бит '0' и 4 на бит '1')
+// Формат: [Уровень0, Длительность0, Уровень1, Длительность1]
+rtm.Timings = array u16 8
+rtm.Timings [ 0 ] = 1u16   // T0: Уровень 0 (HIGH)
+rtm.Timings [ 1 ] = 12u16  // T0: Длительность (300 нс)
+rtm.Timings [ 2 ] = 0u16   // T0: Уровень 1 (LOW)
+rtm.Timings [ 3 ] = 36u16  // T0: Длительность (900 нс) -> Сумма 1200 нс (Бит '0')
 
+rtm.Timings [ 4 ] = 1u16   // T1: Уровень 0 (HIGH)
+rtm.Timings [ 5 ] = 28u16  // T1: Длительность (700 нс)
+rtm.Timings [ 6 ] = 0u16   // T1: Уровень 1 (LOW)
+rtm.Timings [ 7 ] = 24u16  // T1: Длительность (600 нс) -> Сумма 1300 нс (Бит '1')
+
+// Завершающий импульс (Footer) — пауза > 280 мкс, чтобы лента "поняла", что кадр кончился
+// Формат: [Уровень0, Длительность0, Уровень1, Длительность1]
+rtm.Footer = array u16 4u16
+rtm.Footer [ 0 ] = 0u16        // LOW
+rtm.Footer [ 1 ] = 12000u16    // Длительность 300 мкс (12000 * 25нс)
+rtm.Footer [ 2 ] = 0u16        // LOW
+rtm.Footer [ 3 ] = 0u16        // Длительность 0
+
+// === Логический уровень: Контекст ленты ===
+cont strip // Переходим в контекст "strip" для хранения настроек конкретной ленты
+
+strip.Chanal = 0       // Номер канала RMT (0-7)
+strip.Pin = wsled      // Пин подключения (взят из base/pins.wrd)
+strip.buf = nullArray  // Временная заглушка для буфера
+
+// 3. Слово для инициализации RMT-канала под эту ленту
+: strip.Init // Ожидает на стеке: [канал] [пин] [ссылка_на_буфер]
+    strip.Chanal = // Снимаем канал со стека
+    strip.Pin =    // Снимаем пин со стека
+    strip.buf =    // Снимаем ссылку на буфер со стека
+    
+    rtm.Init strip.Chanal strip.Pin 0   // Инициализация RMT
+    rtm.Clk strip.Chanal 2              // Делитель частоты (80МГц / 2 = 40МГц -> 25нс на тик)
+    rtm.Carrier strip.Chanal 0 0 0 0    // Отключаем модуляцию несущей (нужна только для ИК)
+    rtm.Idle strip.Chanal 1 0           // Уровень покоя (1 = HIGH, 0 = длительность)
+    
+    // Загружаем "рисунок" импульсов в канал RMT
+    rtm.SetProto  strip.Chanal rtm.Timings     // Протокол (биты 0 и 1)
+    rtm.SetHeader strip.Chanal nullArray       // Заголовок (для WS28xx не нужен)
+    rtm.SetFooter strip.Chanal rtm.Footer      // Завершение (пауза >280 мкс)
+    rtm.SetData   strip.Chanal strip.buf       // Указываем, откуда брать данные для отправки
+    
+    oops // Очищаем стек от возможного мусора
 ;
-stripInit 0 wsled
 
 
-
-+task "rtmAllBegin" 10
-
-
-ln load ex/rgb_effect.words
-
-// ln print "strip/rgb_init.wrd загружен" 
+ln print "strip/rgb_init.wrd загружен" 

@@ -1,0 +1,35 @@
+// load ex/basic/pinout.words <--
+cont live
+cont options
+
+// PINOUT led1 14 1 0
+cont pinout
+
+
+
+pin.name = "namepin"
+: PINOUT 
+
+pin.pin = 0u8
+pin.state = 0u8
+pin.inv = 0u8
+pin.name =
+pin.pin =
+pin.state =
+pin.inv =
+pinMode pin.pin OUTPUT
+digitalWrite pin.pin pin.state
+json-set pin.name pin.state 
+json>var live
+json-set pin.name + "pin" pin.pin 
+json-set pin.name + "inv" pin.inv 
+json>var options
+print pin.name
+ln print " настроен"
+locals
+;
+
+
+// PINOUT led1 18u8 0u8 1u8
+// PINOUT led2 19u8 0u8 1u8
+main

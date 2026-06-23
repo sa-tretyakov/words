@@ -1,0 +1,59 @@
+
+strip
+device flame
+
+
+// 4. Создание буферов памяти для пикселей
+strip.Length = 256 // Максимальная длина ленты (в пикселях)
+
+// Создаем сырой массив байт (каждый пиксель = 3 байта: GRB)
+strip.PixelBufByte = array u8 strip.Length * 3
+
+
+// Гениальная фича HDL: представляем тот же массив как массив 24-битных чисел (цветов)!
+// Теперь мы можем писать strip.PixelBuf [ 0 ] = 0xFF0000, а RMT прочитает это как 3 байта.
+strip.PixelBufByte view strip.PixelBuf u24 strip.Length
+
+// 5. Применяем настройки к RMT
+// Передаем: канал 0, пин wsled, буфер strip.PixelBuf
+strip.Init 0 wsled strip.PixelBuf
+
+// 6. Запуск фонового обновления
+// Создаем фоновую задачу, которая каждые 10 мс отправляет буфер на ленту.
+// Пока мы меняем strip.PixelBuf в коде, лента обновляется сама по себе!
+rtm.AllBegin 10 +task
+
+// 7. Тестовая отрисовка
+// Красим первый пиксель в красный (в формате GRB это 0xFF00)
+// strip.PixelBuf [ 0 ] = 0xFF00
+
+pattern = array u24 3
+pattern [ 0 ] = 0xFF0000
+pattern [ 1 ] = 0x00FF00
+pattern [ 2 ] = 0x0000FF
+
+
+
+copy strip.PixelBuf 0 100 pattern
+
+
+
+// 8. Финализация
+// ln load ex/rgb_effect.words // Подсказка: можно загрузить эффекты
+: off.flame
+if flame == {
+copy strip.PixelBuf 0 255 0x000000
+}
+;
+off off.flame bead
+
+: color.flame
+flame.color = 0u24
+if flame == {
+flame.color =
+rgb2grb strip.PixelBuf 0 255 flame.color
+}
+;
+color color.flame bead
+
+main

@@ -2,21 +2,17 @@
 // ДВИЖЕНИЕ load robot/my_robot.wrd
 // ———————————————————————
 cont robot // создаем контекст робота
-// свяжим направление с пинами и насторим режим пинов
-var mPinL var mPinR
-mPinL = pins [ 5 ]
-mPinR = pins [ 6 ]
+// свяжим направление с пинами и настроим режим пинов
+mPinL = pins [ 2 ]
+mPinR = pins [ 3 ]
 pinMode mPinL OUTPUT
 pinMode mPinR OUTPUT
 // свяжим скорость моторов с пинами PWM
-var pPinL var pPinR
-pPinL = pins [ 7 ]
-pPinR = pins [ 8 ]
+pPinL = pins [ 4 ]
+pPinR = pins [ 5 ]
 // зададим начальные настройки для моторов
-var motorL var motorR
 motorL = HIGH
 motorR = HIGH
-var powerL var powerR
 powerL = 0
 powerR = 0
 // определяем слово устанавливаем на двигатель новые зачения
@@ -26,39 +22,38 @@ digitalWrite mPinR motorR
 analogWrite pPinL powerL
 analogWrite pPinR powerR
 ;
-// выпорлнячем включение
+// выполняем включение
 motorset 
 // переменные параметров движения
-var speedM // Целевая скорость
-var nowSpeedM // Текущая скорость
-var deltaSpeedM // Текущее привощение скорости
-var accelerationM // ускорение
-var decelerationM // замедление
 // установки по умолчанию
-speedM = 0
-nowSpeedM = 0
-accelerationM = 10
-decelerationM = -16
+speedM = 0 // Целевая скорость
+nowSpeedM = 0 // Текущая скорость
+accelerationM = 10 // ускорение
+decelerationM = -16 // замедление
+deltaSpeedM = accelerationM // Текущее привыщение скорости
 
 // Как расчитать разгон
 : racing // разгон
-if speedM > nowSpeedM
+if speedM > nowSpeedM {
 deltaSpeedM = accelerationM
 print deltaSpeedM
 print " "
+}
 ;
 // Как расчитать торможение
 : braking // торможение
-if speedM < nowSpeedM
+if speedM < nowSpeedM{
 deltaSpeedM = decelerationM
 print deltaSpeedM
 print " "
+}
 ;
 // узнать направление
 : backM
 
-if speedM > nowSpeedM
+if speedM > nowSpeedM {
 
+}
 ;
 
 // forward
@@ -72,16 +67,16 @@ braking
 : motor
 robot
 direction
-if speed != nowSpeed
+if speed != nowSpeed {
 print nowSpeedM nowSpeedM = nowSpeedM + deltaSpeedM
 ln
-// json>
-flush
 main
+}
 ;
 : speed
 speedM =
 ;
 
-+task "motor" 100
+// +task "motor" 100
 // -task "motor"
+main

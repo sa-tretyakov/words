@@ -1,0 +1,9 @@
+load ex/basic/blinker_example.words
+// load ex/basic/servo_example.words
+// load ex/basic/sonar_example.words
+// load robot/my_robot.wrd
+// load robot/face.wrd
+load strip/rgb_init.wrd <--
+main
+ln print "Добро пожаловать!"
+ln ln print "Words ждет вас!"

@@ -1,36 +1,55 @@
-// load strip/colors.words
-colors
-const RED const GREEN const BLUE const WHITE const BLACK
-const YELLOW const CYAN const MAGENTA const ORANGE const PURPLE
-const PINK const BROWN const GRAY const LIME const TEAL const NAVY
-const MAROON const OLIVE const AQUA const SILVER const  GOLD const VIOLET
-const INDIGO const CORAL const CRIMSON const TURQUOISE const LAVENDER
-const  SALMON const KHAKI const PLUM
+/* 
+  Colors (Палитра цветов) — словарь базовых цветов для адресных лент и матриц.
+  
+   Образ диалога с устройством
+   Этот файл является образом диалога, который обучает систему словам и поведению
+   для работы с цветом. Здесь задаются именованные константы (слова) для базовых 
+   цветов в привычном для человека формате HEX (0xRRGGBB).
+   
+   Используя эти слова, роботу можно давать естественные команды:
+   "лента цвет GOLD", "покажи грусть" (где грусть использует NAVY или INDIGO).
+   Обучить модуль можно введя этот диалог: load strip/colors.wrd <--
+*/
 
-WHITE = 0xFFFFFF
-BLACK = 0x000000
-YELLOW = 0xFFFF00
-CYAN = 0x00FFFF
-MAGENTA = 0xFF00FF
-ORANGE = 0xFFA500
-PURPLE = 0x800080
-PINK = 0xFFC0CB
-BROWN = 0xA52A2A
-GRAY = 0x808080
-LIME = 0x00FF00
-TEAL = 0x008080
-NAVY = 0x000080
-MAROON = 0x800000
-OLIVE = 0x808000
-AQUA = 0x00FFFF
-SILVER = 0xC0C0C0
-GOLD = 0xFFD700
-VIOLET = 0xEE82EE
-INDIGO = 0x4B0082
-CORAL = 0xFF7F50
-CRIMSON = 0xDC143C
-TURQUOISE = 0x40E0D0
-LAVENDER = 0xE6E6FA
-SALMON = 0xFA8072
-KHAKI = 0xF0E68C
-PLUM = 0xDDA0DD
+// 1. Переход в контекст "colors" для хранения цветовой палитры
+cont colors 
+
+// === 2. Базовые состояния света ===
+WHITE = 0xFFFFFF   // Белый (все каналы максимум)
+BLACK = 0x000000   // Черный / Выключено (все каналы в ноль)
+
+// === 3. Основные спектральные цвета ===
+RED = 0xFF0000     // Красный
+GREEN = 0x008000   // Зеленый
+BLUE = 0x0000FF    // Синий
+YELLOW = 0xFFFF00  // Желтый
+CYAN = 0x00FFFF    // Циан (Голубой)
+MAGENTA = 0xFF00FF // Пурпурный (Малиновый)
+ORANGE = 0xFFA500  // Оранжевый
+PURPLE = 0x800080  // Фиолетовый
+PINK = 0xFFC0CB    // Розовый
+
+// === 4. Темные, насыщенные и металлические оттенки ===
+BROWN = 0xA52A2A   // Коричневый
+GRAY = 0x808080    // Серый
+LIME = 0x00FF00    // Лаймовый (Ярко-зеленый)
+TEAL = 0x008080    // Бирюзовый (Темно-циан)
+NAVY = 0x000080    // Темно-синий (Navy)
+MAROON = 0x800000  // Бордовый (Темно-красный)
+OLIVE = 0x808000   // Оливковый (Темно-желто-зеленый)
+AQUA = 0x00FFFF    // Аквамарин (Аналогичен CYAN)
+SILVER = 0xC0C0C0  // Серебряный (Светло-серый)
+GOLD = 0xFFD700    // Золотой
+VIOLET = 0xEE82EE  // Фиалковый
+INDIGO = 0x4B0082  // Индиго (Глубокий сине-фиолетовый)
+
+// === 5. Природные и пастельные оттенки ===
+CORAL = 0xFF7F50   // Коралловый
+CRIMSON = 0xDC143C // Малиновый (Ярко-красный)
+TURQUOISE = 0x40E0D0 // Бирюзовый (Светло-зелено-голубой)
+LAVENDER = 0xE6E6FA // Лавандовый (Бледно-фиолетовый)
+SALMON = 0xFA8072  // Лососевый (Розово-оранжевый)
+KHAKI = 0xF0E68C   // Хаки (Песочно-желтый)
+PLUM = 0xDDA0DD    // Сливовый (Светло-фиолетовый)
+
+main // Возвращаемся в основной контекст

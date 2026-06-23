@@ -1,17 +1,17 @@
 void webInit() {
-   String tmp = "cont web";
-   executeLine(tmp);
+  executeLine("cont web");
   addInternalWord("onHTTP", initHTTP);
   addInternalWord("HTTP", h_http);
-  addInternalWord("onSoket", initWebSocket);
-  addInternalWord("Soket", h_soket);
-  addInternalWord("out>serial", outToSerialWord);
-  addInternalWord("out>ws", outToWsWord);
-  addInternalWord("flush", flushOutputWord);
-  tmp = "main";
-  executeLine(tmp);
+  addInternalWord("onSoket", word_onSoket);
+  addInternalWord("Soket", word_Soket);
+  addInternalWord("out>ws", word_out_ws);
+  addInternalWord("flush", word_flush_ws); // ← Исправлено имя
+  executeLine("main");
 }
 
+void h_http() {
+  HTTP.handleClient();
+}
 
 const char webForth[] PROGMEM = R"raw(<!DOCTYPE html>
 <html>
@@ -28,7 +28,7 @@ function connect(){
   ws.onclose = ws.onerror = () => setTimeout(connect, 2000);
 }
 connect();
- 
+
 function sendCmd(e){
   if(e.keyCode===13){
     if (e.shiftKey) return;    
@@ -38,23 +38,22 @@ function sendCmd(e){
   }
 }
 </script>
- 
+
 <textarea id="c" cols="30" rows="30" style="width:100%;height:100%;" onkeypress="sendCmd(event)"></textarea>
 </body>
 </html>)raw";
-
-void initHTTP(uint16_t addr) {
+void initHTTP() {
   initFS();
-   // Кэшировать файлы для быстрой работы
+  // Кэшировать файлы для быстрой работы
   HTTP.serveStatic("/css/", FILESYSTEM, "/css/", "max-age=31536000"); // кеширование на 1 год
   HTTP.serveStatic("/js/", FILESYSTEM, "/js/", "max-age=31536000"); // кеширование на 1 год
   HTTP.serveStatic("/img/", FILESYSTEM, "/img/", "max-age=31536000"); // кеширование на 1 год
   //HTTP.serveStatic("/lang/", FILESYSTEM, "/lang/", "max-age=31536000"); // кеширование на 1 год
-   // ------------------Редактор FORTH
-   HTTP.on("/forth", HTTP_GET, []() {
+  // ------------------Редактор FORTH
+  HTTP.on("/forth", HTTP_GET, []() {
     //String     webForth="ok";
-     httpOkHtml(webForth);
-  }); 
+    httpOkHtml(webForth);
+  });
 
   HTTP.begin();
 }
@@ -83,6 +82,8 @@ void initFS() {
   //use it to load content from SPIFFS
   HTTP.onNotFound([]() {
     if (!handleFileRead(HTTP.uri()))
+      currentOutput->println(HTTP.uri());
+      executeLine(HTTP.uri().c_str());
       http404send();//HTTP.send(404, "text/plain", "FileNotFound");
   });
 }
@@ -239,7 +240,7 @@ bool handleFileRead(String path) {
   Serial.println("handleFileRead: " + path);
 
   // --- НАЧАЛО ИЗМЕНЕНИЙ ---
-  
+
   // 1. Гарантируем, что путь начинается с "/"
   if (!path.startsWith("/")) {
     path = "/" + path;
@@ -250,18 +251,18 @@ bool handleFileRead(String path) {
     // Если это просто корень сайта "/", ищем index.html в корне
     if (path == "/") {
       path += "index.htm";
-    } 
+    }
     // Если это подпапка (например, "/css/"), тоже ищем там index.html
     else {
       path += "index.htm";
     }
   }
-  
+
   // --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
   // Определяем контент-тип сразу по запрошенному пути (например, /style.css)
   String contentType = getContentType(path);
-  
+
   // 3. Проверяем наличие обычного файла
   if (FILESYSTEM.exists(path)) {
     File file = FILESYSTEM.open(path, "r");
@@ -274,13 +275,13 @@ bool handleFileRead(String path) {
 
   // 4. Если обычного файла нет, пробуем найти сжатую версию (.gz)
   String pathGz = path + ".gz";
-  
+
   if (FILESYSTEM.exists(pathGz)) {
     //Serial.println("нашел gz: " + pathGz);
     File file = FILESYSTEM.open(pathGz, "r");
-    if (file) {      
-      // Отправляем файл. 
-      HTTP.streamFile(file, contentType);      
+    if (file) {
+      // Отправляем файл.
+      HTTP.streamFile(file, contentType);
       file.close();
       return true;
     }
@@ -296,13 +297,13 @@ void handleFileList() {
   }
 
   String path = HTTP.arg("dir");
-  
+
   // Если путь пустой или некорректный, считаем это корнем
   if (path.length() == 0) path = "/";
 
   // 2. Открываем директорию
   File root = FILESYSTEM.open(path);
-  
+
   // Если открыли не директорию (например, файл), возвращаем ошибку
   if (!root || !root.isDirectory()) {
     HTTP.send(500, "text/plain", "NOT A DIRECTORY");
@@ -318,7 +319,7 @@ void handleFileList() {
   while (file) {
     // Получаем имя файла/папки
     String fileName = String(file.name());
-    
+
     // file.name() возвращает полный путь, например "/css/style.css".
     // Нам нужно оставить только имя последнего элемента.
     int lastSlash = fileName.lastIndexOf('/');
@@ -340,7 +341,7 @@ void handleFileList() {
     } else {
       output += "file";
     }
-    
+
     output += "\",\"name\":\"";
     output += fileName;
     output += "\"}";
@@ -348,9 +349,9 @@ void handleFileList() {
     // Переходим к следующему файлу
     file = root.openNextFile();
   }
-  
+
   output += "]";
-  
+
   // Закрываем корневую директорию
   root.close();
 
@@ -381,73 +382,85 @@ void http404send() {
 }
 
 
-// webSocket
 
-void initWebSocket(uint16_t addr) {
-  // start webSocket server
-  webSocket.begin();
-  webSocket.onEvent(webSocketEvent);
-}
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-  String tmp;
-
+// ✅ Точная сигнатура, ожидаемая библиотекой
+void wsServerEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
-      tmp = "out>serial";
-      executeLine(tmp);
+      if (currentOutput == &wsPrint) currentOutput = &Serial;
       break;
     case WStype_CONNECTED: {
-        IPAddress ip = webSocket.remoteIP(num);
-        //USE_outputStream->printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
-          tmp = "out>ws";
-        executeLine(tmp);
-        // send message to client
-        String broadcast =invitationPrint();
-        webSocket.sendTXT(num, broadcast);
-        flushOutputWord(0);
+        // 🔀 Временно переключаем вывод на клиент
+        Print* saved = currentOutput;
+        currentOutput = &wsPrint;
+
+        // 📋 Штатная последовательность при подключении
+        currentOutput->println();
+        printStack();
+        printActiveTasks();
+        word_prompt();
+
+        // 🚀 Отправляем буфер клиенту
+        wsPrint.flush();
+
+        // 🔙 Возвращаем вывод (чтобы не сломать Serial-терминал)
+        currentOutput = saved;
+        break;
       }
-      break;
-    case WStype_TEXT:
-      int numC = length;
-      for (int i = 0; i < numC; i++) {
-        command += char(payload[i]);
+    case WStype_TEXT: {
+        if (length == 0) break;
+
+        // 1️⃣ Копируем фрейм целиком (WebSocket уже отдал законченное сообщение)
+        size_t len = (length < 255) ? length : 255;
+        memcpy(ws_cmd, payload, len);
+        ws_cmd[len] = '\0';
+
+        // 2️⃣ Убираем возможные \r\n или пробелы с конца
+        while (len > 0 && (ws_cmd[len - 1] == '\r' || ws_cmd[len - 1] == '\n' || ws_cmd[len - 1] == ' ')) {
+          ws_cmd[--len] = '\0';
+        }
+        if (len == 0) break; // Пустая команда → игнорируем
+
+       // Serial.print("WS Exec: "); Serial.println(ws_cmd); // Для отладки
+
+        // 3️⃣ Исполняем с перенаправлением вывода
+        Print* saved = currentOutput;
+        currentOutput = &wsPrint;          // Весь print/json> полетит в сокет
+        // 2️⃣ ЭХО команды (как в Serial!) + перенос строки
+        currentOutput->println();
+        currentOutput->print(ws_cmd);
+        currentOutput->println();
+        executeLine(ws_cmd);
+        currentOutput->println();
+        printStack();
+        printActiveTasks(); // ← СПИСОК ЗАДАЧ
+        word_prompt();
+        wsPrint.flush();                   // Принудительно отправляем буфер
+        currentOutput = saved;             // Возвращаем вывод обратно
+        break;
       }
-      command +=" ";
-      break;
+    default: break;
   }
 }
 
-String invitationPrint() {
-  printStackCompact();
-  String stackSrt = "\r\n";
-  stackSrt += "ok>";
-  return stackSrt;
+void word_onSoket() {
+  wsServer.begin();
+  wsServer.onEvent(wsServerEvent);
+  currentOutput->println("WebSocket server started on port 82");
 }
 
-void sendWS(String broadcast) {
-  webSocket.broadcastTXT(broadcast);
+void word_Soket() {
+  wsServer.loop();
 }
 
-void h_http(uint16_t addr) {
-HTTP.handleClient();
-}
-void h_soket(uint16_t addr) {
-webSocket.loop();
+void word_out_ws() {
+  currentOutput = &wsPrint;
+  currentOutput->println("out>ws: OK");
 }
 
-// ---------- ФУНКЦИИ ПЕРЕНАПРАВЛЕНИЯ ----------
-void outToSerialWord(uint16_t addr) {
-    if (outputFile) outputFile.close();
-    outputStream = &Serial;
+// ✅ ИСПРАВЛЕНО: Имя функции совпадает с регистрацией
+void word_flush_ws() {
+  if (currentOutput == &wsPrint) wsPrint.flush();
 }
 
-void outToWsWord(uint16_t addr) {
-    if (outputFile) outputFile.close();
-    outputStream = &wsPrint;
-    // Опционально: очистить буфер
-    wsPrint.flush();
-}
-
-void flushOutputWord(uint16_t addr) {
-    outputStream->flush();
-}
+// prilServer

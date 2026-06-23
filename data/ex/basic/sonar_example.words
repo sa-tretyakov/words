@@ -1,0 +1,35 @@
+
+// Запустить пример можно командой
+// load ex/basic/sonar_example.words
+
+// Настройка пинов
+pinTrig = pins [ 8 ] 
+pinEcho = pins [ 9 ]
+
+// Параметры импульса
+imp = 10          // Длительность триггера (мкс)
+timeWite = 30000  // Таймаут эха (30 мс ≈ 5 метров)
+
+// Рабочие переменные
+distance = 0
+mod = 58          // Коэффициент перевода: мкс → см
+
+// Инициализация GPIO
+pinMode pinTrig OUTPUT
+pinMode pinEcho INPUT
+
+/*
+Слово sonar — выполняет одно измерение расстояния
+и печатает результат в сантиметрах.
+*/
+: sonar 
+  digitalWrite pinTrig LOW
+  delayMicroseconds imp
+  digitalWrite pinTrig HIGH
+  distance = pulseIn pinEcho HIGH timeWite
+  print distance / mod
+  ln
+;
+ln print "ex/basic/sonar_example.words загружен" 
+// Запуск измерений каждые 100 мс
+// +task "sonar" 100

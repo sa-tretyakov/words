@@ -1,0 +1,6 @@
+load ex/basic/blinker_example.words
+load strip/rgb_init.wrd
+load strip/rgb.words
+main
+ln print "Добро пожаловать!"
+ln ln print "Evonicfires ждет вас!"

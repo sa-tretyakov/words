@@ -1,30 +1,32 @@
-io
 : ln
 print CRLF
 ;
-main
-: help
-type "help.txt"
-;
+oops as ой
+reset as ~
+load cords.wrd
+on as включи
+on as включить
+off as выключи
+off as выключить
+not as не
+brightness as яркость
+load ex/net/net.words
 // загружаем массив соответствия pin плата name
-var shielde
-shielde = chip
 print "Ваша плата "
 ln print chip
-shielde += "/uno.wrd"
-load shielde
-ln print shielde
-ln print "Добро пожаловать!"
-
-// load ex/servo_example.words
-// load robot/8x8.wrd
-// load ex/7seg_example.words
-load ex/net.words
-// load ex/web_example.words
-// load ex/udp_example.words
-// load ex/pinout.words
-
-main
-ln ln print "Words ждет вас!"
-
+: testconfig
+if chip == "esp32-s3" {
+load chip + "/uno.wrd"
+oops
+load "slavechko.wrd"
+exit
+}
+if chip == "esp32" {
+load chip + "/evo.wrd"
+oops
+load "evonic.wrd"
+exit
+}
+;
+testconfig
 
