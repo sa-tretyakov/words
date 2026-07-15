@@ -5,7 +5,7 @@
 #endif
 
 void wifiInit() {
-  executeLine("cont network");
+  executeLine("network cont");
   addInternalWord("modeSta", modeStaFunc);
   addInternalWord("modeAp", modeApFunc);
   addInternalWord("modeStaAp", modeStaApFunc);

@@ -1,0 +1,30 @@
+
+cont RTC
+RTC.Seconds = 0u8
+RTC.Minutes = 20u8
+RTC.Hours = 0u8
+RTC.Days = 26u8
+RTC.Weekdays = 5u8
+RTC.Century_months = 6u8
+RTC.Years = 26u8
+RTC.time = array u8 7
+RTC.time [ ] = RTC.Seconds RTC.Minutes RTC.Hours RTC.Days RTC.Weekdays RTC.Century_months RTC.Years
+
+i2c
+i2c.device = array u8 128
+i2c.time = array u8 9
+
+I2C.init :
+if i2c.Init SDA SCL {
+print "Ok"
+i2c.Scan i2c.device
+print "Найдено = " 
+print
+ln
+}
+i2c.Write 81 2 RTC.time
+i2c.ReadReg 81 0 i2c.time
+json>
+;
+I2C.init
+json>

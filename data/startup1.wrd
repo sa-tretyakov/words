@@ -1,11 +1,20 @@
-
+: ln
+print CRLF
+;
+oops as ой
+reset as ~
 load cords.wrd
+on as включи
+on as включить
+off as выключи
+off as выключить
+not as не
+brightness as яркость
 load ex/net/net.words
 // загружаем массив соответствия pin плата name
 print "Ваша плата "
 ln print chip
-
-testconfig :
+: testconfig
 if chip == "esp32-s3" {
 load chip + "/uno.wrd"
 oops
@@ -18,14 +27,6 @@ oops
 load "evonic.wrd"
 exit
 }
-if chip == "esp32" {
-load chip + "/evo.wrd"
-oops
-load "evonic.wrd"
-exit
-}
 ;
-
 testconfig
-
 

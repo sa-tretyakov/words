@@ -1,5 +1,5 @@
 void webInit() {
-  executeLine("cont web");
+  executeLine("web cont");
   addInternalWord("onHTTP", initHTTP);
   addInternalWord("HTTP", h_http);
   addInternalWord("onSoket", word_onSoket);

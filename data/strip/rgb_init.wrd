@@ -15,55 +15,55 @@
 load strip/colors.wrd 
 
 // 2. Переход в контекст драйвера RMT (он уже создан в ядре системы)
-rtm 
+rmt 
 
 // === Аппаратный уровень: "Рисунок" импульсов для WS28xx ===
 // Мы не пишем код, мы описываем физику сигнала. RMT будет повторять это аппаратно.
 
 // Шаблон битов (всегда 8 значений u16: 4 на бит '0' и 4 на бит '1')
 // Формат: [Уровень0, Длительность0, Уровень1, Длительность1]
-rtm.Timings = array u16 8
-rtm.Timings [ 0 ] = 1u16   // T0: Уровень 0 (HIGH)
-rtm.Timings [ 1 ] = 12u16  // T0: Длительность (300 нс)
-rtm.Timings [ 2 ] = 0u16   // T0: Уровень 1 (LOW)
-rtm.Timings [ 3 ] = 36u16  // T0: Длительность (900 нс) -> Сумма 1200 нс (Бит '0')
+rmt.Timings = array u16 8
+rmt.Timings [ 0 ] = 1u16   // T0: Уровень 0 (HIGH)
+rmt.Timings [ 1 ] = 12u16  // T0: Длительность (300 нс)
+rmt.Timings [ 2 ] = 0u16   // T0: Уровень 1 (LOW)
+rmt.Timings [ 3 ] = 36u16  // T0: Длительность (900 нс) -> Сумма 1200 нс (Бит '0')
 
-rtm.Timings [ 4 ] = 1u16   // T1: Уровень 0 (HIGH)
-rtm.Timings [ 5 ] = 28u16  // T1: Длительность (700 нс)
-rtm.Timings [ 6 ] = 0u16   // T1: Уровень 1 (LOW)
-rtm.Timings [ 7 ] = 24u16  // T1: Длительность (600 нс) -> Сумма 1300 нс (Бит '1')
+rmt.Timings [ 4 ] = 1u16   // T1: Уровень 0 (HIGH)
+rmt.Timings [ 5 ] = 28u16  // T1: Длительность (700 нс)
+rmt.Timings [ 6 ] = 0u16   // T1: Уровень 1 (LOW)
+rmt.Timings [ 7 ] = 24u16  // T1: Длительность (600 нс) -> Сумма 1300 нс (Бит '1')
 
 // Завершающий импульс (Footer) — пауза > 280 мкс, чтобы лента "поняла", что кадр кончился
 // Формат: [Уровень0, Длительность0, Уровень1, Длительность1]
-rtm.Footer = array u16 4u16
-rtm.Footer [ 0 ] = 0u16        // LOW
-rtm.Footer [ 1 ] = 12000u16    // Длительность 300 мкс (12000 * 25нс)
-rtm.Footer [ 2 ] = 0u16        // LOW
-rtm.Footer [ 3 ] = 0u16        // Длительность 0
+rmt.Footer = array u16 4u16
+rmt.Footer [ 0 ] = 0u16        // LOW
+rmt.Footer [ 1 ] = 12000u16    // Длительность 300 мкс (12000 * 25нс)
+rmt.Footer [ 2 ] = 0u16        // LOW
+rmt.Footer [ 3 ] = 0u16        // Длительность 0
 
 // === Логический уровень: Контекст ленты ===
-cont strip // Переходим в контекст "strip" для хранения настроек конкретной ленты
+strip cont  // Переходим в контекст "strip" для хранения настроек конкретной ленты
 
 strip.Chanal = 0       // Номер канала RMT (0-7)
-strip.Pin = wsled      // Пин подключения (взят из base/pins.wrd)
+strip.Pin = 19      // Пин подключения (взят из base/pins.wrd)
 strip.buf = nullArray  // Временная заглушка для буфера
 
 // 3. Слово для инициализации RMT-канала под эту ленту
-: strip.Init // Ожидает на стеке: [канал] [пин] [ссылка_на_буфер]
+strip.Init : // Ожидает на стеке: [канал] [пин] [ссылка_на_буфер]
     strip.Chanal = // Снимаем канал со стека
     strip.Pin =    // Снимаем пин со стека
     strip.buf =    // Снимаем ссылку на буфер со стека
     
-    rtm.Init strip.Chanal strip.Pin 0   // Инициализация RMT
-    rtm.Clk strip.Chanal 2              // Делитель частоты (80МГц / 2 = 40МГц -> 25нс на тик)
-    rtm.Carrier strip.Chanal 0 0 0 0    // Отключаем модуляцию несущей (нужна только для ИК)
-    rtm.Idle strip.Chanal 1 0           // Уровень покоя (1 = HIGH, 0 = длительность)
+    rmt.Init strip.Chanal strip.Pin 0   // Инициализация RMT
+    rmt.Clk strip.Chanal 2              // Делитель частоты (80МГц / 2 = 40МГц -> 25нс на тик)
+    rmt.Carrier strip.Chanal 0 0 0 0    // Отключаем модуляцию несущей (нужна только для ИК)
+    rmt.Idle strip.Chanal 1 0           // Уровень покоя (1 = HIGH, 0 = длительность)
     
     // Загружаем "рисунок" импульсов в канал RMT
-    rtm.SetProto  strip.Chanal rtm.Timings     // Протокол (биты 0 и 1)
-    rtm.SetHeader strip.Chanal nullArray       // Заголовок (для WS28xx не нужен)
-    rtm.SetFooter strip.Chanal rtm.Footer      // Завершение (пауза >280 мкс)
-    rtm.SetData   strip.Chanal strip.buf       // Указываем, откуда брать данные для отправки
+    rmt.SetProto  strip.Chanal rmt.Timings     // Протокол (биты 0 и 1)
+    rmt.SetHeader strip.Chanal nullArray       // Заголовок (для WS28xx не нужен)
+    rmt.SetFooter strip.Chanal rmt.Footer      // Завершение (пауза >280 мкс)
+    rmt.SetData   strip.Chanal strip.buf       // Указываем, откуда брать данные для отправки
     
     oops // Очищаем стек от возможного мусора
 ;

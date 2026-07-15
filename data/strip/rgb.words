@@ -1,59 +1,105 @@
-
+// load strip/rgb.words <--
 strip
+// strip.destination  = nullArray 
+// strip.source  = nullArray 
+strip.length = 3 // Максимальная длина ленты (в пикселях)
+const GRB = 3u8
+const WRGB = 4u8
+strip.chanals = 0u8
+strip.pins = 19u8
 device flame
-
-
 // 4. Создание буферов памяти для пикселей
-strip.Length = 256 // Максимальная длина ленты (в пикселях)
+strip.flameBufer = array u8 strip.length * WRGB // массив в байтах для ленты flame
+strip.flameBufer view view.flame u32 // представление массива в u32
+strip.flame = array u32 strip.length // массив хранения состояния ленты flame
 
-// Создаем сырой массив байт (каждый пиксель = 3 байта: GRB)
-strip.PixelBufByte = array u8 strip.Length * 3
+copy>flameBufer :
+copy view.flame 0 len view.flame strip.flame
+;
 
-
-// Гениальная фича HDL: представляем тот же массив как массив 24-битных чисел (цветов)!
-// Теперь мы можем писать strip.PixelBuf [ 0 ] = 0xFF0000, а RMT прочитает это как 3 байта.
-strip.PixelBufByte view strip.PixelBuf u24 strip.Length
-
-// 5. Применяем настройки к RMT
-// Передаем: канал 0, пин wsled, буфер strip.PixelBuf
-strip.Init 0 wsled strip.PixelBuf
-
-// 6. Запуск фонового обновления
-// Создаем фоновую задачу, которая каждые 10 мс отправляет буфер на ленту.
-// Пока мы меняем strip.PixelBuf в коде, лента обновляется сама по себе!
-rtm.AllBegin 10 +task
-
-// 7. Тестовая отрисовка
-// Красим первый пиксель в красный (в формате GRB это 0xFF00)
-// strip.PixelBuf [ 0 ] = 0xFF00
-
-pattern = array u24 3
-pattern [ 0 ] = 0xFF0000
-pattern [ 1 ] = 0x00FF00
-pattern [ 2 ] = 0x0000FF
-
-
-
-copy strip.PixelBuf 0 100 pattern
-
-
-
-// 8. Финализация
-// ln load ex/rgb_effect.words // Подсказка: можно загрузить эффекты
-: off.flame
+on.flame :
 if flame == {
-copy strip.PixelBuf 0 255 0x000000
+copy>flameBufer
+}
+;
+on on.flame bead
+
+off.flame :
+if flame == {
+rgb2wrgb view.flame 0 len view.flame 0x000000
 }
 ;
 off off.flame bead
 
-: color.flame
+color.flame :
 flame.color = 0u24
 if flame == {
-flame.color =
-rgb2grb strip.PixelBuf 0 255 flame.color
+flame.color = 
+rgb2wrgb strip.flame 0 len strip.flame flame.color
+copy>flameBufer
 }
 ;
 color color.flame bead
 
+strip.Init strip.chanals strip.pins view.flame
+
+device light
+strip.length = 128u8 
+strip.chanals += 1u8
+strip.pins = 23u8
+strip.lightBufer = array u8 strip.length * GRB // массив в байтах для ленты light
+strip.lightBufer view view.light u24 // представление массива в u32 light
+strip.light = array u24 strip.length // массив хранения состояния ленты light
+
+copy>lightBufer :
+copy view.light 0 len view.light strip.light
+;
+
+on.light :
+if light == {
+copy>lightBufer
+}
+;
+on on.light bead
+
+off.light :
+if light == {
+rgb2grb view.light 0 len view.light 0x000000
+}
+;
+off off.light bead
+
+color.light :
+light.color = 0u24
+if light == {
+light.color = 
+rgb2grb strip.light 0 len strip.light light.color
+copy>lightBufer
+}
+;
+color color.light bead
+
+strip.Init strip.chanals strip.pins view.light
+
+device fuelbed
+strip.length = 128u8 
+strip.chanals += 1u8
+strip.pins = 5u8
+// strip.test = array u8 strip.length * GRB // массив в байтах для ленты fuelbed
+// strip.fuelbedBufer view view.fuelbed u24    // представление массива в u32 fuelbed
+// strip.fuelbed = array u24 strip.length     // массив хранения состояния ленты fuelbed
+
+
+rmt.AllBegin 10 +task
+
+
+// color flame 0xFFFFFF
+// color light 0x0000FF
+
+~ :
+off flame
+off light
+rmt.AllBegin
+reset
+;
 main

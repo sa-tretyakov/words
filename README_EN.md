@@ -1,100 +1,67 @@
 
-# Оплата ваших услуг через Solana, Cosmos, Algorand, Toncoin
+# Words (HDL): A Complex System in Simple Terms
 
- Удобный и быстрый способ внедрения платных услуг с использованием криптовалюты Solana, Cosmos, Algorand, Toncoin. Процесс простой: Вы открываете любой крипто кошелек, сканируете QR-код который показывается на устройстве, переводите указанную сумму, и как только платеж будет получен (Баланс кошелька проверяется каждые 5 секунд), реле активируется и включит ваш прибор на заданное вами время. Это может быть любой прибор, от чайника, кофемашины и лампочки до включения электричества в помещение или любом другом месте.
+Imagine you want to teach your new smart assistant (for example, a small home robot) a new trick. 
 
-Вы можете собрать устройство самостоятельно или попросить это сделать для вас. Для заказа готового устройства свяжитесь через [Telegram](https://t.me/ESPiotDevice), [Skype](https://skype:renat2985?chat), [Discord](https://discord.com/invite/zaGaDuGe).
+In the ordinary world, you would have to become a programmer: learn strange commands,
+arrange brackets, semicolons, and explain every microscopic step to the machine. 
+It would be like having to explain how arm muscles and brain neural connections work
+ just to ask a friend to pass the salt.
 
-У нас есть похожий проект с экраном, [посмотри](https://github.com/renat2985/toncoin_payment), и на базе Sonoff:
+**The Words system (or HDL — Human-Device Language) changes this rule.** 
+Its main idea is simple and revolutionary: **technology must learn to understand humans,
+ not humans adapt to technology.**
 
-- [Sonoff for Toncoin (toncenter.com)](https://github.com/renat2985/toncoin_payment_sonoff)
+Here is how it works, explained in simple terms:
 
-- [Sonoff for Toncoin, Solana, Cosmos, Algorand (tatum.io)](https://github.com/renat2985/crypto_payment_sonoff)
+### 1. You express an intention, not write code
+Instead of complex instructions, you simply speak to the device in natural language. 
+You don't write: `if (obstacle_detected) { motor_left.stop(); motor_right.reverse(); }`
+You say: **"Go around it"**. 
+The system understands this as a goal. And *how* exactly to do it, it learns from a dialogue with you or from pre-saved skills.
 
+### 2. "Focus of attention" instead of technical folders
+In ordinary computers, commands are separated by rigid "folders" (programmers call this scope). In Words, the robot has a **focus of attention**, 
+just like a human. 
+If you switch its attention to "Light" and say "Turn on", it will light up the bulb. If you switch its attention to "Music" and say "Turn on", 
+it will play a melody. The robot won't get confused because, like us, it understands the context of the conversation.
 
-Да и если вы хотите видеть здесь новую криптовалюту которая вам нужна, пишите, добавим. :)
+### 3. Skills like beads on a string
+Imagine the robot has an empty little string called "Morning routine". 
+You can say: "Add to the morning routine: turn on the light". The system threads this action onto the string like a **bead**. 
+Tomorrow you will say: "Add to the morning routine: brew coffee". A new bead is added right after it. You don't need to rewrite the whole program
+ from scratch; you just complement the behavior, like assembling a bracelet.
 
-[![IMAGE ALT TEXT HERE](https://github.com/renat2985/crypto_payment_touchScreen/blob/main/doc/intro.jpg)](https://www.youtube.com/watch?v=OLOO8hDeg5w&list=PL6NJTNxbvy-LpsI6D_1RM6v5YWDvsm5j4)
+### 4. The ability to "forget" to save memory
+This is real magic for small devices. Imagine the robot needs to solve a complex mathematical problem. It "downloads" a virtual textbook (an instruction file) 
+into its head, solves the problem, saves the finished result to memory, and then **forgets the textbook itself**. 
+The code (the instruction) disappears, freeing up space, but the skill (the result) remains. The device doesn't slow down or overflow, remaining incredibly smart.
 
-### Основные функции:
+### 5. The same object can be seen in different ways
+The system has the concept of a "View". Suppose the robot has a set of 30 multicolored light bulbs. For one task, it is convenient for the system to see them
+as 90 separate color channels (red, green, blue). For another task, it is more convenient to see them as 30 whole pixels. Words allows the robot to instantly 
+change its "angle of view" on the same data without copying it or wasting extra memory.
 
-1. **Подключение устройства:**
-   - При первом включении, или если устройство не находит роутер, оно создаст точку доступа с именем "Crypto payments".
-     
-     <img src="https://github.com/renat2985/crypto_payment_touchScreen/blob/main/doc/WiFi.png" width="200px">
-   - Подключитесь к этой точке (пароль не требуется) и откройте браузер, где введите http://192.168.4.1. Обычно после подключения к Wi-Fi автоматически откроется Activ portal, который перенаправит вас на нужную страницу.
-     
-     <img src="https://github.com/renat2985/crypto_payment_touchScreen/blob/main/doc/AP2.png" width="300px">
-   - Нажмите "Configure WiFi" для настройки.
+---
 
-2. **Настройка устройства:**
-   - **Роутер и пароль:** Введите данные для подключения к вашему Wi-Fi.
-   - **Device Name:** Укажите имя устройства, например, "Buy coffee".
-   - **Your TonСoin Wallet:** Введите адрес вашего кошелька для приема платежей.
-   - **Your Solana Wallet:** Введите адрес вашего кошелька для приема платежей.
-   - **Your Cosmos Wallet:** Введите адрес вашего кошелька для приема платежей.
-   - **Your Algorand Wallet:** Введите адрес вашего кошелька для приема платежей.
-   - **CoinMarketCap API:** Используется для получения текущего курса Solana, Cosmos, Algorand, Toncoin в фиатной валюте.
-   - **Tatum API:** Служит для получения информации о балансе вашего кошелька.
+### Why is this important for all of us?
 
-      _Для тестирования можно использовать встроенные API, однако для долгосрочного использования настоятельно рекомендуется зарегистрироваться на соответствующих сайтах ([coinmarketcap.com](https://coinmarketcap.com/api/) и [tatum.io](https://tatum.io/)) и получить собственные ключи API. Бесплатные тарифы позволяют выполнять до 10 000 запросов в месяц, чего достаточно для 10 устройств. Однако при увеличении количества устройств возможны перебои с получением актуальной информации, что может привести к сбоям в процессе оплаты._
+Right now, this system works on small chips (like those inside smart sockets or educational robots like "Slovechko"). But the idea itself is much broader. 
 
-   - **Сurrency:** Выберите валюту, в которой хотите получать оплату (EUR, USD, RUB, BYN, BGN, GBP и др.). Это необходимо для автоматической конвертации суммы в Solana, Cosmos, Algorand, Toncoin на основе текущего курса, который обновляется каждый час через coinmarketcap.com.
-   - **Service Currency Price:** Укажите цену в выбранной валюте, которую клиент должен оплатить.
-   - **Payment Tolerance:** В этой ячейке указывается допустимая погрешность в цене. Поскольку стоимость Ton постоянно колеблется, здесь нужно указать диапазон отклонений (одной цифрой), который вы готовы принять при оплате.
-   - **Relay Work Time:** Укажите, на сколько секунд должно включиться реле. Это может быть от одной секунды (например, для имитации нажатия кнопки) до нескольких минут или часов.
+The creators of Words have proven that it is possible to make computers, old and new, truly "human". 
+* **For a child**, it is a toy that grows with them: today they teach it to blink an LED, and tomorrow they program complex behavior just by talking to it.
+* **For an engineer**, it is a way to configure complex industrial equipment (like an electric fireplace or a machine tool) through a simple dialogue, 
+without digging through thousands of lines of someone else's code.
+* **For the future**, it is a ready-made "language" for new types of computers that will work not on rigid clock cycles, but like a living nervous system, 
+reacting to meanings rather than zeros and ones.
 
-      <img src="https://github.com/renat2985/crypto_payment_touchScreen/blob/main/doc/APFull2.png" width="300px">
+**Words is not a programming language. It is a bridge.** A bridge across which your human "I want" turns into a machine "done", without loss of meaning, 
+without complex rules, and with respect for your time. 
 
-3. **Сброс настроек:**
+> As the creators of the system say: *"Words belong to those who speak them"*. And now, the machine finally understands these words.
 
-      Чтобы сбросить устройство до заводских настроек, выполните следующие шаги:
-      1.	Нажмите правую кнопку, расположенную на задней стороне корпуса. Устройство начнет перезагружаться. Или вместо этого можно отключить и снова подключить питание к устройству.
-      2.	Когда устройство включится и вы увидите отображение версии прошивки и короткий звуковой сигнал, немедленно зажмите левую кнопку.
-      3.	После этого вы услышите продолжительный низкий сигнал, а на экране появится сообщение о стирании данных.
+## 🚀 Веб-установщик (рекомендуется)
 
-      Теперь настройки устройства будут сброшены. И снова появится WiFi "Crypto payment".
+### Перейдите на веб-установщик и следуйте инструкциям.
 
-### Инструкции для самостоятельной сборки:
-
-Для самостоятельной сборки вам потребуется [ESP32 C3 MINI 1.69inch LCD TouchScreen Display ST7789](https://spotpear.com/shop/ESP32-C3-Ornament-Trinket-LVGL-Astronaut-Clock-Watch-MINI-TV-1.69inch-Round-LCD-TouchScreen-ST7789-240x280-Case.html)
-
-
-Дополнительно вам понадобятся (AliExpress):
-
-  [USB Type A Connector Male](https://www.aliexpress.com/item/32924785370.html)
-
-  [5V Relay Module for Arduino Relay](https://www.aliexpress.com/item/1005006149703205.html)
-
-
-### Схема подключения
-
-  <img src="https://github.com/renat2985/crypto_payment_touchScreen/blob/main/doc/connect.png" height="200px"> <img src="https://github.com/renat2985/crypto_payment_touchScreen/blob/main/doc/gpio.png" height="200px"> <img src="https://github.com/renat2985/crypto_payment_touchScreen/blob/main/doc/photo.jpg" height="200px">
-
-
-Удачи! Если у вас возникнут вопросы, не стесняйтесь обращаться к нам.
-
-# Web installer (recommended)
-Вам нужно подключить устройство через Type-C к копьютеру и открыть в браузере сайт:
-
-## [https://renat2985.github.io/crypto_payment_touchScreen/](https://renat2985.github.io/crypto_payment_touchScreen/)
-
-
-### Для совсем профи инструкция для прошивки через программатор
-### Specification 
-```
-{ "path": "./build/esp32.esp32.esp32c3/crypto_payment_touchScreen.ino.bootloader.bin", "offset": 0 },
-{ "path": "./build/esp32.esp32.esp32c3/crypto_payment_touchScreen.ino.partitions.bin", "offset": 32768 },
-{ "path": "./build/esp32.esp32.esp32c3/boot_app0.bin", "offset": 57344 },
-{ "path": "./build/esp32.esp32.esp32c3/crypto_payment_touchScreen.ino.bin", "offset": 65536 }
-```
-
-
-
-## :battery: Donation
-
-If you like this project, you can give me a cup of coffee :coffee:
-
-<img src="https://github.com/renat2985/renat2985/raw/main/donate/donate.png" width="100%">
-
-- PayPal [https://www.paypal.me/RKevrels](https://www.paypal.me/RKevrels/5)
+## [https://sa-tretyakov.github.io/words/](https://sa-tretyakov.github.io/words/)
