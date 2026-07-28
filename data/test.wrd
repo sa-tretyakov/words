@@ -1,8 +1,36 @@
 // load test.wrd <--
 
-pinMode motop.EN OUTPUT
-digitalWrite motop.EN HIGH
-// digitalWrite motop.EN LOW
-analogWrite motop.step 512
+
+eth
+const mosi = 9u8
+const miso = 10u8
+const sck = 8u8
+const cs = 6u8
+const e.int = 1u8
+
+// eth.Init mosi miso sck cs
+
+soket.ssdp = udp.Multicast 1900 "239.255.255.250"
+print "soket.ssdp = "
+print soket.ssdp
+ln
+ssdpRead :
+n = udp.Available soket.ssdp
+if n > 0 {
+print "получено "
+print  n
+print " байт "
+ln
+udp.RecvFrom soket.ssdp
+print 
+print
+ln
+print
+ln
+}
+;
+
+
+ssdpRead 50 +task
 
 

@@ -1,0 +1,37 @@
+## eth.Init
+eth.Init mosi miso sck cs
+  Инициализация ENC28J60 через SPI (10 МГц). Возвращает BOOL.
+  Пример: eth.Init 23 19 18 5
+## eth.InitEx
+eth.InitEx mosi miso sck cs irq rst
+  Расширенная инициализация с IRQ и RST.
+  Если rst ≠ 255 — аппаратный сброс. Если irq ≠ 255 — пин как INPUT.
+  Пример: eth.InitEx 23 19 18 5 4 255
+## eth.Mac
+eth.Mac b1 b2 b3 b4 b5 b6
+  Установка MAC-адреса (вызывать до eth.Begin).
+  По умолчанию: 02:00:00:12:34:56
+  Пример: eth.Mac 0x02 0x00 0x00 0xAB 0xCD 0xEF
+## eth.Begin
+eth.Begin
+  Подключение по DHCP, ожидание линка до 10 секунд.
+  Возвращает BOOL (true если IP получен).
+  Пример: eth.Begin
+## eth.Static
+eth.Static ip gateway subnet dns
+  Настройка статического IP-адреса.
+  Пример: eth.Static "192.168.1.42" "192.168.1.1" "255.255.255.0" "8.8.8.8"
+## eth.Ip
+eth.Ip
+  Текущий IP интерфейса. Возвращает STRING ("0.0.0.0" если не поднят).
+  Пример: eth.Ip print
+## eth.Link
+eth.Link
+  Проверка физического линка (кабель, согласование).
+  Возвращает BOOL.
+  Пример: eth.Link if { "cable OK" print }
+## eth.Deinit
+eth.Deinit
+  Полное освобождение ресурсов (esp_netif, драйвер, память).
+  Возвращает BOOL.
+  Пример: eth.Deinit

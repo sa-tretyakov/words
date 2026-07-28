@@ -455,7 +455,7 @@ void word_Soket() {
 
 void word_out_ws() {
   currentOutput = &wsPrint;
-  currentOutput->println("out>ws: OK");
+  //currentOutput->println("out>ws: OK");
 }
 
 // ✅ ИСПРАВЛЕНО: Имя функции совпадает с регистрацией

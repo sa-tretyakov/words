@@ -1,3 +1,4 @@
+#define ETH_ENC28J60_ENABLED 0
 #include <Arduino.h>
 #include <cstring>
 // #define CHOICE_DEBUG
@@ -200,57 +201,100 @@ inline uint16_t rstack_pop() {
   rstack_ptr += 2;
   return val;
 }
-// === Минимальные inline-хелперы (0 накладных расходов, экономят ~150 строк) ===
-static inline bool popString(String& out) {
-  if (stack_is_empty()) return false;
-  uint8_t* top = &stack_mem[stack_ptr];
-  if (top[0] != 0x0E) return false;
-  out = String((char*)&top[2], top[1]);
-  stack_ptr += elem_size(top);
-  return true;
+// ============================================================
+// === ЕДИНЫЙ БЛОК ХЕЛПЕРОВ СТЕКА (все в одном месте) ===
+// ============================================================
+
+// --- POP: снятие со стека ---
+static inline bool popUInt8(uint8_t &out) {
+    if (stack_is_empty()) return false;
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] < 4 || top[0] > 11) return false;
+    uint16_t sz = elem_size(top);
+    if (sz < 2) return false;
+    out = top[1];
+    stack_ptr += sz;
+    return true;
 }
+
+static inline bool popUInt16(uint16_t &out) {
+    if (stack_is_empty()) return false;
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] < 4 || top[0] > 11) return false;
+    uint16_t sz = elem_size(top);
+    if (sz < 3) return false;
+    out = top[1] | (top[2] << 8);
+    stack_ptr += sz;
+    return true;
+}
+
+static inline bool popUInt32(uint32_t &out) {
+    if (stack_is_empty()) return false;
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] < 4 || top[0] > 11) return false;
+    uint16_t sz = elem_size(top);
+    if (sz < 2) return false;
+    out = 0;
+    uint16_t d = sz - 1;
+    for (uint16_t i = 0; i < d && i < 4; i++)
+        out |= (uint32_t)top[1 + i] << (i * 8);
+    stack_ptr += sz;
+    return true;
+}
+
+static inline bool popAddrInfo(uint16_t &addr, uint16_t &len) {
+    if (stack_is_empty()) return false;
+    uint8_t* top = &stack_mem[stack_ptr];
+    if ((top[0] != 17 && top[0] != 20) || elem_size(top) != 6) return false;
+    addr = top[1] | (top[2] << 8);
+    len  = top[3] | (top[4] << 8);
+    stack_ptr += 6;
+    return true;
+}
+
+static inline bool popString(String &out) {
+    if (stack_is_empty()) return false;
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E) return false;
+    out = String((char*)&top[2], top[1]);
+    stack_ptr += elem_size(top);
+    return true;
+}
+
+// --- PUSH: кладём на стек ---
 static inline void pushBool(bool v) {
-  uint8_t b[1] = {(uint8_t)(v ? 1 : 0)}; stack_push(b, 1);
+    uint8_t b[1] = {(uint8_t)(v ? 1 : 0)};
+    stack_push(b, 1);
 }
+
+static inline void pushUInt8(uint8_t v) {
+    uint8_t b[2] = {4, v};
+    stack_push(b, 2);
+}
+
+static inline void pushUInt16(uint16_t v) {
+    uint8_t b[3] = {6, (uint8_t)(v & 0xFF), (uint8_t)(v >> 8)};
+    stack_push(b, 3);
+}
+
+static inline void pushUInt32(uint32_t v) {
+    uint8_t b[5] = {9};
+    memcpy(&b[1], &v, 4);
+    stack_push(b, 5);
+}
+
 static inline void pushInt32(int32_t v) {
-  uint8_t b[5] = {10}; memcpy(&b[1], &v, 4); stack_push(b, 5);
+    uint8_t b[5] = {10};
+    memcpy(&b[1], &v, 4);
+    stack_push(b, 5);
 }
+
 static inline void pushStringRaw(const char* s) {
-  uint8_t l = strlen(s); if (l > 255) l = 255;
-  uint8_t b[257] = {0x0E, l}; memcpy(&b[2], s, l); stack_push(b, 2 + l);
-}
-// === УНИВЕРСАЛЬНЫЕ ХЕЛПЕРЫ СТЕКА (Вставить после pushStringRaw) ===
-static inline bool popUInt8(uint8_t& out) {
-  if (stack_is_empty()) return false;
-  uint8_t* top = &stack_mem[stack_ptr];
-  if (top[0] < 4 || top[0] > 11) return false; // Только числовые теги (u8..f)
-  uint16_t sz = elem_size(top);
-  if (sz < 2) return false;
-  out = top[1]; // LSB всегда по смещению 1 (работает для u8, u16, u32, i32)
-  stack_ptr += sz;
-  return true;
-}
-
-static inline bool popUInt32(uint32_t& out) {
-  if (stack_is_empty()) return false;
-  uint8_t* top = &stack_mem[stack_ptr];
-  if (top[0] < 4 || top[0] > 11) return false;
-  uint16_t sz = elem_size(top);
-  if (sz < 2) return false;
-  out = 0;
-  uint16_t d = sz - 1;
-  for (uint16_t i = 0; i < d && i < 4; i++) {
-    out |= (uint32_t)top[1 + i] << (i * 8);
-  }
-  stack_ptr += sz;
-  return true;
-}
-
-static inline bool popUInt32Optional(uint32_t& out) {
-  if (stack_is_empty()) return false;
-  uint8_t* top = &stack_mem[stack_ptr];
-  if (top[0] < 4 || top[0] > 11) return false;
-  return popUInt32(out);
+    uint8_t l = strlen(s);
+    if (l > 255) l = 255;
+    uint8_t b[257] = {0x0E, l};
+    memcpy(&b[2], s, l);
+    stack_push(b, 2 + l);
 }
 // === РЕЕСТР ТИПОВ ===
 enum { CAT_NONE, CAT_UINT, CAT_INT, CAT_FLOAT, CAT_TEXT, CAT_ADDR, CAT_LIST, CAT_STRUCT, CAT_REF };
@@ -334,6 +378,38 @@ void create_internal_word_str(const char* name_raw, const char* value_raw,
   memcpy(&dict_pool[p + 4 + vlen], &fn, 4);
 
   link_word(a);
+}
+// === УНИВЕРСАЛЬНЫЙ ДИСПЕТЧЕР РЕСУРСОВ ===
+// Вызывает FUNC из тела слова-дескриптора
+// Передаёт: адрес ресурса (ctx) через стек
+// === УНИВЕРСАЛЬНЫЙ ДИСПЕТЧЕР РЕСУРСОВ (ИСПРАВЛЕННЫЙ) ===
+static void dispatch_resource(uint16_t res_addr, uint16_t desc_addr, const char* op) {
+  uint8_t vn = dict_pool[desc_addr + 2];
+  uint8_t flags = dict_pool[desc_addr + 4 + vn];
+  uint32_t fn = 0;
+
+  // Вариант А: Стандартное внутреннее слово (созданное через addInternalWord)
+  // Функция лежит в конце структуры слова
+  if (flags & 0x04) {
+    uint16_t next = dict_pool[desc_addr] | (dict_pool[desc_addr + 1] << 8);
+    uint16_t end = next ? next : dict_ptr;
+    memcpy(&fn, &dict_pool[end - 4], 4);
+  }
+  // Вариант Б: Кастомное слово, где тело начинается с тега 19 (FUNC)
+  else if (dict_pool[desc_addr + 5 + vn] == 19) {
+    memcpy(&fn, &dict_pool[desc_addr + 5 + vn + 1], 4);
+  }
+
+  if (fn == 0) {
+    currentOutput->print(op);
+    currentOutput->println(": invalid descriptor");
+    return;
+  }
+
+  // Кладём адрес ресурса на стек (как ADDR, тег 0x12) и вызываем функцию
+  uint8_t ctx[3] = {0x12, (uint8_t)(res_addr & 0xFF), (uint8_t)(res_addr >> 8)};
+  stack_push(ctx, 3);
+  ((void(*)())fn)();
 }
 static uint16_t tag_size(const uint8_t* buf) {
   if (!buf) return 0;
@@ -698,276 +774,308 @@ if (op[0] == ')' || op[0] == '(' || op[0] == '[' || op[0] == ']') {
   }
 }
 void choiceFunc() {
-  uint8_t abuf[3];
-  if (stack_pop(abuf, 3) != 3 || abuf[0] != 0x12) return;
-  uint16_t addr = abuf[1] | (abuf[2] << 8);
-  if (addr == 0) return; // Убрали блокировку addr >= dict_ptr
-  uint8_t nlen = dict_pool[addr + 2];
-  uint16_t next = dict_pool[addr] | (dict_pool[addr + 1] << 8);
-  // Умное вычисление конца: для локалов (addr >= dict_ptr) конец — это DICT_POOL_SIZE
-  uint16_t end = next ? next : (addr >= dict_ptr ? DICT_POOL_SIZE : dict_ptr);
-  uint16_t val_start = addr + 5 + nlen;
-  uint16_t val_size = (end - 4) - val_start;
-  if (val_size == 0) return;
-  uint8_t var_tag = dict_pool[val_start];
-  uint16_t old_sp = stack_ptr;
-  uint8_t flags = dict_pool[addr + 4 + nlen];
+uint8_t abuf[3];
+if (stack_pop(abuf, 3) != 3 || abuf[0] != 0x12) return;
+uint16_t addr = abuf[1] | (abuf[2] << 8);
+if (addr == 0) return;
+uint8_t nlen = dict_pool[addr + 2];
+uint16_t next = dict_pool[addr] | (dict_pool[addr + 1] << 8);
+uint16_t end = next ? next : (addr >= dict_ptr ? DICT_POOL_SIZE : dict_ptr);
+uint16_t val_start = addr + 5 + nlen;
+uint16_t val_size = (end - 4) - val_start;
+if (val_size == 0) return;
+uint8_t var_tag = dict_pool[val_start];
+uint16_t old_sp = stack_ptr;
+uint8_t flags = dict_pool[addr + 4 + nlen];
 
-  // 🔹 ПЕРЕ-НАЗНАЧЕНИЕ МАССИВА/ССЫЛКИ
-  if ((var_tag == 17 || var_tag == 20) && !stack_is_empty()) {
+// 🔹 ПЕРЕ-НАЗНАЧЕНИЕ МАССИВА/ССЫЛКИ
+if ((var_tag == 17 || var_tag == 20) && !stack_is_empty()) {
     uint8_t* top = &stack_mem[stack_ptr];
     if (top[0] == 0x0C && top[1] == 1 && top[2] == '=') {
-      if (flags & 0x01) {
-        stack_ptr = old_sp;
-        return;
-      }
-      uint16_t src_pos = stack_ptr + 3;
-      if (src_pos < STACK_SIZE) {
-        uint8_t* src = &stack_mem[src_pos];
-        if ((src[0] == 17 || src[0] == 20) && elem_size(src) == 6) {
-          memcpy(&dict_pool[val_start], src, 6);
-          dict_pool[val_start] = 20;
-          stack_ptr += 9;
-          mark_dirty(addr); // 🔑 1. Запись нового массива/ссылки
-          return;
-        }
-      }
-      stack_ptr = old_sp; return;
-    }
-  }
-
-  // 🔍 МАРКЕР @
-  if (!stack_is_empty()) {
-    uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] == 0x0C && top[1] == 1 && top[2] == '@') {
-      stack_ptr += 3;
-      uint8_t ref[4] = {15, 0, 0, 0};
-      if (var_tag == 15) {
-        ref[1] = dict_pool[val_start + 1];
-        uint16_t d_addr = dict_pool[val_start + 2] | (dict_pool[val_start + 3] << 8);
-        ref[2] = d_addr & 0xFF; ref[3] = d_addr >> 8;
-      } else if (var_tag == 17 || var_tag == 20) {
-        uint16_t base = dict_pool[val_start + 1] | (dict_pool[val_start + 2] << 8);
-        uint16_t len  = dict_pool[val_start + 3] | (dict_pool[val_start + 4] << 8);
-        uint8_t  esz  = type_registry[dict_pool[val_start + 5]].size;
-        uint16_t total = len * esz;
-        ref[1] = (total > 255) ? 255 : (uint8_t)total;
-        ref[2] = base & 0xFF; ref[3] = base >> 8;
-      } else {
-        ref[1] = val_size - 1;
-        ref[2] = (val_start + 1) & 0xFF; ref[3] = (val_start + 1) >> 8;
-      }
-      stack_push(ref, 4); return;
-    }
-  }
-
-  // 🔹 $STRING (тег 15)
-  if (var_tag == 15) {
-    uint16_t slen  = dict_pool[val_start + 1];
-    uint16_t d_addr = dict_pool[val_start + 2] | (dict_pool[val_start + 3] << 8);
-    
-    // Подготовка буфера для чтения или операций
-    uint8_t tmp[257] = {0x0E, slen};
-    if (d_addr + slen <= DATA_POOL_SIZE) {
-      if (slen > 0) memcpy(&tmp[2], &data_pool[d_addr], slen);
-    } else {
-      tmp[1] = 0;
-    }
-
-    // Проверка: является ли следующее действие присваиванием (=)
-    if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
-      uint8_t* top = &stack_mem[stack_ptr];
-      if (top[1] == 1 && top[2] == '=') {
-        stack_ptr += 3; // Снимаем маркер '='
-        if (stack_is_empty()) {
-          stack_ptr = old_sp;
-          return;
-        }
-        
-        uint8_t* src = &stack_mem[stack_ptr]; 
-        uint16_t src_sz = elem_size(src);
-        uint16_t new_len = 0; 
-        const uint8_t* new_data = nullptr;
-
-        // Извлекаем новые данные (поддерживаем STRING и NAME)
-        if (src[0] == 0x0E) {
-          new_len = src[1];
-          new_data = &src[2];
-        } else if (src[0] >= 12 && src[0] <= 13) {
-          new_len = src[1];
-          new_data = &src[2];
-        } else {
-          stack_ptr += src_sz;
-          stack_ptr = old_sp;
-          return;
-        }
-
-        // 🔑 КЛЮЧЕВАЯ ОПТИМИЗАЦИЯ: In-place обновление!
-        uint16_t new_addr;
-        if (new_len <= slen) {
-          // 🎯 Новая строка помещается в старое место! 
-          // Мы НЕ двигаем data_ptr, предотвращая фрагментацию.
-          new_addr = d_addr;
-        } else {
-          // 📏 Новая строка длиннее: выделяем новое место в конце data_pool
-          if (data_ptr + new_len > DATA_POOL_SIZE) {
-            currentOutput->println("data_pool overflow");
-            stack_ptr += src_sz;
+        if (flags & 0x01) {
             stack_ptr = old_sp;
             return;
-          }
-          new_addr = data_ptr;
-          data_ptr += new_len;
         }
-
-        // Записываем данные (поверх старых или в новое место)
-        if (new_len > 0) {
-          memcpy(&data_pool[new_addr], new_data, new_len);
+        uint16_t src_pos = stack_ptr + 3;
+        if (src_pos < STACK_SIZE) {
+            uint8_t* src = &stack_mem[src_pos];
+            if ((src[0] == 17 || src[0] == 20) && elem_size(src) == 6) {
+                memcpy(&dict_pool[val_start], src, 6);
+                dict_pool[val_start] = 20;
+                stack_ptr += 9;
+                mark_dirty(addr);
+                return;
+            }
         }
-
-        // Обновляем метаданные переменной в словаре (длина и адрес)
-        dict_pool[val_start + 1] = new_len; 
-        dict_pool[val_start + 2] = new_addr & 0xFF; 
-        dict_pool[val_start + 3] = new_addr >> 8;
-
-        stack_ptr += src_sz; // Снимаем новое значение со стека
-        mark_dirty(addr);    // 🔑 Помечаем переменную как изменённую (для json>>)
-        return;
-      }
-      
-      // Если это не '=', а операция (например, конкатенация +), делегируем
-      apply_op(&tmp[1], slen, 0x0E, 0); 
-      return;
+        stack_ptr = old_sp; return;
     }
-    
-    // Просто чтение значения: кладём STRING на стек
-    stack_push(tmp, 2 + slen); 
+}
+
+// 🔍 МАРКЕР @
+if (!stack_is_empty()) {
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] == 0x0C && top[1] == 1 && top[2] == '@') {
+        stack_ptr += 3;
+        uint8_t ref[4] = {15, 0, 0, 0};
+        if (var_tag == 15) {
+            ref[1] = dict_pool[val_start + 1];
+            uint16_t d_addr = dict_pool[val_start + 2] | (dict_pool[val_start + 3] << 8);
+            ref[2] = d_addr & 0xFF; ref[3] = d_addr >> 8;
+        } else if (var_tag == 17 || var_tag == 20) {
+            uint16_t base = dict_pool[val_start + 1] | (dict_pool[val_start + 2] << 8);
+            uint16_t len  = dict_pool[val_start + 3] | (dict_pool[val_start + 4] << 8);
+            uint8_t  esz  = type_registry[dict_pool[val_start + 5]].size;
+            uint16_t total = len * esz;
+            ref[1] = (total > 255) ? 255 : (uint8_t)total;
+            ref[2] = base & 0xFF; ref[3] = base >> 8;
+        } else {
+            ref[1] = val_size - 1;
+            ref[2] = (val_start + 1) & 0xFF; ref[3] = (val_start + 1) >> 8;
+        }
+        stack_push(ref, 4); return;
+    }
+}
+
+// 🔹 $STRING (тег 15)
+if (var_tag == 15) {
+    uint16_t slen  = dict_pool[val_start + 1];
+    uint16_t d_addr = dict_pool[val_start + 2] | (dict_pool[val_start + 3] << 8);
+    uint8_t tmp[257] = {0x0E, slen};
+    if (d_addr + slen <= DATA_POOL_SIZE) {
+        if (slen > 0) memcpy(&tmp[2], &data_pool[d_addr], slen);
+    } else {
+        tmp[1] = 0;
+    }
+    if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
+        uint8_t* top = &stack_mem[stack_ptr];
+        if (top[1] == 1 && top[2] == '=') {
+            stack_ptr += 3;
+            if (stack_is_empty()) {
+                stack_ptr = old_sp;
+                return;
+            }
+            uint8_t* src = &stack_mem[stack_ptr];
+            uint16_t src_sz = elem_size(src);
+            uint16_t new_len = 0;
+            const uint8_t* new_data = nullptr;
+            if (src[0] == 0x0E) {
+                new_len = src[1];
+                new_data = &src[2];
+            } else if (src[0] >= 12 && src[0] <= 13) {
+                new_len = src[1];
+                new_data = &src[2];
+            } else {
+                stack_ptr += src_sz;
+                stack_ptr = old_sp;
+                return;
+            }
+            uint16_t new_addr;
+            if (new_len <= slen) {
+                new_addr = d_addr;
+            } else {
+                if (data_ptr + new_len > DATA_POOL_SIZE) {
+                    currentOutput->println("data_pool overflow");
+                    stack_ptr += src_sz;
+                    stack_ptr = old_sp;
+                    return;
+                }
+                new_addr = data_ptr;
+                data_ptr += new_len;
+            }
+            if (new_len > 0) {
+                memcpy(&data_pool[new_addr], new_data, new_len);
+            }
+            dict_pool[val_start + 1] = new_len;
+            dict_pool[val_start + 2] = new_addr & 0xFF;
+            dict_pool[val_start + 3] = new_addr >> 8;
+            stack_ptr += src_sz;
+            mark_dirty(addr);
+            return;
+        }
+        apply_op(&tmp[1], slen, 0x0E, 0);
+        return;
+    }
+    stack_push(tmp, 2 + slen);
     return;
-  }
+}
 
 #define RESTORE_AND_PUSH() do { stack_ptr = old_sp; stack_push(&dict_pool[val_start], val_size); return; } while(0)
-  if (stack_is_empty() || stack_mem[stack_ptr] != 0x0C) RESTORE_AND_PUSH();
-  uint8_t* top = &stack_mem[stack_ptr];
-  if (top[1] == 1 && top[2] == ']') RESTORE_AND_PUSH();
 
-  // 🔑 ЕДИНЫЙ ПУТЬ ДЛЯ ARRAY (17) И REF_ARR (20)
-  if ((var_tag == 17 || var_tag == 20) && top[1] == 1 && top[2] == '[') {
+if (stack_is_empty() || stack_mem[stack_ptr] != 0x0C) RESTORE_AND_PUSH();
+uint8_t* top = &stack_mem[stack_ptr];
+if (top[1] == 1 && top[2] == ']') RESTORE_AND_PUSH();
+
+// 🔑 ЕДИНЫЙ ПУТЬ ДЛЯ ARRAY (17) И REF_ARR (20)
+if ((var_tag == 17 || var_tag == 20) && top[1] == 1 && top[2] == '[') {
     stack_ptr += 3;
     if (stack_is_empty()) RESTORE_AND_PUSH();
     uint8_t* nxt = &stack_mem[stack_ptr];
+    
+    // === МАССОВАЯ ЗАПИСЬ arr[] = [...] ===
     if (nxt[0] == 0x0C && nxt[1] == 1 && nxt[2] == ']') {
-      stack_ptr += 3;
-      if (stack_is_empty() || stack_mem[stack_ptr] != 0x0C) RESTORE_AND_PUSH();
-      uint8_t* eq = &stack_mem[stack_ptr];
-      if (eq[1] != 1 || eq[2] != '=') RESTORE_AND_PUSH();
-      stack_ptr += 3;
-      uint16_t base = dict_pool[val_start + 1] | (dict_pool[val_start + 2] << 8);
-      uint16_t len  = dict_pool[val_start + 3] | (dict_pool[val_start + 4] << 8);
-      uint8_t  tp   = dict_pool[val_start + 5];
-      uint8_t  esz  = type_registry[tp].size;
-      for (uint16_t i = 0; i < len; i++) {
-        if (stack_is_empty()) RESTORE_AND_PUSH();
-        uint8_t* v = &stack_mem[stack_ptr];
-        if (v[0] != 14 && v[0] != 15 && (v[0] < 4 || v[0] > 11)) RESTORE_AND_PUSH();
-        uint16_t vsz = elem_size(v);
-        uint16_t target = base + i * esz;
-        if (tp == 15) {
-          if (v[0] == 15) {
-            memcpy(&data_pool[target], &v[1], 3);
-          }
-          else if (v[0] == 14 || (v[0] >= 12 && v[0] <= 13)) {
-            uint8_t slen = v[1];
-            if (data_ptr + slen > DATA_POOL_SIZE) {
-              RESTORE_AND_PUSH();
+        stack_ptr += 3;
+        if (stack_is_empty() || stack_mem[stack_ptr] != 0x0C) RESTORE_AND_PUSH();
+        uint8_t* eq = &stack_mem[stack_ptr];
+        if (eq[1] != 1 || eq[2] != '=') RESTORE_AND_PUSH();
+        stack_ptr += 3;
+        uint16_t base = dict_pool[val_start + 1] | (dict_pool[val_start + 2] << 8);
+        uint16_t len  = dict_pool[val_start + 3] | (dict_pool[val_start + 4] << 8);
+        uint8_t  tp   = dict_pool[val_start + 5];
+        uint8_t  esz  = type_registry[tp].size;
+        
+        for (uint16_t i = 0; i < len; i++) {
+            if (stack_is_empty()) RESTORE_AND_PUSH();
+            uint8_t* v = &stack_mem[stack_ptr];
+            
+            // 🔹 ПРАВКА 1: проверка типа с учётом ADDR-массива
+            if (tp == 18) {
+                if (v[0] != 0x12) RESTORE_AND_PUSH();
+            } else {
+                if (v[0] != 14 && v[0] != 15 && (v[0] < 4 || v[0] > 11)) RESTORE_AND_PUSH();
             }
-            uint16_t new_addr = data_ptr;
-            if (slen > 0) memcpy(&data_pool[new_addr], &v[2], slen);
-            data_ptr += slen;
-            data_pool[target] = slen; data_pool[target + 1] = new_addr & 0xFF; data_pool[target + 2] = new_addr >> 8;
-          } else {
-            RESTORE_AND_PUSH();
-          }
-        } else {
-          uint32_t val32 = 0; uint16_t data_bytes = vsz - 1; uint16_t max_read = (data_bytes > 4) ? 4 : data_bytes;
-          for (uint16_t k = 0; k < max_read; k++) val32 |= (uint32_t)v[1 + k] << (k * 8);
-          for (uint16_t k = 0; k < esz; k++) data_pool[target + k] = (val32 >> (k * 8)) & 0xFF;
+            
+            uint16_t vsz = elem_size(v);
+            uint16_t target = base + i * esz;
+            
+            if (tp == 15) {
+                if (v[0] == 15) {
+                    memcpy(&data_pool[target], &v[1], 3);
+                }
+                else if (v[0] == 14 || (v[0] >= 12 && v[0] <= 13)) {
+                    uint8_t slen = v[1];
+                    if (data_ptr + slen > DATA_POOL_SIZE) {
+                        RESTORE_AND_PUSH();
+                    }
+                    uint16_t new_addr = data_ptr;
+                    if (slen > 0) memcpy(&data_pool[new_addr], &v[2], slen);
+                    data_ptr += slen;
+                    data_pool[target] = slen; data_pool[target + 1] = new_addr & 0xFF; data_pool[target + 2] = new_addr >> 8;
+                } else {
+                    RESTORE_AND_PUSH();
+                }
+            }
+            // 🔹 ПРАВКА 2: специальная ветка для ADDR-массива
+            else if (tp == 18) {
+                data_pool[target]     = v[1];
+                data_pool[target + 1] = v[2];
+            }
+            else {
+                uint32_t val32 = 0; uint16_t data_bytes = vsz - 1; uint16_t max_read = (data_bytes > 4) ? 4 : data_bytes;
+                for (uint16_t k = 0; k < max_read; k++) val32 |= (uint32_t)v[1 + k] << (k * 8);
+                for (uint16_t k = 0; k < esz; k++) data_pool[target + k] = (val32 >> (k * 8)) & 0xFF;
+            }
+            stack_ptr += vsz;
         }
-        stack_ptr += vsz;
-      }
-      mark_dirty(addr); // 🔑 3. Массовая запись в массив (var[] = [1,2,3])
-      return;
+        mark_dirty(addr);
+        return;
     }
+    
+    // === ЗАПИСЬ/ЧТЕНИЕ ПО ИНДЕКСУ arr[i] ===
     if (nxt[0] != 14 && nxt[0] != 15 && (nxt[0] < 4 || nxt[0] > 11)) RESTORE_AND_PUSH();
     uint16_t idx_sz = elem_size(nxt);
     uint32_t idx_val = 0; uint16_t d = idx_sz - 1;
     for (uint16_t k = 0; k < d && k < 4; k++) idx_val |= (uint32_t)nxt[1 + k] << (k * 8);
     stack_ptr += idx_sz;
+    
     if (stack_is_empty() || stack_mem[stack_ptr] != 0x0C) RESTORE_AND_PUSH();
     uint8_t* end_b = &stack_mem[stack_ptr];
     if (end_b[1] != 1 || end_b[2] != ']') RESTORE_AND_PUSH();
     stack_ptr += 3;
+    
     uint16_t base = dict_pool[val_start + 1] | (dict_pool[val_start + 2] << 8);
     uint16_t arr_len = dict_pool[val_start + 3] | (dict_pool[val_start + 4] << 8);
     uint8_t  tp = dict_pool[val_start + 5];
     uint8_t  esz = type_registry[tp].size;
+    
     if (idx_val >= arr_len) {
-      currentOutput->println("idx OOB");
-      RESTORE_AND_PUSH();
+        currentOutput->println("idx OOB");
+        RESTORE_AND_PUSH();
     }
+    
     uint16_t data_addr = base + idx_val * esz;
     bool is_assign = false;
+    
     if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
-      uint8_t* op = &stack_mem[stack_ptr];
-      if (op[1] == 1 && op[2] == '=') {
-        is_assign = true;
-        stack_ptr += 3;
-      }
+        uint8_t* op = &stack_mem[stack_ptr];
+        if (op[1] == 1 && op[2] == '=') {
+            is_assign = true;
+            stack_ptr += 3;
+        }
     }
+    
+    // === ЗАПИСЬ ПО ИНДЕКСУ arr[i] = val ===
     if (is_assign) {
-      if (stack_is_empty()) RESTORE_AND_PUSH();
-      uint8_t* v = &stack_mem[stack_ptr];
-      if (v[0] != 14 && v[0] != 15 && (v[0] < 4 || v[0] > 11)) RESTORE_AND_PUSH();
-      uint16_t vsz = elem_size(v);
-      if (tp == 15) {
-        if (v[0] == 15) {
-          memcpy(&data_pool[data_addr], &v[1], 3);
-        }
-        else if (v[0] == 14 || (v[0] >= 12 && v[0] <= 13)) {
-          uint8_t slen = v[1];
-          if (data_ptr + slen > DATA_POOL_SIZE) {
-            RESTORE_AND_PUSH();
-          }
-          uint16_t new_addr = data_ptr;
-          if (slen > 0) memcpy(&data_pool[new_addr], &v[2], slen);
-          data_ptr += slen;
-          data_pool[data_addr] = slen; data_pool[data_addr + 1] = new_addr & 0xFF; data_pool[data_addr + 2] = new_addr >> 8;
+        if (stack_is_empty()) RESTORE_AND_PUSH();
+        uint8_t* v = &stack_mem[stack_ptr];
+        
+        // 🔹 ПРАВКА 3: проверка типа с учётом ADDR-массива
+        if (tp == 18) {
+            if (v[0] != 0x12) RESTORE_AND_PUSH();
         } else {
-          RESTORE_AND_PUSH();
+            if (v[0] != 14 && v[0] != 15 && (v[0] < 4 || v[0] > 11)) RESTORE_AND_PUSH();
         }
-      } else {
-        uint32_t val32 = 0; uint16_t data_bytes = vsz - 1; uint16_t max_read = (data_bytes > 4) ? 4 : data_bytes;
-        for (uint16_t k = 0; k < max_read; k++) val32 |= (uint32_t)v[1 + k] << (k * 8);
-        for (uint16_t k = 0; k < esz; k++) data_pool[data_addr + k] = (val32 >> (k * 8)) & 0xFF;
-      }
-      stack_ptr += vsz;
-      mark_dirty(addr); // 🔑 4. Запись в один индекс (var[i] = val)
-      return;
+        
+        uint16_t vsz = elem_size(v);
+        
+        if (tp == 15) {
+            if (v[0] == 15) {
+                memcpy(&data_pool[data_addr], &v[1], 3);
+            }
+            else if (v[0] == 14 || (v[0] >= 12 && v[0] <= 13)) {
+                uint8_t slen = v[1];
+                if (data_ptr + slen > DATA_POOL_SIZE) {
+                    RESTORE_AND_PUSH();
+                }
+                uint16_t new_addr = data_ptr;
+                if (slen > 0) memcpy(&data_pool[new_addr], &v[2], slen);
+                data_ptr += slen;
+                data_pool[data_addr] = slen; data_pool[data_addr + 1] = new_addr & 0xFF; data_pool[data_addr + 2] = new_addr >> 8;
+            } else {
+                RESTORE_AND_PUSH();
+            }
+        }
+        // 🔹 ПРАВКА 4: специальная ветка для ADDR-массива
+        else if (tp == 18) {
+            data_pool[data_addr]     = v[1];
+            data_pool[data_addr + 1] = v[2];
+        }
+        else {
+            uint32_t val32 = 0; uint16_t data_bytes = vsz - 1; uint16_t max_read = (data_bytes > 4) ? 4 : data_bytes;
+            for (uint16_t k = 0; k < max_read; k++) val32 |= (uint32_t)v[1 + k] << (k * 8);
+            for (uint16_t k = 0; k < esz; k++) data_pool[data_addr + k] = (val32 >> (k * 8)) & 0xFF;
+        }
+        stack_ptr += vsz;
+        mark_dirty(addr);
+        return;
     }
+    
+    // === ЧТЕНИЕ ПО ИНДЕКСУ arr[i] ===
     if (tp == 15) {
-      uint8_t slen  = data_pool[data_addr];
-      uint16_t d_addr = data_pool[data_addr + 1] | (data_pool[data_addr + 2] << 8);
-      uint8_t tmp[257] = {0x0E, slen};
-      if (slen > 0 && d_addr + slen <= DATA_POOL_SIZE) memcpy(&tmp[2], &data_pool[d_addr], slen);
-      stack_push(tmp, 2 + slen); return;
+        uint8_t slen  = data_pool[data_addr];
+        uint16_t d_addr = data_pool[data_addr + 1] | (data_pool[data_addr + 2] << 8);
+        uint8_t tmp[257] = {0x0E, slen};
+        if (slen > 0 && d_addr + slen <= DATA_POOL_SIZE) memcpy(&tmp[2], &data_pool[d_addr], slen);
+        stack_push(tmp, 2 + slen); return;
     }
+    
+    // 🔹 ПРАВКА 5: ADDR-массив → исполняем слово по адресу
+    if (tp == 18) {
+        uint16_t word_addr = data_pool[data_addr] | (data_pool[data_addr + 1] << 8);
+        if (word_addr != 0 && word_addr < dict_ptr) {
+            exec_word(word_addr);
+        }
+        return;
+    }
+    
     uint8_t res[8]; res[0] = tp;
     memcpy(&res[1], &data_pool[data_addr], esz);
     stack_push(res, 1 + esz);
     return;
-  }
-  // 🔑 5. Скалярные операции и присваивания (=, +=, -= и т.д.)
-  mark_dirty(addr);
-  apply_op(&dict_pool[val_start + 1], val_size - 1, var_tag, val_start + 1);
+}
+
+// 🔑 5. Скалярные операции и присваивания (=, +=, -= и т.д.)
+mark_dirty(addr);
+apply_op(&dict_pool[val_start + 1], val_size - 1, var_tag, val_start + 1);
 }
 void printRawValue(const uint8_t* buf) {
   if (!buf) return;
@@ -1370,274 +1478,289 @@ void word_exit() {
 }
 
 void processToken(const char* token) {
-  if (!token || !*token) return;
-  size_t t_len = strlen(token);
-  if (token[0] == '"' && token[t_len - 1] == '"' && t_len >= 2) {
-    size_t str_len = t_len - 2;
-    if (str_len > 255) str_len = 255;
-    uint8_t buf[257]; buf[0] = 0x0E; buf[1] = (uint8_t)str_len;
-    memcpy(&buf[2], &token[1], str_len);
-    if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) apply_op(&buf[1], str_len, 0x0E, 0);
-    else stack_push(buf, 2 + str_len); return;
-  }
-  uint16_t addr = dict_find(token);
-  if (addr != 0xFFFF) {
-    exec_word(addr);
-    return;
-  }
-  uint8_t tag = 0; uint32_t val_u = 0; int32_t val_s = 0; bool is_num = false; char* endptr;
-  const char* suffixes[]  = {"u8", "i8", "u16", "i16", "u24", "u32", "i32", "f"};
-  const uint8_t suf_tags[] = {4,  5,  6,   7,   8,   9,  10,  11};
-  bool suffix_found = false; int matched_idx = -1;
-  for (int i = 0; i < 8; i++) {
-    size_t s_len = strlen(suffixes[i]);
-    if (t_len > s_len && strcmp(token + t_len - s_len, suffixes[i]) == 0) {
-      tag = suf_tags[i];
-      suffix_found = true;
-      matched_idx = i;
-      break;
+    if (!token || !token) return;
+    size_t t_len = strlen(token);
+    if (token[0] == '"' && token[t_len - 1] == '"' && t_len >= 2) {
+        size_t str_len = t_len - 2;
+        if (str_len > 255) str_len = 255;
+        uint8_t buf[257]; buf[0] = 0x0E; buf[1] = (uint8_t)str_len;
+        memcpy(&buf[2], &token[1], str_len);
+        if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) apply_op(&buf[1], str_len, 0x0E, 0);
+        else stack_push(buf, 2 + str_len); return;
     }
-  }
-  if (suffix_found) {
-    size_t num_len = t_len - strlen(suffixes[matched_idx]);
-    char num_buf[64]; if (num_len >= sizeof(num_buf)) num_len = sizeof(num_buf) - 1;
-    strncpy(num_buf, token, num_len); num_buf[num_len] = '\0';
-    if (tag == 11) {
-      strtof(num_buf, &endptr);
-      if (endptr == num_buf + num_len) is_num = true;
+    uint16_t addr = dict_find(token);
+    if (addr != 0xFFFF) {
+        exec_word(addr);
+        return;
     }
-    else {
-      val_u = strtoul(num_buf, &endptr, 0);
-      if (endptr == num_buf + num_len) {
-        is_num = true;
-        val_s = (int32_t)val_u;
-      }
-    }
-  } else {
-if (t_len > 2 && token[0] == '0' && (token[1] == 'x' || token[1] == 'X')) { // исправлено
-    val_u = strtoul(token + 2, &endptr, 16);
-    if (endptr == token + t_len) {
-        is_num = true;
-        // 🔹 Определяем тип по количеству hex-цифр, а не по значению
-        size_t hex_digits = t_len - 2;
-        if (hex_digits > 8) hex_digits = 8;
-        if (hex_digits <= 2)      tag = 4;   // u8:  0x0 .. 0xFF
-        else if (hex_digits <= 4) tag = 6;   // u16: 0x000 .. 0xFFFF
-        else if (hex_digits <= 6) tag = 8;   // u24: 0x00000 .. 0xFFFFFF
-        else                      tag = 9;   // u32: 0x0000000 .. 0xFFFFFFFF
-    }
-}
-    if (!is_num) {
-      bool is_float_fmt = false;
-      for (size_t k = 0; k < t_len; k++) {
-        if (token[k] == '.' || token[k] == 'e' || token[k] == 'E') {
-          is_float_fmt = true;
-          break;
-        }
-      }
-      if (is_float_fmt) {
-        strtof(token, &endptr);
-        if (endptr == token + t_len) {
-          is_num = true;
-          tag = 11;
-        }
-      }
-      if (!is_num) {
-        val_s = strtol(token, &endptr, 10);
-        if (endptr == token + t_len) {
-          is_num = true;
-          val_u = (uint32_t)val_s;
-          tag = current_type;
-        }
-      }
-    }
-  }
-  if (is_num) {
-    uint8_t buf[8]; size_t sz = 0; buf[0] = tag;
-    switch (tag) {
-      case 4:  buf[1] = (uint8_t)val_u; sz = 2; break; case 5:  buf[1] = (int8_t)val_s;  sz = 2; break;
-      case 6:  *(uint16_t*)&buf[1] = (uint16_t)val_u; sz = 3; break; case 7:  *(int16_t*)&buf[1]  = (int16_t)val_s;  sz = 3; break;
-      case 8:  buf[1] = (uint8_t)val_u; buf[2] = (uint8_t)(val_u >> 8); buf[3] = (uint8_t)(val_u >> 16); sz = 4; break;
-      case 9:  *(uint32_t*)&buf[1] = val_u; sz = 5; break; case 10: *(int32_t*)&buf[1]  = val_s; sz = 5; break;
-      case 11: {
-          float f = strtof(token, NULL);
-          memcpy(&buf[1], &f, 4);
-          sz = 5;
-          break;
+    uint8_t tag = 0; uint32_t val_u = 0; int32_t val_s = 0; bool is_num = false; char* endptr;
+    const char* suffixes[] = {"u8", "i8", "u16", "i16", "u24", "u32", "i32", "f"};
+    const uint8_t suf_tags[] = {4, 5, 6, 7, 8, 9, 10, 11};
+    bool suffix_found = false; int matched_idx = -1;
+    for (int i = 0; i < 8; i++) {
+        size_t s_len = strlen(suffixes[i]);
+        if (t_len > s_len && strcmp(token + t_len - s_len, suffixes[i]) == 0) {
+            tag = suf_tags[i];
+            suffix_found = true;
+            matched_idx = i;
+            break;
         }
     }
-    bool call_apply = false;
-    if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
-      uint8_t op_len = stack_mem[stack_ptr + 1];
-      if (op_len == 1) {
-        char c = stack_mem[stack_ptr + 2];
-        if (c != '[' && c != ']' && c != '=' && c != ')' && c != '(') call_apply = true;
-      } else {
-        call_apply = true;
-      }
-    }
-    if (call_apply) apply_op(&buf[1], sz - 1, tag, 0); else stack_push(buf, sz); return;
-  }
-  if (!stack_is_empty()) {
-    uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] == 0x0C && top[1] == 1 && top[2] == '=') {
-      uint16_t cur = stack_ptr; uint16_t eq_sz = elem_size(&stack_mem[cur]); cur += eq_sz;
-      bool is_array = false; uint16_t arr_m_sz = 0;
-      if (cur < STACK_SIZE) {
-        uint8_t* p = &stack_mem[cur];
-        if (p[0] == 0x0C && p[1] == 5 && memcmp(&p[2], "array", 5) == 0) {
-          is_array = true;
-          arr_m_sz = elem_size(p);
-          cur += arr_m_sz;
+    if (suffix_found) {
+        size_t num_len = t_len - strlen(suffixes[matched_idx]);
+        char num_buf[64]; if (num_len >= sizeof(num_buf)) num_len = sizeof(num_buf) - 1;
+        strncpy(num_buf, token, num_len); num_buf[num_len] = '\0';
+        if (tag == 11) {
+            strtof(num_buf, &endptr);
+            if (endptr == num_buf + num_len) is_num = true;
         }
-      }
-      uint8_t type_tag = 0; uint16_t type_m_sz = 0;
-      if (cur < STACK_SIZE) {
-        uint8_t* p = &stack_mem[cur];
-        if (p[0] == 0x0C && p[1] >= 2 && p[1] <= 4) {
-          const char* tnames[] = {"u8", "i8", "u16", "i16", "u24", "u32", "i32", "f", "$S"};
-          const uint8_t ttags[] = {4, 5, 6, 7, 8, 9, 10, 11, 15};
-          for (int i = 0; i < 9; i++) {
-            if (strncmp((char*)&p[2], tnames[i], p[1]) == 0) {
-              type_tag = ttags[i];
-              type_m_sz = elem_size(p);
-              cur += type_m_sz;
-              break;
+        else {
+            val_u = strtoul(num_buf, &endptr, 0);
+            if (endptr == num_buf + num_len) {
+                is_num = true;
+                val_s = (int32_t)val_u;
             }
-          }
         }
-      }
-      if (type_tag == 0) {
-        uint8_t* sv = &stack_mem[cur];
-        if (sv[0] >= 4 && sv[0] <= 11) type_tag = sv[0];
-        else type_tag = current_type;
-      }
-      if (is_array) {
-        uint16_t sz_sz = 0; uint16_t arr_len = 0;
-        if (cur < STACK_SIZE) {
-          uint8_t* p = &stack_mem[cur];
-          if (p[0] >= 4 && p[0] <= 11) {
-            uint32_t v = 0;
-            uint16_t d = elem_size(p) - 1;
-            for (uint16_t k = 0; k < d && k < 4; k++) v |= (uint32_t)p[1 + k] << (k * 8);
-            arr_len = (uint16_t)v;
-            sz_sz = elem_size(p);
-          }
-        }
-        if (arr_len > 0) {
-          uint8_t el_sz = type_registry[type_tag].size; uint32_t total = (uint32_t)arr_len * el_sz;
-          if (data_ptr + total <= DATA_POOL_SIZE) {
-            uint16_t a = data_ptr; data_ptr += total; memset(&data_pool[a], 0, total);
-            uint8_t arr_body[6]; arr_body[0] = 17; arr_body[1] = a & 0xFF; arr_body[2] = a >> 8; arr_body[3] = arr_len & 0xFF; arr_body[4] = arr_len >> 8; arr_body[5] = type_tag;
-            uint16_t ws = 9 + t_len + 6;
-            if (dict_ptr + ws <= DICT_POOL_SIZE) {
-              uint16_t d = dict_ptr;
-              dict_ptr += ws;
-              dict_pool[d + 2] = (uint8_t)t_len;
-              memcpy(&dict_pool[d + 3], token, t_len);
-              uint16_t p = d + 3 + t_len;
-              dict_pool[p] = currentContext;
-              dict_pool[p + 1] = 0x06;
-              memcpy(&dict_pool[p + 2], arr_body, 6);
-              uint32_t fn = (uint32_t)(uintptr_t)choiceFunc;
-              memcpy(&dict_pool[p + 8], &fn, 4);
-              link_word(d);
+    } else {
+        if (t_len > 2 && token[0] == '0' && (token[1] == 'x' || token[1] == 'X')) {
+            val_u = strtoul(token + 2, &endptr, 16);
+            if (endptr == token + t_len) {
+                is_num = true;
+                size_t hex_digits = t_len - 2;
+                if (hex_digits > 8) hex_digits = 8;
+                if (hex_digits <= 2)      tag = 4;
+                else if (hex_digits <= 4) tag = 6;
+                else if (hex_digits <= 6) tag = 8;
+                else                      tag = 9;
             }
-          }
-          stack_ptr += eq_sz + arr_m_sz + type_m_sz + sz_sz; return;
         }
-      } else {
-        uint16_t val_ptr = cur; uint8_t* val = &stack_mem[val_ptr]; uint16_t val_sz = elem_size(val);
-        if (val_sz > 0 && (val[0] >= 0x0C && val[0] <= 0x0E)) {
-          uint8_t slen = (val[0] == 0x0E) ? val[1] : val[0]; const uint8_t* src = (val[0] == 0x0E) ? &val[2] : &val[1];
-          if (data_ptr + slen > DATA_POOL_SIZE) {
-            currentOutput->println("data_pool overflow");
-            return;
-          }
-          uint16_t d_addr = data_ptr; memcpy(&data_pool[d_addr], src, slen); data_ptr += slen;
-          uint8_t ref_body[4] = {15, slen, (uint8_t)(d_addr & 0xFF), (uint8_t)(d_addr >> 8)};
-          uint16_t ws = 9 + t_len + 4; if (dict_ptr + ws > DICT_POOL_SIZE) {
-            currentOutput->println("dict overflow");
-            return;
-          }
-          uint16_t a = dict_ptr; dict_ptr += ws; dict_pool[a + 2] = (uint8_t)t_len; memcpy(&dict_pool[a + 3], token, t_len); uint16_t p = a + 3 + t_len; dict_pool[p] = currentContext; dict_pool[p + 1] = 0x06; memcpy(&dict_pool[p + 2], ref_body, 4); uint32_t fn = (uint32_t)(uintptr_t)choiceFunc; memcpy(&dict_pool[p + 6], &fn, 4); link_word(a);
-          stack_ptr += eq_sz + val_sz; return;
-        }
-        // 🔹 ССЫЛКА НА МАССИВ
-        uint8_t* src_header = nullptr;
-        if (val_sz == 6 && (val[0] == 17 || val[0] == 20)) {
-          src_header = val;
-        }
-        else if (val_sz == 3 && val[0] == 0x12) {
-          uint16_t v_addr = val[1] | (val[2] << 8);
-          if (v_addr < dict_ptr) {
-            uint8_t vn = dict_pool[v_addr + 2]; uint16_t body = v_addr + 5 + vn;
-            uint8_t t = dict_pool[body];
-            if ((t == 17 || t == 20) && body + 6 <= dict_ptr) {
-              src_header = &dict_pool[body];
+        if (!is_num) {
+            bool is_float_fmt = false;
+            for (size_t k = 0; k < t_len; k++) {
+                if (token[k] == '.' || token[k] == 'e' || token[k] == 'E') {
+                    is_float_fmt = true;
+                    break;
+                }
             }
-          }
+            if (is_float_fmt) {
+                strtof(token, &endptr);
+                if (endptr == token + t_len) {
+                    is_num = true;
+                    tag = 11;
+                }
+            }
+            if (!is_num) {
+                val_s = strtol(token, &endptr, 10);
+                if (endptr == token + t_len) {
+                    is_num = true;
+                    val_u = (uint32_t)val_s;
+                    tag = current_type;
+                }
+            }
         }
-        if (src_header) {
-          uint16_t ws = 9 + t_len + 6;
-          if (dict_ptr + ws > DICT_POOL_SIZE) {
-            currentOutput->println("dict overflow");
-            return;
-          }
-          uint16_t a = dict_ptr; dict_ptr += ws; dict_pool[a] = 0; dict_pool[a + 1] = 0; dict_pool[a + 2] = t_len;
-          memcpy(&dict_pool[a + 3], token, t_len); uint16_t p = a + 3 + t_len;
-          dict_pool[p] = currentContext; dict_pool[p + 1] = 0x06; memcpy(&dict_pool[p + 2], src_header, 6); dict_pool[p + 2] = 20;
-          uint32_t fn = (uint32_t)(uintptr_t)choiceFunc; memcpy(&dict_pool[p + 8], &fn, 4); link_word(a);
-          stack_ptr += eq_sz + val_sz; return;
-        }
-        if (val_sz > 0 && val[0] <= 20) {
-          uint8_t final_tag = type_tag; uint8_t data_sz = type_registry[final_tag].size; uint16_t final_sz = 1 + data_sz;
-          uint8_t new_body[8]; new_body[0] = final_tag; int32_t src_i = 0; float src_f = 0.0;
-          if (val[0] == 11) {
-            memcpy(&src_f, &val[1], 4);
-            src_i = (int32_t)src_f;
-          }
-          else {
-            uint32_t u = 0;
-            uint16_t d = val_sz - 1;
-            for (uint16_t k = 0; k < d && k < 4; k++) u |= (uint32_t)val[1 + k] << (k * 8);
-            if (d == 1 && (val[1] & 0x80)) u |= 0xFFFFFF00;
-            if (d == 2 && (val[2] & 0x80)) u |= 0xFFFF0000;
-            if (d == 3 && (val[3] & 0x80)) u |= 0xFF000000;
-            src_i = (int32_t)u;
-            src_f = (float)src_i;
-          }
-          if (final_tag == 11) {
-            float v = (val[0] == 11 || type_tag != current_type) ? src_f : (float)src_i;
-            memcpy(&new_body[1], &v, 4);
-            final_sz = 5;
-          }
-          else {
-            int32_t v = (val[0] == 11) ? (int32_t)src_f : src_i;
-            uint16_t d = data_sz;
-            for (uint16_t k = 0; k < d && k < 4; k++) new_body[1 + k] = (v >> (k * 8)) & 0xFF;
-            final_sz = 1 + d;
-          }
-          uint16_t ws = 9 + t_len + final_sz;
-          if (dict_ptr + ws <= DICT_POOL_SIZE) {
-            uint16_t a = dict_ptr;
-            dict_ptr += ws;
-            dict_pool[a + 2] = (uint8_t)t_len;
-            memcpy(&dict_pool[a + 3], token, t_len);
-            uint16_t p = a + 3 + t_len;
-            dict_pool[p] = currentContext;
-            dict_pool[p + 1] = 0x06;
-            memcpy(&dict_pool[p + 2], new_body, final_sz);
-            uint32_t fn = (uint32_t)(uintptr_t)choiceFunc;
-            memcpy(&dict_pool[p + 2 + final_sz], &fn, 4);
-            link_word(a);
-          }
-          stack_ptr += eq_sz + type_m_sz + val_sz; return;
-        }
-      }
     }
-  }
-  uint8_t buf[257]; buf[0] = 0x0D; buf[1] = (uint8_t)t_len; memcpy(&buf[2], token, t_len); stack_push(buf, 2 + t_len);
+    if (is_num) {
+        uint8_t buf[8]; size_t sz = 0; buf[0] = tag;
+        switch (tag) {
+            case 4:  buf[1] = (uint8_t)val_u; sz = 2; break; case 5:  buf[1] = (int8_t)val_s;  sz = 2; break;
+            case 6:  *(uint16_t*)&buf[1] = (uint16_t)val_u; sz = 3; break; case 7:  *(int16_t*)&buf[1]  = (int16_t)val_s;  sz = 3; break;
+            case 8:  buf[1] = (uint8_t)val_u; buf[2] = (uint8_t)(val_u >> 8); buf[3] = (uint8_t)(val_u >> 16); sz = 4; break;
+            case 9:  *(uint32_t*)&buf[1] = val_u; sz = 5; break; case 10:  *(int32_t*)&buf[1]  = val_s; sz = 5; break;
+            case 11: {
+                float f = strtof(token, NULL);
+                memcpy(&buf[1], &f, 4);
+                sz = 5;
+                break;
+            }
+        }
+        bool call_apply = false;
+        if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
+            uint8_t op_len = stack_mem[stack_ptr + 1];
+            if (op_len == 1) {
+                char c = stack_mem[stack_ptr + 2];
+                if (c != '[' && c != ']' && c != '=' && c != ')' && c != '(') call_apply = true;
+            } else {
+                call_apply = true;
+            }
+        }
+        if (call_apply) apply_op(&buf[1], sz - 1, tag, 0); else stack_push(buf, sz); return;
+    }
+    if (!stack_is_empty()) {
+        uint8_t* top = &stack_mem[stack_ptr];
+        if (top[0] == 0x0C && top[1] == 1 && top[2] == '=') {
+            uint16_t cur = stack_ptr; uint16_t eq_sz = elem_size(&stack_mem[cur]); cur += eq_sz;
+            bool is_array = false; uint16_t arr_m_sz = 0;
+            if (cur < STACK_SIZE) {
+                uint8_t* p = &stack_mem[cur];
+                if (p[0] == 0x0C && p[1] == 5 && memcmp(&p[2], "array", 5) == 0) {
+                    is_array = true;
+                    arr_m_sz = elem_size(p);
+                    cur += arr_m_sz;
+                }
+            }
+            uint8_t type_tag = 0; uint16_t type_m_sz = 0;
+            if (cur < STACK_SIZE) {
+                uint8_t* p = &stack_mem[cur];
+                if (p[0] == 0x0C && p[1] >= 2 && p[1] <= 4) {
+                    // 🔹 ИЗМЕНЕНО: добавлен тип "ADDR" (тег 18), цикл до 10
+                    const char* tnames[] = {"u8", "i8", "u16", "i16", "u24", "u32", "i32", "f", "$S", "word"};
+                    const uint8_t ttags[] = {4, 5, 6, 7, 8, 9, 10, 11, 15, 18};
+                    for (int i = 0; i < 10; i++) {
+                        if (strncmp((char*)&p[2], tnames[i], p[1]) == 0) {
+                            type_tag = ttags[i];
+                            type_m_sz = elem_size(p);
+                            cur += type_m_sz;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (type_tag == 0) {
+                uint8_t* sv = &stack_mem[cur];
+                if (sv[0] >= 4 && sv[0] <= 11) type_tag = sv[0];
+                else type_tag = current_type;
+            }
+            if (is_array) {
+                uint16_t sz_sz = 0; uint16_t arr_len = 0;
+                if (cur < STACK_SIZE) {
+                    uint8_t* p = &stack_mem[cur];
+                    if (p[0] >= 4 && p[0] <= 11) {
+                        uint32_t v = 0;
+                        uint16_t d = elem_size(p) - 1;
+                        for (uint16_t k = 0; k < d && k < 4; k++) v |= (uint32_t)p[1 + k] << (k * 8);
+                        arr_len = (uint16_t)v;
+                        sz_sz = elem_size(p);
+                    }
+                }
+                if (arr_len > 0) {
+                    uint8_t el_sz = type_registry[type_tag].size; uint32_t total = (uint32_t)arr_len * el_sz;
+                    if (data_ptr + total <= DATA_POOL_SIZE) {
+                        uint16_t a = data_ptr; data_ptr += total;
+                        
+                        // 🔹 ИЗМЕНЕНО: для ADDR-массивов заполняем адресом nop вместо нулей
+                        if (type_tag == 18) {
+                            uint16_t nop_addr = dict_find("nop");
+                            if (nop_addr != 0xFFFF) {
+                                for (uint16_t i = 0; i < arr_len; i++) {
+                                    data_pool[a + i * 2]     = nop_addr & 0xFF;
+                                    data_pool[a + i * 2 + 1] = nop_addr >> 8;
+                                }
+                            } else {
+                                memset(&data_pool[a], 0, total);
+                            }
+                        } else {
+                            memset(&data_pool[a], 0, total);
+                        }
+                        
+                        uint8_t arr_body[6]; arr_body[0] = 17; arr_body[1] = a & 0xFF; arr_body[2] = a >> 8; arr_body[3] = arr_len & 0xFF; arr_body[4] = arr_len >> 8; arr_body[5] = type_tag;
+                        uint16_t ws = 9 + t_len + 6;
+                        if (dict_ptr + ws <= DICT_POOL_SIZE) {
+                            uint16_t d = dict_ptr;
+                            dict_ptr += ws;
+                            dict_pool[d + 2] = (uint8_t)t_len;
+                            memcpy(&dict_pool[d + 3], token, t_len);
+                            uint16_t p = d + 3 + t_len;
+                            dict_pool[p] = currentContext;
+                            dict_pool[p + 1] = 0x06;
+                            memcpy(&dict_pool[p + 2], arr_body, 6);
+                            uint32_t fn = (uint32_t)(uintptr_t)choiceFunc;
+                            memcpy(&dict_pool[p + 8], &fn, 4);
+                            link_word(d);
+                        }
+                    }
+                    stack_ptr += eq_sz + arr_m_sz + type_m_sz + sz_sz; return;
+                }
+            } else {
+                uint16_t val_ptr = cur; uint8_t* val = &stack_mem[val_ptr]; uint16_t val_sz = elem_size(val);
+                if (val_sz > 0 && (val[0] >= 0x0C && val[0] <= 0x0E)) {
+                    uint8_t slen = (val[0] == 0x0E) ? val[1] : val[0]; const uint8_t* src = (val[0] == 0x0E) ? &val[2] : &val[1];
+                    if (data_ptr + slen > DATA_POOL_SIZE) {
+                        currentOutput->println("data_pool overflow");
+                        return;
+                    }
+                    uint16_t d_addr = data_ptr; memcpy(&data_pool[d_addr], src, slen); data_ptr += slen;
+                    uint8_t ref_body[4] = {15, slen, (uint8_t)(d_addr & 0xFF), (uint8_t)(d_addr >> 8)};
+                    uint16_t ws = 9 + t_len + 4; if (dict_ptr + ws > DICT_POOL_SIZE) {
+                        currentOutput->println("dict overflow");
+                        return;
+                    }
+                    uint16_t a = dict_ptr; dict_ptr += ws; dict_pool[a + 2] = (uint8_t)t_len; memcpy(&dict_pool[a + 3], token, t_len); uint16_t p = a + 3 + t_len; dict_pool[p] = currentContext; dict_pool[p + 1] = 0x06; memcpy(&dict_pool[p + 2], ref_body, 4); uint32_t fn = (uint32_t)(uintptr_t)choiceFunc; memcpy(&dict_pool[p + 6], &fn, 4); link_word(a);
+                    stack_ptr += eq_sz + val_sz; return;
+                }
+                uint8_t* src_header = nullptr;
+                if (val_sz == 6 && (val[0] == 17 || val[0] == 20)) {
+                    src_header = val;
+                }
+                else if (val_sz == 3 && val[0] == 0x12) {
+                    uint16_t v_addr = val[1] | (val[2] << 8);
+                    if (v_addr < dict_ptr) {
+                        uint8_t vn = dict_pool[v_addr + 2]; uint16_t body = v_addr + 5 + vn;
+                        uint8_t t = dict_pool[body];
+                        if ((t == 17 || t == 20) && body + 6 <= dict_ptr) {
+                            src_header = &dict_pool[body];
+                        }
+                    }
+                }
+                if (src_header) {
+                    uint16_t ws = 9 + t_len + 6;
+                    if (dict_ptr + ws > DICT_POOL_SIZE) {
+                        currentOutput->println("dict overflow");
+                        return;
+                    }
+                    uint16_t a = dict_ptr; dict_ptr += ws; dict_pool[a] = 0; dict_pool[a + 1] = 0; dict_pool[a + 2] = t_len;
+                    memcpy(&dict_pool[a + 3], token, t_len); uint16_t p = a + 3 + t_len;
+                    dict_pool[p] = currentContext; dict_pool[p + 1] = 0x06; memcpy(&dict_pool[p + 2], src_header, 6); dict_pool[p + 2] = 20;
+                    uint32_t fn = (uint32_t)(uintptr_t)choiceFunc; memcpy(&dict_pool[p + 8], &fn, 4); link_word(a);
+                    stack_ptr += eq_sz + val_sz; return;
+                }
+                if (val_sz > 0 && val[0] <= 20) {
+                    uint8_t final_tag = type_tag; uint8_t data_sz = type_registry[final_tag].size; uint16_t final_sz = 1 + data_sz;
+                    uint8_t new_body[8]; new_body[0] = final_tag; int32_t src_i = 0; float src_f = 0.0;
+                    if (val[0] == 11) {
+                        memcpy(&src_f, &val[1], 4);
+                        src_i = (int32_t)src_f;
+                    }
+                    else {
+                        uint32_t u = 0;
+                        uint16_t d = val_sz - 1;
+                        for (uint16_t k = 0; k < d && k < 4; k++) u |= (uint32_t)val[1 + k] << (k * 8);
+                        if (d == 1 && (val[1] & 0x80)) u |= 0xFFFFFF00;
+                        if (d == 2 && (val[2] & 0x80)) u |= 0xFFFF0000;
+                        if (d == 3 && (val[3] & 0x80)) u |= 0xFF000000;
+                        src_i = (int32_t)u;
+                        src_f = (float)src_i;
+                    }
+                    if (final_tag == 11) {
+                        float v = (val[0] == 11 || type_tag != current_type) ? src_f : (float)src_i;
+                        memcpy(&new_body[1], &v, 4);
+                        final_sz = 5;
+                    }
+                    else {
+                        int32_t v = (val[0] == 11) ? (int32_t)src_f : src_i;
+                        uint16_t d = data_sz;
+                        for (uint16_t k = 0; k < d && k < 4; k++) new_body[1 + k] = (v >> (k * 8)) & 0xFF;
+                        final_sz = 1 + d;
+                    }
+                    uint16_t ws = 9 + t_len + final_sz;
+                    if (dict_ptr + ws <= DICT_POOL_SIZE) {
+                        uint16_t a = dict_ptr;
+                        dict_ptr += ws;
+                        dict_pool[a + 2] = (uint8_t)t_len;
+                        memcpy(&dict_pool[a + 3], token, t_len);
+                        uint16_t p = a + 3 + t_len;
+                        dict_pool[p] = currentContext;
+                        dict_pool[p + 1] = 0x06;
+                        memcpy(&dict_pool[p + 2], new_body, final_sz);
+                        uint32_t fn = (uint32_t)(uintptr_t)choiceFunc;
+                        memcpy(&dict_pool[p + 2 + final_sz], &fn, 4);
+                        link_word(a);
+                    }
+                    stack_ptr += eq_sz + type_m_sz + val_sz; return;
+                }
+            }
+        }
+    }
+    uint8_t buf[257]; buf[0] = 0x0D; buf[1] = (uint8_t)t_len; memcpy(&buf[2], token, t_len); stack_push(buf, 2 + t_len);
 }
 void executeLine(const char* line) {
   // 🔹 JSON IN-PLACE: правим line напрямую, печатаем line, проваливаемся в парсер
@@ -1913,7 +2036,21 @@ void create_internal_word(uint8_t* name_ptr, const uint8_t* body_data, uint16_t 
   memcpy(&dict_pool[p + 2 + body_size], &fn, 4);
   link_word(a);
 }
-
+// === СЛОВО-АДРЕС ===
+// Создаёт слово, которое при вызове кладёт свой адрес на стек и больше ничего не делает.
+static void create_self_address_word(const char* name) {
+  uint8_t nlen = strlen(name);
+  if (nlen == 0 || nlen > 63) return;
+  
+  uint8_t body[1] = {0}; // Тело не важно, оно не будет прочитано
+  uint8_t name_buf[65] = {0x0D, nlen};
+  memcpy(&name_buf[2], name, nlen);
+  
+  // 0x02 = VAR. 
+  // В exec_word: if (flags & 0x02) { stack_push(addr); }
+  // if (flags & 0x04) { call func(); } -> НЕ ВЫПОЛНИТСЯ, так как флага 0x04 нет!
+  create_internal_word(name_buf, body, 1, 0x02, wordNop);
+}
 void word_cont() {
   // 1. Захватываем имя контекста из потока токенов (R2L: предыдущий токен в тексте)
   int name_idx = g_tok_idx - 1;
@@ -2213,54 +2350,51 @@ void word_hexdump() {
 
 
 void word_device() {
-    // 1. Проверка: стек не пустой
-    if (stack_is_empty()) {
-        currentOutput->println("device: укажите имя устройства");
-        return;
-    }
-    
-    // 2. Проверка: на стеке должно быть NAME (тег 0x0D)
-    uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] != 0x0D) {
-        // 🔑 ИСПРАВЛЕНО: правильное сообщение об ошибке
-        currentOutput->print("device: ожидалось имя слова, получено ");
-        currentOutput->println(tag_short(top[0]));
-        return;
-    }
-    
-    // 3. Проверка длины имени
-    uint8_t nlen = top[1];
-    if (nlen == 0 || nlen > 63) {
-        currentOutput->println("device: недопустимая длина имени (1-63 символа)");
-        return;
-    }
-    
-    // 4. Извлекаем имя
-    char tmp[64];
-    memcpy(tmp, &top[2], nlen);
-    tmp[nlen] = '\0';
-    
-    // 5. Проверка: слово не должно уже существовать
-    if (dict_find(tmp) != 0xFFFF) {
-        currentOutput->print("device: слово '");
-        currentOutput->print(tmp);
-        currentOutput->println("' уже существует!");
-        return;
-    }
-    
-    // 6. Создаём устройство (слово с флагом VAR | INTERNAL)
-    uint8_t body[3] = {6, (uint8_t)(g_device_counter & 0xFF), (uint8_t)(g_device_counter >> 8)};
-    create_internal_word(&stack_mem[stack_ptr], body, 3, 0x07, choiceFunc);
-    
-    // 7. Устанавливаем контекст
-    uint16_t ctx_pos = dict_last + 3 + dict_pool[dict_last + 2];
-    dict_pool[ctx_pos] = currentContext;
-    
-    // 8. Снимаем NAME со стека и увеличиваем счётчик
-    stack_ptr += 2 + nlen;
-    g_device_counter++;
-}
+  // 1. Захват имени из R2L-потока (предыдущий токен)
+  int name_idx = g_tok_idx - 1;
+  if (name_idx < 0) {
+    currentOutput->println("device: name expected before");
+    return;
+  }
+  uint8_t nlen = g_tok_len[name_idx];
+  if (nlen == 0 || nlen > 63) {
+    currentOutput->println("device: invalid name");
+    return;
+  }
+  char name[64];
+  memcpy(name, g_tok_start[name_idx], nlen);
+  name[nlen] = '\0';
 
+  // 2. Проверка: слово не должно уже существовать
+  if (dict_find(name) != 0xFFFF) {
+    currentOutput->print("device: exists: ");
+    currentOutput->println(name);
+    g_tok_idx -= 1;
+    return;
+  }
+
+  // 3. Формируем тело слова: [TAG=6 (UINT16), counter_lo, counter_hi]
+  uint8_t body[3] = {6, (uint8_t)(g_device_counter & 0xFF), (uint8_t)(g_device_counter >> 8)};
+
+  // 4. Формируем NAME-буфер для create_internal_word
+  uint8_t name_buf[65];
+  name_buf[0] = 0x0D;
+  name_buf[1] = nlen;
+  memcpy(&name_buf[2], name, nlen);
+
+  // 5. Создаём слово в словаре (флаги: VAR | INTERNAL | CONST = 0x07)
+  create_internal_word(name_buf, body, 3, 0x07, choiceFunc);
+
+  // 6. Устанавливаем контекст (как было)
+  uint16_t ctx_pos = dict_last + 3 + dict_pool[dict_last + 2];
+  dict_pool[ctx_pos] = currentContext;
+
+  // 7. Увеличиваем счётчик устройств
+  g_device_counter++;
+
+  // 8. 🔑 КЛЮЧЕВОЕ: пропускаем токен имени в R2L-цикле
+  g_tok_idx -= 1;
+}
 void wordNop() {}
 // --- Вспомогательная: измеряет и кладёт размер на стек ---
 static void _lenCalc(bool dropOriginal) {
@@ -2692,7 +2826,39 @@ void compile_token(const char* token) {
   static uint8_t  w_depth = 0;
   size_t t_len = strlen(token);
   if (t_len == 0) return;
-
+// === ПЕРЕХВАТ # (адрес слова) ===
+if (strcmp(token, "#") == 0) {
+    int idx_name = g_tok_idx - 1;
+    if (idx_name < 0) {
+        currentOutput->println("#: expected word before");
+        return;
+    }
+    uint8_t ln = g_tok_len[idx_name];
+    if (ln > 63) ln = 63;
+    char wname[64];
+    memcpy(wname, g_tok_start[idx_name], ln);
+    wname[ln] = '\0';
+    
+    uint16_t addr = dict_find(wname);
+    if (addr == 0xFFFF) {
+        currentOutput->print("#: word not found: ");
+        currentOutput->println(wname);
+        return;
+    }
+    
+    // Компилируем: [ADDR(#)] [ADDR(word)]
+    uint16_t hash_addr = dict_find("#");
+    if (hash_addr != 0xFFFF) {
+        dict_pool[dict_ptr++] = hash_addr & 0xFF;
+        dict_pool[dict_ptr++] = hash_addr >> 8;
+    }
+    dict_pool[dict_ptr++] = addr & 0xFF;
+    dict_pool[dict_ptr++] = addr >> 8;
+    
+    // Пропускаем токен имени
+    g_tok_idx -= 1;
+    return;
+}
   // === ПЕРЕХВАТ +task и -task ===
   if (strcmp(token, "+task") == 0 || strcmp(token, "-task") == 0) {
     bool is_add = (strcmp(token, "+task") == 0);
@@ -3886,9 +4052,6 @@ void word_body() {
     // 5. Пропускаем токен в R2L-цикле
     g_tok_idx -= 1;
 }
-
-
-// === ГЛОБАЛЬНЫЙ ДЕСКРИПТОР (добавить в начало concWords.ino, после объявления data_pool) ===
 static File g_outFile;
 void word_out_file() {
   if (stack_is_empty()) {
@@ -3926,7 +4089,7 @@ void word_out_file() {
 void word_out_serial() {
   if (g_outFile) g_outFile.close();
   currentOutput = &Serial; // 🔀 Возвращаем вывод на UART
-  Serial.println("out>serial: OK");
+  //Serial.println("out>serial: OK");
 }
 void word_add_loop() { // === +loop / -loop (фоновое исполнение без задержки) ===
   if (stack_is_empty()) return;
@@ -5176,6 +5339,462 @@ void word_help() {
     }
 }
 
+// === ДВУХУРОВНЕВАЯ СИСТЕМА СООБЩЕНИЙ ===
+// Уровень 1: Файл /lang/{lang}.txt (пользователь редактирует)
+// Уровень 2: Английские строки в коде (fallback)
+
+struct MsgCacheEntry {
+  uint32_t key_hash;
+  char value[64];
+};
+static MsgCacheEntry g_msg_cache[16];
+static uint8_t g_msg_cache_count = 0;
+
+static uint32_t hash_key(const char* key) {
+  uint32_t h = 0;
+  while (*key) { h = (h * 31) + *key++; }
+  return h;
+}
+
+static const char* getMsg(const char* key, const char* fallback) {
+  uint32_t h = hash_key(key);
+  
+  // 1. Проверяем кэш
+  for (uint8_t i = 0; i < g_msg_cache_count; i++) {
+    if (g_msg_cache[i].key_hash == h) {
+      return g_msg_cache[i].value;
+    }
+  }
+  
+  // 2. Читаем язык из переменной "lang"
+  char lang_code[8] = "ru";
+  uint16_t lang_addr = dict_find("lang");
+  if (lang_addr != 0xFFFF) {
+    uint8_t ln_len = dict_pool[lang_addr + 2];
+    if (ln_len > 0 && ln_len < 8) {
+      uint16_t body = lang_addr + 5 + ln_len;
+      if (dict_pool[body] == 15) {  // $STRING
+        uint8_t slen = dict_pool[body + 1];
+        uint16_t d_addr = dict_pool[body + 2] | (dict_pool[body + 3] << 8);
+        if (slen < 8 && d_addr + slen <= DATA_POOL_SIZE) {
+          memcpy(lang_code, &data_pool[d_addr], slen);
+          lang_code[slen] = '\0';
+        }
+      }
+    }
+  }
+  
+  // 3. Открываем файл /lang/{lang}.txt
+  char path[32];
+  snprintf(path, sizeof(path), "/lang/%s.txt", lang_code);
+  File f = FILESYSTEM.open(path, "r");
+  if (!f) return fallback;  // Файла нет → английский fallback
+  
+  // 4. Ищем ключ в файле
+  char key_prefix[66];
+  snprintf(key_prefix, sizeof(key_prefix), "%s=", key);
+  size_t prefix_len = strlen(key_prefix);
+  
+  while (f.available()) {
+    String s = f.readStringUntil('\n');
+    if (s.endsWith("\r")) s.remove(s.length() - 1);
+    if (s.length() == 0 || s[0] == '#') continue;
+    
+    if (s.startsWith(key_prefix)) {
+      const char* value = s.c_str() + prefix_len;
+      size_t vlen = strlen(value);
+      if (vlen < 64) {
+        // Кэшируем
+        if (g_msg_cache_count < 16) {
+          g_msg_cache[g_msg_cache_count].key_hash = h;
+          strcpy(g_msg_cache[g_msg_cache_count].value, value);
+          g_msg_cache_count++;
+        }
+        f.close();
+        return g_msg_cache[g_msg_cache_count - 1].value;
+      }
+    }
+  }
+  
+  f.close();
+  return fallback;  // Ключ не найден → английский fallback
+}
+
+void word_serial() {
+  int name_idx = g_tok_idx - 1;
+  if (name_idx < 0) {
+    currentOutput->println(getMsg("serial.name_missing", "serial: name not specified"));
+    return;
+  }
+  uint8_t nlen = g_tok_len[name_idx];
+  if (nlen == 0 || nlen > 63) {
+    currentOutput->println(getMsg("serial.invalid_name", "serial: invalid name"));
+    return;
+  }
+  char new_name[64];
+  memcpy(new_name, g_tok_start[name_idx], nlen);
+  new_name[nlen] = '\0';
+
+  if (dict_find(new_name) != 0xFFFF) {
+    currentOutput->print(getMsg("serial.exists", "serial: already exists: "));
+    currentOutput->println(new_name);
+    g_tok_idx -= 1;
+    return;
+  }
+
+  if (stack_is_empty()) {
+    currentOutput->println(getMsg("serial.descriptor_expected", "serial: descriptor expected"));
+    return;
+  }
+  uint8_t* desc_ptr = &stack_mem[stack_ptr];
+  if (desc_ptr[0] != 0x12) {
+    currentOutput->println(getMsg("serial.descriptor_must_be_addr", "serial: descriptor must be ADDR"));
+    return;
+  }
+  uint16_t desc_addr = desc_ptr[1] | (desc_ptr[2] << 8);
+  stack_ptr += elem_size(desc_ptr);
+
+  uint8_t port = 1;
+  uint32_t baud = 115200;
+  uint8_t rx = 16, tx = 17;
+
+  uint32_t vals[4] = {1, 115200, 16, 17};
+  uint8_t count = 0;
+  while (!stack_is_empty() && count < 4) {
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] >= 4 && top[0] <= 11) {
+      uint32_t v = 0;
+      uint16_t sz = elem_size(top);
+      for (uint16_t i = 1; i < sz && i < 5; i++) v |= (uint32_t)top[i] << ((i - 1) * 8);
+      vals[3 - count] = v;
+      stack_ptr += sz;
+      count++;
+    } else break;
+  }
+  port = (uint8_t)vals[0];
+  baud = vals[1];
+  rx = (uint8_t)vals[2];
+  tx = (uint8_t)vals[3];
+
+  uint16_t body_size = 3 + 1 + 4 + 1 + 1 + 1;
+  uint8_t* body = (uint8_t*)malloc(body_size);
+  uint16_t p = 0;
+  body[p++] = 0x12;
+  body[p++] = desc_addr & 0xFF;
+  body[p++] = desc_addr >> 8;
+  body[p++] = port;
+  body[p++] = baud & 0xFF;
+  body[p++] = (baud >> 8) & 0xFF;
+  body[p++] = (baud >> 16) & 0xFF;
+  body[p++] = (baud >> 24) & 0xFF;
+  body[p++] = rx;
+  body[p++] = tx;
+  body[p++] = 0;
+
+  uint8_t name_buf[65] = {0x0D, nlen};
+  memcpy(&name_buf[2], new_name, nlen);
+  create_internal_word(name_buf, body, body_size, 0x06, choiceFunc);
+  free(body);
+
+  g_tok_idx -= 1;
+}
+void word_open() {
+  // 🔑 СОХРАНЯЕМ состояние стека для отката при ошибке
+  uint16_t old_sp = stack_ptr;
+
+  // 1. НАИМЕНОВАНИЕ: захват имени из R2L-потока (предыдущий токен)
+  int name_idx = g_tok_idx - 1;
+  if (name_idx < 0) {
+    currentOutput->println(getMsg("open.name_missing", "open: name not specified"));
+    return;
+  }
+  uint8_t nlen = g_tok_len[name_idx];
+  if (nlen == 0 || nlen > 63) {
+    currentOutput->println(getMsg("open.invalid_name", "open: invalid name"));
+    return;
+  }
+  char new_name[64];
+  memcpy(new_name, g_tok_start[name_idx], nlen);
+  new_name[nlen] = '\0';
+
+  // 2. Проверка: слово не должно существовать
+  if (dict_find(new_name) != 0xFFFF) {
+    currentOutput->print(getMsg("open.exists", "open: already exists: "));
+    currentOutput->println(new_name);
+    g_tok_idx -= 1;
+    return;
+  }
+
+  // 3. Снимаем со стека (R2L порядок):
+  //    СТЕК (сверху вниз): ADDR(file) → STRING(filename) → i32(mode)
+
+  // 3.1. Дескриптор (ADDR = 0x12) — ВЕРХ стека
+  if (stack_is_empty()) {
+    currentOutput->println(getMsg("open.descriptor_expected", "open: descriptor (ADDR) expected"));
+    stack_ptr = old_sp;  // 🔑 ОТКАТ стека
+    return;
+  }
+  uint8_t* desc_ptr = &stack_mem[stack_ptr];
+  if (desc_ptr[0] != 0x12) {
+    currentOutput->println(getMsg("open.descriptor_must_be_addr", "open: descriptor must be ADDR"));
+    stack_ptr = old_sp;  // 🔑 ОТКАТ стека
+    return;
+  }
+  uint16_t desc_addr = desc_ptr[1] | (desc_ptr[2] << 8);
+  stack_ptr += elem_size(desc_ptr);
+
+  // 3.2. Filename (STRING или NAME) — СЕРЕДИНА стека
+  if (stack_is_empty()) {
+    currentOutput->println(getMsg("open.filename_expected", "open: filename expected"));
+    stack_ptr = old_sp;  // 🔑 ОТКАТ стека
+    return;
+  }
+  uint8_t* fn_ptr = &stack_mem[stack_ptr];
+  if (fn_ptr[0] != 0x0D && fn_ptr[0] != 0x0E) {
+    currentOutput->println(getMsg("open.filename_must_be_string", "open: filename must be string/name"));
+    stack_ptr = old_sp;  // 🔑 ОТКАТ стека
+    return;
+  }
+  uint8_t fn_len = fn_ptr[1];
+  if (fn_len > 63) fn_len = 63;
+  stack_ptr += elem_size(fn_ptr);
+
+  // 3.3. Mode (число) — НИЗ стека
+  if (stack_is_empty()) {
+    currentOutput->println(getMsg("open.mode_expected", "open: mode expected"));
+    stack_ptr = old_sp;  // 🔑 ОТКАТ стека
+    return;
+  }
+  uint8_t* mode_ptr = &stack_mem[stack_ptr];
+  if (mode_ptr[0] < 4 || mode_ptr[0] > 11) {
+    currentOutput->println(getMsg("open.mode_must_be_number", "open: mode must be number"));
+    stack_ptr = old_sp;  // 🔑 ОТКАТ стека
+    return;
+  }
+  uint8_t mode = mode_ptr[1];
+  stack_ptr += elem_size(mode_ptr);
+
+  // 4. Формируем тело слова: [ADDR desc][fn_len][fname...][mode]
+  uint16_t body_size = 3 + 1 + fn_len + 1;
+  uint8_t* body = (uint8_t*)malloc(body_size);
+  uint16_t p = 0;
+  body[p++] = 0x12;
+  body[p++] = desc_addr & 0xFF;
+  body[p++] = desc_addr >> 8;
+  body[p++] = fn_len;
+  memcpy(&body[p], &fn_ptr[2], fn_len);
+  p += fn_len;
+  body[p++] = mode;
+
+  // 5. Создаём слово в словаре
+  uint8_t name_buf[65] = {0x0D, nlen};
+  memcpy(&name_buf[2], new_name, nlen);
+  create_internal_word(name_buf, body, body_size, 0x06, choiceFunc);
+  free(body);
+
+  // 6. Пропускаем токен имени в R2L-цикле
+  g_tok_idx -= 1;
+}
+void word_write() {
+  if (stack_is_empty()) {
+    currentOutput->println(getMsg("write.stack_empty", "write: stack empty"));
+    return;
+  }
+  uint8_t* res_ptr = &stack_mem[stack_ptr];
+  if (res_ptr[0] != 0x12) {
+    currentOutput->println(getMsg("write.expected_resource", "write: expected resource word (ADDR)"));
+    return;
+  }
+  uint16_t res_addr = res_ptr[1] | (res_ptr[2] << 8);
+  stack_ptr += elem_size(res_ptr);
+
+  if (res_addr >= dict_ptr) {
+    currentOutput->println(getMsg("write.invalid_address", "write: invalid resource address"));
+    return;
+  }
+  uint8_t vn = dict_pool[res_addr + 2];
+  uint16_t body = res_addr + 5 + vn;
+
+  if (dict_pool[body] != 0x12) {
+    currentOutput->println(getMsg("write.no_descriptor", "write: resource has no descriptor"));
+    return;
+  }
+  uint16_t desc_addr = dict_pool[body + 1] | (dict_pool[body + 2] << 8);
+
+  dispatch_resource(res_addr, desc_addr, "write");
+}
+// === ДЕСКРИПТОР ФАЙЛА ===
+// Вызывается через dispatch_resource
+// На стеке: ADDR ресурса (от dispatch), данные для записи (от пользователя)
+void file_desc_func() {
+  // 1. Снимаем ADDR ресурса (его положил dispatch_resource)
+  if (stack_is_empty()) { pushBool(false); return; }
+  uint8_t* ctx_ptr = &stack_mem[stack_ptr];
+  if (ctx_ptr[0] != 0x12) { pushBool(false); return; }
+  uint16_t res_addr = ctx_ptr[1] | (ctx_ptr[2] << 8);
+  stack_ptr += 3;
+
+  // 2. Читаем метаданные из тела ресурса
+  //    Тело: [0x12][desc_lo][desc_hi][mode][fn_len][fname...]
+  if (res_addr >= dict_ptr) { pushBool(false); return; }
+  uint8_t vn = dict_pool[res_addr + 2];
+  uint16_t body = res_addr + 5 + vn;
+  
+  // Пропускаем ADDR дескриптора (3 байта: тег + 2 байта адреса)
+  uint8_t mode = dict_pool[body + 3];
+  uint8_t fn_len = dict_pool[body + 4];
+  if (fn_len > 63) fn_len = 63;
+  char fname[65];
+  memcpy(fname, &dict_pool[body + 5], fn_len);
+  fname[fn_len] = '\0';
+
+  // 3. Снимаем данные для записи
+  if (stack_is_empty()) { pushBool(false); return; }
+  uint8_t* d_ptr = &stack_mem[stack_ptr];
+  uint8_t d_tag = d_ptr[0];
+  uint16_t d_sz = elem_size(d_ptr);
+
+  // 4. Stateless: открываем → пишем → закрываем
+  char full_path[256];
+  if (strlen(g_currentDir) > 1)
+    snprintf(full_path, sizeof(full_path), "%s/%s", g_currentDir, fname);
+  else
+    snprintf(full_path, sizeof(full_path), "/%s", fname);
+
+  const char* mode_str = (mode == 0) ? "r" : (mode == 1) ? "w" : "a";
+  File f = FILESYSTEM.open(full_path, mode_str);
+  size_t written = 0;
+  
+  if (f) {
+    if (d_tag == 0x0E || d_tag == 0x0D) {          // STRING / NAME
+      written = f.write(&d_ptr[2], d_ptr[1]);
+    }
+    else if (d_tag == 15) {                         // $STRING
+      uint16_t addr = d_ptr[2] | (d_ptr[3] << 8);
+      written = f.write(&data_pool[addr], d_ptr[1]);
+    }
+    else if (d_tag == 17 || d_tag == 20) {          // ARRAY / REF_ARR
+      uint16_t base = d_ptr[1] | (d_ptr[2] << 8);
+      uint16_t len  = d_ptr[3] | (d_ptr[4] << 8);
+      uint8_t esz = type_registry[d_ptr[5]].size;
+      written = f.write(&data_pool[base], len * esz);
+    }
+    f.close();
+    stack_ptr += d_sz;
+    pushBool(written > 0);
+  } else {
+    stack_ptr += d_sz;
+    pushBool(false);
+  }
+}
+
+// === ДЕСКРИПТОР SERIAL ===
+// Тело ресурса: [0x12][desc_lo][desc_hi][port][baud(4)][rx][tx][state]
+void serial_desc_func() {
+  // 1. Снимаем ADDR ресурса
+  if (stack_is_empty()) { pushBool(false); return; }
+  uint8_t* ctx_ptr = &stack_mem[stack_ptr];
+  if (ctx_ptr[0] != 0x12) { pushBool(false); return; }
+  uint16_t res_addr = ctx_ptr[1] | (ctx_ptr[2] << 8);
+  stack_ptr += 3;
+
+  // 2. Читаем метаданные
+  if (res_addr >= dict_ptr) { pushBool(false); return; }
+  uint8_t vn = dict_pool[res_addr + 2];
+  uint16_t body = res_addr + 5 + vn;
+  
+  uint8_t port = dict_pool[body + 3];
+  uint32_t baud = dict_pool[body + 4] | (dict_pool[body + 5] << 8) |
+                  (dict_pool[body + 6] << 16) | (dict_pool[body + 7] << 24);
+  uint8_t rx = dict_pool[body + 8];
+  uint8_t tx = dict_pool[body + 9];
+  uint8_t state = dict_pool[body + 10];
+
+  // 3. Получаем указатель на UART
+  Stream* uart = nullptr;
+  if (port == 0) uart = &Serial;
+  else if (port == 1) uart = &Serial1;
+  else if (port == 2) uart = &Serial2;
+  else { pushBool(false); return; }
+
+  // 4. Авто-инициализация
+  if (state == 0 && port > 0) {
+    ((HardwareSerial*)uart)->begin(baud, SERIAL_8N1, rx, tx);
+    dict_pool[body + 10] = 1;  // Обновляем состояние в теле слова
+  }
+
+  // 5. Снимаем данные для записи
+  if (stack_is_empty()) { pushBool(false); return; }
+  uint8_t* d_ptr = &stack_mem[stack_ptr];
+  uint8_t d_tag = d_ptr[0];
+  uint16_t d_sz = elem_size(d_ptr);
+
+  size_t written = 0;
+  if (d_tag == 0x0E || d_tag == 0x0D) {
+    written = uart->write(&d_ptr[2], d_ptr[1]);
+  }
+  else if (d_tag == 15) {
+    uint16_t addr = d_ptr[2] | (d_ptr[3] << 8);
+    written = uart->write(&data_pool[addr], d_ptr[1]);
+  }
+  else if (d_tag == 17 || d_tag == 20) {
+    uint16_t base = d_ptr[1] | (d_ptr[2] << 8);
+    uint16_t len  = d_ptr[3] | (d_ptr[4] << 8);
+    uint8_t esz = type_registry[d_ptr[5]].size;
+    written = uart->write(&data_pool[base], len * esz);
+  }
+
+  stack_ptr += d_sz;
+  pushBool(written > 0);
+}
+void word_addr_of() {
+    // === РЕЖИМ 1: Исполнение из скомпилированного кода ===
+    // Если ip указывает на валидный адрес в dict_pool —
+    // читаем следующие 2 байта как адрес целевого слова
+    if (ip > 0 && ip + 2 <= dict_ptr) {
+        uint16_t target = dict_pool[ip] | (dict_pool[ip + 1] << 8);
+        if (target < dict_ptr) {
+            // Проверяем, что это валидный адрес слова
+            uint8_t nlen = dict_pool[target + 2];
+            if (nlen <= 63 && target + 5 + nlen <= dict_ptr) {
+                // Кладём ADDR на стек
+                uint8_t a[3] = {0x12, (uint8_t)(target & 0xFF), (uint8_t)(target >> 8)};
+                stack_push(a, 3);
+                ip += 2;  // 🔑 Пропускаем адрес следующего слова
+                return;
+            }
+        }
+    }
+    
+    // === РЕЖИМ 2: REPL — захват из R2L-потока ===
+    int idx = g_tok_idx - 1;
+    if (idx < 0) {
+        currentOutput->println("#: no word before");
+        return;
+    }
+    uint8_t len = g_tok_len[idx];
+    if (len == 0 || len > 63) {
+        currentOutput->println("#: invalid name");
+        return;
+    }
+    char name[64];
+    memcpy(name, g_tok_start[idx], len);
+    name[len] = '\0';
+    
+    uint16_t addr = dict_find(name);
+    if (addr == 0xFFFF) {
+        currentOutput->print("#: not found: ");
+        currentOutput->println(name);
+        return;
+    }
+    
+    // Кладём ADDR на стек
+    uint8_t a[3] = {0x12, (uint8_t)(addr & 0xFF), (uint8_t)(addr >> 8)};
+    stack_push(a, 3);
+    
+    // Пропускаем токен имени в R2L-цикле
+    g_tok_idx -= 1;
+}
 void setup() {
   Serial.begin(115200);
   Serial.println(); delay(500);
@@ -5207,6 +5826,8 @@ void setup() {
   addInternalWord("abort", word_abort);          // Аварийная кнопка: мгновенно очищает стеки, останавливает задачи и возвращает вывод в Serial.
   addInternalWord("nop",  wordNop);              // Пустая операция. Используется как маркер конца цепочки (cord) или для выравнивания.
   addInternalWord("words", word_words);          // Выводит список всех доступных слов в текущем контексте (фокусе внимания).
+  addInternalWord("<--", word_checkpoint);
+  addInternalWord("xxx", word_forget);
   addInternalWord("main", word_main);            // Переключает фокус внимания в корневой (глобальный) контекст.
   addInternalWord("focus",  word_cont);           // Создаёт новый контекст или переключает фокус внимания на существующий.
   addInternalWord("device", word_device);        // Создаёт новое слово-устройство (переменную состояния) с уникальным внутренним ID.
@@ -5285,6 +5906,8 @@ void setup() {
   addInternalWord("toChar", word_num_to_char);   // ПРЕОБРАЗОВАТЕЛЬ: берёт числовой код со стека и превращает его в строку из 1 символа.
   addInternalWord("toNum",  word_char_to_num);   // ПРЕОБРАЗОВАТЕЛЬ: берёт строку/символ со стека и превращает его в числовой ASCII-код.
   addInternalWord("toInt", word_toInt);          // ПРЕОБРАЗОВАТЕЛЬ: парсит текстовую строку (напр. "42") и кладёт на стек как число (INT32).
+  addMarkerWord("word");
+  addInternalWord("#", word_addr_of); 
 
   // === КОНТЕКСТ: MATH (Математика и логика) ===
   executeLine("math cont");                      // Переключаем фокус внимания на математические операции.
@@ -5313,12 +5936,23 @@ void setup() {
   addInternalWord("restore", word_restore);      // Восстанавливает состояние системы из ранее сохранённого файла снимка.
   addInternalWord("out>file", word_out_file);    // Перенаправляет весь последующий вывод (print, stack и т.д.) в указанный файл.
   addInternalWord("out>serial", word_out_serial);// Возвращает канал вывода обратно в последовательный порт (Serial).
- executeLine("main"); // Возврат в корень
+  addInternalWord("open",   word_open);     // cfg open file config.txt 1
+  addInternalWord("write",   word_write);
+// Дескрипторы ресурсов — слова-адреса
+// При вызове кладут свой адрес на стек
+create_self_address_word("file");
+create_self_address_word("serial");
+
+
+  executeLine("main"); // Возврат в корень
     addInternalWord("?", word_help);
   gpioInit();
+  ethInit(); 
   wifiInit();
   webInit();
+  udpInit();
   rmtModuleInit();
+  i2sInit();
   i2cInit();
 #if ENABLE_TERM_LAYER
   addInternalWord("term", word_term);
