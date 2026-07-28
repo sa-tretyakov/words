@@ -296,6 +296,18 @@ static inline void pushStringRaw(const char* s) {
     memcpy(&b[2], s, l);
     stack_push(b, 2 + l);
 }
+
+static inline bool popArrayInfo(uint16_t& addr, uint16_t& len) {
+    if (stack_is_empty()) return false;
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 17 && top[0] != 20) return false;
+    if (elem_size(top) != 6) return false;
+    addr = top[1] | (top[2] << 8);
+    len  = top[3] | (top[4] << 8);
+    stack_ptr += 6;
+    return true;
+}
+
 // === РЕЕСТР ТИПОВ ===
 enum { CAT_NONE, CAT_UINT, CAT_INT, CAT_FLOAT, CAT_TEXT, CAT_ADDR, CAT_LIST, CAT_STRUCT, CAT_REF };
 struct TypeInfo {

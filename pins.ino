@@ -9,20 +9,6 @@ constexpr uint8_t HDL_INPUT_PULLUP = (uint8_t)INPUT_PULLUP;
 constexpr uint8_t HDL_LOW          = (uint8_t)LOW;
 constexpr uint8_t HDL_HIGH         = (uint8_t)HIGH;
 
-
-
-// === Локальный хелпер для снятия ARRAY/REF_ARR (в ядре нет) ===
-static inline bool popArrayInfo(uint16_t& addr, uint16_t& len) {
-    if (stack_is_empty()) return false;
-    uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] != 17 && top[0] != 20) return false;
-    if (elem_size(top) != 6) return false;
-    addr = top[1] | (top[2] << 8);
-    len  = top[3] | (top[4] << 8);
-    stack_ptr += 6;
-    return true;
-}
-
 // === ФУНКЦИИ-ОБЁРТКИ ДЛЯ КОНСТАНТ ===
 void lowWord()         { pushUInt8(HDL_LOW); }
 void highWord()        { pushUInt8(HDL_HIGH); }
