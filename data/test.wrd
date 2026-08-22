@@ -1,36 +1,70 @@
-// load test.wrd <--
+// load test.wrd <-- xxx
+load ex/http/webconst.wrd
+
+tcp.adres = "192.168.0.101"
+tcp.port = 80
+buf = array u8 2048
+//
+task.to.kill = 0u16
+tcp.line = 255
 
 
-eth
-const mosi = 9u8
-const miso = 10u8
-const sck = 8u8
-const cs = 6u8
-const e.int = 1u8
+getStatus : // n
+n = 
+  print "Статус: "
+  line1.end = find buf CRLF -) 0
 
-// eth.Init mosi miso sck cs
-
-soket.ssdp = udp.Multicast 1900 "239.255.255.250"
-print "soket.ssdp = "
-print soket.ssdp
-ln
-ssdpRead :
-n = udp.Available soket.ssdp
-if n > 0 {
-print "получено "
-print  n
-print " байт "
-ln
-udp.RecvFrom soket.ssdp
-print 
-print
-ln
-print
-ln
-}
+  part$ buf 0 line1.end
+  ->
+  println
+  println "Заголовки:"
+  line2.end = find buf CRLF2 -) 0
+  part$ buf line1.end + 2 line2.end
+  ->
+  println
+  part$ buf line2.end + 4 n 
+  if ! {
+  println
+  exit
+  }
+  print
+  part$ buf line2.end + 259 n
+  if ! {
+  println
+  exit
+  }
 ;
 
 
-ssdpRead 50 +task
+http.read :
+if tcp.line == 255 {
+exit
+}
+if 0 != tcp.Available tcp.line {
+n = tcp.Recv tcp.line buf
+    tcp.Close tcp.line
+   __remove_task__ task.to.kill
+   ln
+   getStatus n
+}
+
+;
+
+http.get : // adres port url
+adress =
+port = 
+url = 
+tcp.line = tcp.Connect adress port
+out>tcp tcp.line
+println  GET + url + " " + http.version
+println  Host: + tcp.adres
+println  h.connection
+println Empty.Line
+out>serial
+task.to.kill = http.read #
+http.read 100 +task
+;
 
 
+//http.get tcp.adres tcp.port "/ssdp.list.json"
+http.get tcp.adres tcp.port "/modules.json"

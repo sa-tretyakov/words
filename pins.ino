@@ -24,7 +24,7 @@ void crlf2Word()       { pushStringRaw("\r\n\r\n"); }
 
 // === РЕГИСТРАЦИЯ GPIO ===
 void gpioInit() {
-    executeLine("gpio cont");
+    focusTo("gpio");
     addInternalWord("pinMode",      pinModeWord);       // pin mode → void.
     addInternalWord("digitalWrite", digitalWriteWord);  // pin value → void.
     addInternalWord("analogWrite",  analogWriteWord);   // pin value → void.
@@ -41,12 +41,12 @@ void gpioInit() {
     addInternalWord("INPUT_PULLUP", inputPullupWord);   // → u8 (INPUT_PULLUP).
     addInternalWord("LSBFIRST",     lsbfirstWord);      // → u8 (0).
     addInternalWord("MSBFIRST",     msbfirstWord);      // → u8 (1).
-    executeLine("io cont");
+    focusTo("io");
     addInternalWord("CR",    crWord);                   // → STRING "\r".
     addInternalWord("LF",    lfWord);                   // → STRING "\n".
     addInternalWord("CRLF",  crlfWord);                 // → STRING "\r\n".
     addInternalWord("CRLF2", crlf2Word);                // → STRING "\r\n\r\n".
-    executeLine("audio cont");
+    focusTo("audio");
     addInternalWord("tone",   toneWord);                // pin freq [duration] → void.
     addInternalWord("beep",   beepWord);                // pin freq [duration] → void.
     addInternalWord("noTone", noToneWord);              // pin → void.
@@ -54,7 +54,7 @@ void gpioInit() {
     addInternalWord("ledcSetup",  ledcSetupWord);       // channel freq resolution → void.
     addInternalWord("ledcAttach", ledcAttachWord);      // pin channel → void.
     addInternalWord("ledcWrite",  ledcWriteWord);       // ch_or_pin duty → void.
-    executeLine("main");
+    focusTo("main");
 }
 
 // === GPIO ===
@@ -244,7 +244,7 @@ void ledcWriteWord() {
 
 // === I2C ===
 #include <Wire.h>
-extern uint8_t data_pool[];
+
 static bool i2cInitialized = false;
 
 void i2cInitFunc() {
@@ -270,7 +270,7 @@ void i2cInitClokFunc() {
 void i2cWriteFunc() {
     uint16_t a, l;
     uint8_t dev;
-    if (!popArrayInfo(a, l) || !popUInt8(dev)) { pushBool(false); return; }
+    if (!popAddrInfo(a, l) || !popUInt8(dev)) { pushBool(false); return; }
     if (!i2cInitialized || a + l > DATA_POOL_SIZE) { pushBool(false); return; }
     Wire.beginTransmission(dev);
     Wire.write(&data_pool[a], (size_t)l);
@@ -280,7 +280,7 @@ void i2cWriteFunc() {
 void i2cReadFunc() {
     uint16_t a, l;
     uint8_t dev;
-    if (!popArrayInfo(a, l) || !popUInt8(dev)) { pushBool(false); return; }
+    if (!popAddrInfo(a, l) || !popUInt8(dev)) { pushBool(false); return; }
     if (!i2cInitialized || a + l > DATA_POOL_SIZE || l == 0) { pushBool(false); return; }
     Wire.requestFrom((uint8_t)dev, (uint8_t)l);
     uint16_t cnt = 0;
@@ -294,7 +294,7 @@ void i2cReadFunc() {
 void i2cReadRegFunc() {
     uint16_t a, l;
     uint8_t reg, dev;
-    if (!popArrayInfo(a, l) || !popUInt8(reg) || !popUInt8(dev)) { pushBool(false); return; }
+    if (!popAddrInfo(a, l) || !popUInt8(reg) || !popUInt8(dev)) { pushBool(false); return; }
     if (!i2cInitialized || a + l > DATA_POOL_SIZE || l == 0) { pushBool(false); return; }
     Wire.beginTransmission(dev);
     Wire.write(reg);
@@ -306,7 +306,7 @@ void i2cReadRegFunc() {
 
 void i2cScanFunc() {
     uint16_t a, max;
-    if (!popArrayInfo(a, max)) { pushUInt8(0); return; }
+    if (!popAddrInfo(a, max)) { pushUInt8(0); return; }
     if (!i2cInitialized || a + max > DATA_POOL_SIZE) { pushUInt8(0); return; }
     uint8_t count = 0;
     for (uint8_t addr = 0x01; addr <= 0x7F && count < max; addr++) {
@@ -320,12 +320,12 @@ void i2cScanFunc() {
 }
 
 void i2cInit() {
-    executeLine("i2c cont");
+    focusTo("i2c");
     addInternalWord("i2c.Init",     i2cInitFunc);      // sda scl → BOOL.
     addInternalWord("i2c.Initclok", i2cInitClokFunc);  // sda scl freq → BOOL.
     addInternalWord("i2c.Write",    i2cWriteFunc);     // array dev → BOOL.
     addInternalWord("i2c.Read",     i2cReadFunc);      // array dev → BOOL.
     addInternalWord("i2c.ReadReg",  i2cReadRegFunc);   // array reg dev → BOOL.
     addInternalWord("i2c.Scan",     i2cScanFunc);      // array → u8 (количество найденных).
-    executeLine("main");
+    focusTo("main");
 }

@@ -1,4 +1,6 @@
-
+ln :
+print CRLF
+;
 load cords.wrd
 load ex/net/net.words
 // загружаем массив соответствия pin плата name
@@ -18,7 +20,7 @@ oops
 load "evonic.wrd"
 exit
 }
-if chip == "esp32" {
+if chip == "esp32-с5" {
 load chip + "/evo.wrd"
 oops
 load "evonic.wrd"
@@ -26,6 +28,6 @@ exit
 }
 ;
 
-testconfig
+// testconfig
 
 

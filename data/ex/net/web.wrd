@@ -1,0 +1,109 @@
+// load ex/net/web.wrd <-- xxx
+load ex/http/webconst.wrd
+
+web focus
+mime = array $S 28
+mime [ ] = htm @ t.html @ html @ t.html @ wrd @ t.html @ json @ t.json @ css @ t.css @ js @ t.js @ png @ t.png @ gif @ t.gif @ jpg @ t.jpg @ ico @ t.ico @ xml @ t.xml @ pdf @ t.pdf @ zip @ t.zip @ gz @ t.gz @
+
+
+contType :
+ext = "html"
+ext = 
+i = 0u8
+// locals
+while i < 28 {
+if ext == mime [ i ] {
+mime [ i + 1u8 ]
+exit 
+ }
+i += 2u8
+}
+"application/octet-stream"
+;
+
+http.index = "/index.htm.gz" 
+path? : // path
+ path = 
+    if "/" == path {        // если запрошен корень сайта
+      http.index            // подменить путь на файл по умолчанию
+      exit
+    }
+ path
+;
+
+?client :
+  if 255 == {                          // если индекс 255 (никого нет в очереди на подключение)
+    exit                                   // досрочно выйти из слова, ничего не делая
+  }  
+;
+
+Response.Header : // index.htm.gz
+println h.type + contType "htm"
+println h.length + toStr fs.size
+println h.encoding
+println h.connection
+;
+Message.Body : // url
+type
+;
+http.response : // cli index.htm.gz
+   client =
+   url = 
+    Status.Line = http.ok
+    print
+    Response.Header
+    Empty.Line
+    Message.Body url
+    // tcp.Close client 
+;
+
+notFound : // путь к файлу
+client =
+    if ! exists  {
+    http.response client                        // Отправить 404
+    exit 
+    }
+;
+
+
+
+/*
+srv = tcp.Listen 8080
+req = array u8 1024 // массив для приема строки с сервера
+
+HTTP8080 :                                 // начало компиляции нового слова (HTTP-обработчик)
+  cli = tcp.Accept srv                     // принять входящее соединение, получить индекс клиента
+  ?client cli                              // выход
+  n = tcp.Recv cli req                     // прочитать байты из клиента в массив req, сохранить количество в n
+  if n == 0 {                              // если получено 0 байт (клиент закрыл соединение или тишина)
+    tcp.Close cli                          // закрыть сокет клиента
+    exit                                   // завершить выполнение слова
+  }
+  if req? req {                            // проверить, является ли req валидным HTTP-запросом (GET, POST...)
+    print " "                              // (отладка) вывод пустой строки для визуального разделения
+    print n                                // (отладка) вывод количества принятых байт
+    ln                                     // перенос строки
+    req.line req                           // разобрать первую строку запроса 
+                                           // (кладет на стек сверху вниз: has_params, method, path)
+    stack                                  // (отладка) показать текущее состояние стека
+    if {                                   // снять со стека has_params: если были параметры в URL
+      ln print "data"                      // вывести маркер наличия данных/параметров
+    }
+    http.verb =                            // снять со стека method и сохранить в переменную http.verb
+    indexFile =                            // снять со стека path и сохранить в переменную indexFile
+    path? indexFile                        // путь к файлу модификация index на стеке имя файла
+    exists indexFile                       // есть файл
+    
+    if ! exists  {
+    tcp.Close cli                          // закрыть сокет клиента
+    exit 
+    }
+    ln print indexFile                     // (отладка) вывести итоговое имя файла, которое будем отдавать
+    find indexFile "." (- 0                 // искать последнюю точку в имени (начиная с 0) для определения расширения
+    between indexFile len indexFile 1 + 
+    ln print                               // (отладка) вывести результат поиска (позиции точки)
+    print exists indexFile
+    http.response cli
+  }
+;  
+*/

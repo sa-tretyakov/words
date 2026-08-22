@@ -1,0 +1,69 @@
+## tcp.Connect
+tcp.Connect ip port → u8
+Подключение к TCP-серверу. Возвращает индекс (0-7) или 0xFF.
+Пример: tcp.Connect "192.168.1.100" 8080 -> sock
+
+## tcp.Listen
+tcp.Listen port → u8
+Создаёт TCP-сервер на порту. Возвращает индекс сокета.
+Пример: tcp.Listen 8080 -> srv
+
+## tcp.Accept
+tcp.Accept server_sock → u8
+Принимает входящее соединение. 0xFF если нет соединений.
+Пример: tcp.Accept srv -> cli
+
+## tcp.Send
+tcp.Send sock data → BOOL
+Отправляет данные через TCP.
+Пример: tcp.Send cli "Hello"
+
+## tcp.Recv
+tcp.Recv sock array → u16
+Принимает данные в массив. Возвращает количество байт.
+Пример: tcp.Recv cli buf -> len
+
+## tcp.Available
+tcp.Available sock → u16
+Количество байт, доступных для чтения.
+Пример: tcp.Available cli -> bytes
+
+## tcp.Connected
+tcp.Connected sock → BOOL
+Проверка состояния TCP-соединения.
+Пример: tcp.Connected cli if { "alive" print }
+
+## tcp.Close
+tcp.Close sock → BOOL
+Закрывает TCP-сокет.
+Пример: tcp.Close cli
+
+## tcp.Timeout
+tcp.Timeout sock ms → BOOL
+Устанавливает таймаут TCP в миллисекундах.
+Пример: tcp.Timeout cli 3000
+
+## tcp.RemoteIp
+tcp.RemoteIp sock → STRING
+IP-адрес удалённой стороны.
+Пример: tcp.RemoteIp cli print
+
+## tcp.RemotePort
+tcp.RemotePort sock → u16
+Порт удалённой стороны.
+Пример: tcp.RemotePort cli print
+
+## out>tcp
+out>tcp sock
+Перенаправляет весь вывод (print) в TCP-сокет.
+Пример: out>tcp cli
+
+## req?
+req? array → BOOL
+Проверяет, является ли массив HTTP-запросом.
+Пример: req? buf if { "HTTP request" print }
+
+## req.line
+req.line array → BOOL method path
+Парсит первую строку HTTP-запроса.
+Пример: req.line buf -> has_query method path

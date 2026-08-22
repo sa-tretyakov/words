@@ -1,0 +1,99 @@
+## modeSta
+modeSta
+Переключает WiFi в режим Station (клиент).
+Пример: modeSta
+
+## modeAp
+modeAp
+Переключает WiFi в режим точки доступа.
+Пример: modeAp
+
+## modeStaAp
+modeStaAp
+Переключает WiFi в режим AP+STA одновременно.
+Пример: modeStaAp
+
+## wifiOff
+wifiOff → BOOL
+Полностью выключает WiFi-радио.
+Пример: wifiOff
+
+## onSta
+onSta ssid password → BOOL
+Подключение к WiFi. Таймаут 10 секунд.
+Пример: onSta "Halo Network" "pass123" -> ok
+
+## channel
+channel ch →
+Устанавливает канал для следующего onSta (1-253).
+Пример: 6 channel
+
+## channel?
+channel? ssid → u16
+Сканирует эфир, возвращает канал с лучшим RSSI. 0 если не найдена.
+Пример: "Halo Network" channel? -> ch
+
+## band
+band ssid "2.4"|"5" → u16
+Ищет SSID в указанном диапазоне. Возвращает канал или 0.
+Пример: "Halo Network" "5" band -> ch
+
+## status
+status → u8
+Общее состояние WiFi + Ethernet. 0=нет, 1=WiFi, 2=ETH, 3=оба.
+Пример: status print
+
+## dbm
+dbm → i32
+Сила сигнала WiFi в dBm. -1000 если не подключены.
+Пример: dbm print
+
+## ipSta
+ipSta → STRING
+IP-адрес в режиме Station. "0.0.0.0" если не подключены.
+Пример: ipSta print
+
+## onAp
+onAp ssid password → BOOL
+Создаёт точку доступа.
+Пример: onAp "MyAP" "12345678" -> ok
+
+## setAp
+setAp ssid password [channel] [hidden] → BOOL
+Расширенная настройка AP. Сначала modeAp или modeStaAp.
+Пример: setAp "MyAP" "12345678" 6 false -> ok
+
+## apConfig
+apConfig ip gateway subnet → BOOL
+Статический IP для AP. Сначала modeAp или modeStaAp.
+Пример: apConfig "192.168.4.1" "192.168.4.1" "255.255.255.0"
+
+## ipAp
+ipAp → STRING
+IP-адрес точки доступа. "0.0.0.0" если AP не поднят.
+Пример: ipAp print
+
+## scan
+scan → JSON
+Синхронное сканирование всех сетей. Выводит JSON.
+Пример: scan
+
+## wifi.starts
+wifi.starts → u32
+HDL-переменная. Количество попыток подключения к WiFi.
+Пример: wifi.starts print
+
+## wifi.connects
+wifi.connects → u32
+HDL-переменная. Количество успешных подключений.
+Пример: wifi.connects print
+
+## wifi.disconnects
+wifi.disconnects → u32
+HDL-переменная. Количество отключений.
+Пример: wifi.disconnects print
+
+## wifi.ips
+wifi.ips → u32
+HDL-переменная. Количество полученных IP (DHCP).
+Пример: wifi.ips print

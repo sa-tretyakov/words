@@ -1,19 +1,18 @@
-cont wifi
-var ssid = "words"
-var ssidPass = ""
-var checkboxIP = 0
-var ssidAp = "WordsAP"
-var ssidApPass = ""
-var ip = "192.168.4.1"
-var gateway = "192.168.4.1"
-var subnet = "255.255.255.0"
-var channel = 1
-var hidden = 0
-var maxClients = 4
-use global
+wifi focus
+ssid = "words"
+ssidPass = ""
+checkboxIP = 0
+ssidAp = "WordsAP"
+ssidApPass = ""
+ip = "192.168.4.1"
+gateway = "192.168.4.1"
+subnet = "255.255.255.0"
+channel = 1
+hidden = 0
+maxClients = 4
 
 
-cont ssdp
+ssdp focus
 var 
 ssdp0 = "M-SEARCH * HTTP/1.1" + CRLF
 ssdp1 = "Host:239.255.255.250:1900" + CRLF

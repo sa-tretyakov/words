@@ -1,8 +1,8 @@
-cont servo
+servo focus
 ser_pin = pins [ 6 ]
 ser_chan = 0u8
 
-: serInit
+serInit :
 ledcSetup ser_chan 50u8 12 // запустили на канале
 ledcAttach ser_pin ser_chan   // Связали канал с пином
 ledcWrite ser_chan 0u16
@@ -23,8 +23,8 @@ grad
 
 rot_count = 0u16
 max_count = 540u16
-: rotate
-rot_count += 1u16
+rotate :
+rot_count += 1u8
 ledcWrite 0u8 rot_count
 if rot_count >= max_count {
 rot_count = 240u16

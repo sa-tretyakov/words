@@ -1,14 +1,14 @@
 // load ex/basic/pinout.words <--
-cont live
-cont options
+live focus
+options focus
 
 // PINOUT led1 14 1 0
-cont pinout
+pinout focus
 
 
 
 pin.name = "namepin"
-: PINOUT 
+PINOUT :
 
 pin.pin = 0u8
 pin.state = 0u8

@@ -1,37 +1,61 @@
 ## eth.Init
-eth.Init mosi miso sck cs
-  Инициализация ENC28J60 через SPI (10 МГц). Возвращает BOOL.
-  Пример: eth.Init 23 19 18 5
+eth.Init mosi miso sck cs → BOOL
+Инициализация ENC28J60 через SPI (10 МГц).
+Пример: eth.Init 23 19 18 5
+
 ## eth.InitEx
-eth.InitEx mosi miso sck cs irq rst
-  Расширенная инициализация с IRQ и RST.
-  Если rst ≠ 255 — аппаратный сброс. Если irq ≠ 255 — пин как INPUT.
-  Пример: eth.InitEx 23 19 18 5 4 255
+eth.InitEx mosi miso sck cs irq rst → BOOL
+Расширенная инициализация с IRQ и RST.
+rst ≠ 255 — аппаратный сброс. irq ≠ 255 — пин как INPUT.
+Пример: eth.InitEx 23 19 18 5 4 255
+
 ## eth.Mac
-eth.Mac b1 b2 b3 b4 b5 b6
-  Установка MAC-адреса (вызывать до eth.Begin).
-  По умолчанию: 02:00:00:12:34:56
-  Пример: eth.Mac 0x02 0x00 0x00 0xAB 0xCD 0xEF
+eth.Mac b1 b2 b3 b4 b5 b6 → BOOL
+Установка MAC-адреса (вызывать до eth.Begin).
+По умолчанию: 02:00:00:12:34:56
+Пример: eth.Mac 0x02 0x00 0x00 0xAB 0xCD 0xEF
+
 ## eth.Begin
-eth.Begin
-  Подключение по DHCP, ожидание линка до 10 секунд.
-  Возвращает BOOL (true если IP получен).
-  Пример: eth.Begin
+eth.Begin → BOOL
+Подключение по DHCP, ожидание линка до 10 секунд.
+Пример: eth.Begin -> ok
+
 ## eth.Static
-eth.Static ip gateway subnet dns
-  Настройка статического IP-адреса.
-  Пример: eth.Static "192.168.1.42" "192.168.1.1" "255.255.255.0" "8.8.8.8"
+eth.Static ip gateway subnet dns → BOOL
+Настройка статического IP-адреса.
+Пример: eth.Static "192.168.1.42" "192.168.1.1" "255.255.255.0" "8.8.8.8"
+
 ## eth.Ip
-eth.Ip
-  Текущий IP интерфейса. Возвращает STRING ("0.0.0.0" если не поднят).
-  Пример: eth.Ip print
+eth.Ip → STRING
+Текущий IP интерфейса. "0.0.0.0" если не поднят.
+Пример: eth.Ip print
+
 ## eth.Link
-eth.Link
-  Проверка физического линка (кабель, согласование).
-  Возвращает BOOL.
-  Пример: eth.Link if { "cable OK" print }
+eth.Link → BOOL
+Проверка физического линка (кабель, согласование).
+Пример: eth.Link if { "cable OK" print }
+
 ## eth.Deinit
-eth.Deinit
-  Полное освобождение ресурсов (esp_netif, драйвер, память).
-  Возвращает BOOL.
-  Пример: eth.Deinit
+eth.Deinit → BOOL
+Полное освобождение ресурсов.
+Пример: eth.Deinit
+
+## eth.starts
+eth.starts → u32
+HDL-переменная. Количество запусков Ethernet-драйвера.
+Пример: eth.starts print
+
+## eth.connects
+eth.connects → u32
+HDL-переменная. Количество поднятий линка.
+Пример: eth.connects print
+
+## eth.disconnects
+eth.disconnects → u32
+HDL-переменная. Количество падений линка.
+Пример: eth.disconnects print
+
+## eth.ips
+eth.ips → u32
+HDL-переменная. Количество полученных IP по Ethernet.
+Пример: eth.ips print

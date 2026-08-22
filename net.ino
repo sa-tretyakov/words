@@ -1,741 +1,865 @@
-#ifdef ESP8266
-#include <ESP8266WiFi.h>
-#else
+// === net.ino — WiFi + Ethernet + UDP + TCP ===
+// Единый модуль сети. Файл eth.ino должен быть пустым.
 #include <WiFi.h>
+#include <WiFiUdp.h>
+#include <esp_log.h>
+#include <esp_event.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+
+#ifndef ETH_ENC28J60_ENABLED
+#define ETH_ENC28J60_ENABLED 1
 #endif
 
-void wifiInit() {
-  executeLine("network cont");
-  addInternalWord("modeSta", modeStaFunc);
-  addInternalWord("modeAp", modeApFunc);
-  addInternalWord("modeStaAp", modeStaApFunc);
-  addInternalWord("onSta", wifiFunc);
-  addInternalWord("dbm", dbmFunc);
-  addInternalWord("ipSta", ipStaFunc);
-  addInternalWord("onAp", onApFunc);
-  addInternalWord("setAp", setApFunc);
-  addInternalWord("apConfig", apConfigFunc);
-  addInternalWord("ipAp", ipApFunc);
-  addInternalWord("scan", scanFunc);
-  addInternalWord("wifiOff", wifiOffFunc);
-  executeLine("main"); // Вернуться в корневой контекст
+#if ETH_ENC28J60_ENABLED
+#include <EthernetESP32.h>
+#include <SPI.h>
+#endif
+
+// ============================================================
+// === ГЛОБАЛЬНОЕ СОСТОЯНИЕ ===
+// ============================================================
+static int32_t g_wifi_channel = 0;
+
+#if ETH_ENC28J60_ENABLED
+bool ethInstalled = false;
+static uint8_t ethMac[6] = {0x02, 0x00, 0x00, 0x12, 0x34, 0x56};
+static ENC28J60Driver* ethDriver = nullptr;
+#else
+bool ethInstalled = false;
+#endif
+
+// ============================================================
+// === АДРЕСА ТЕЛ HDL-ПЕРЕМЕННЫХ В dict_pool ===
+// ============================================================
+static uint16_t addr_w_start = 0, addr_w_conn = 0, addr_w_disc = 0, addr_w_ip = 0;
+static uint16_t addr_e_start = 0, addr_e_conn = 0, addr_e_disc = 0, addr_e_ip = 0;
+
+// ============================================================
+// === ХЕЛПЕРЫ ===
+// ============================================================
+
+// Инкремент HDL-переменной UINT32 через штатные хелперы ядра
+static inline void inc_hdl_var(uint16_t body_addr) {
+    if (body_addr == 0) return;
+    uint32_t v = decode_uint_le(&dict_pool[body_addr + 1], 4);
+    encode_uint_le(&dict_pool[body_addr + 1], v + 1, 4);
 }
 
+// Найти адрес тела переменной по имени
+static uint16_t _find_body(const char* name) {
+    uint16_t addr = dict_find(name);
+    if (addr == 0xFFFF) return 0;
+    uint8_t nlen = dict_pool[addr + 2];
+    return addr + 5 + nlen;
+}
 
-void wifiFunc() { // onSta: ssid password → BOOL
-  // 1. Читаем SSID (должен быть на верхушке стека)
-  if (stack_is_empty()) {
-    currentOutput->println("⚠️ onSta: SSID (string) expected");
-    pushBool(false);
-    return;
-  }
-  
-  uint8_t* top = &stack_mem[stack_ptr];
-  if (top[0] != 0x0E) { // Проверяем тег STRING
-    currentOutput->println("⚠️ onSta: SSID (string) expected");
-    pushBool(false);
-    return;
-  }
-  
-  uint8_t ssidLen = top[1];
-  if (ssidLen == 0 || ssidLen > 63) {
-    currentOutput->println("⚠️ onSta: invalid SSID length");
-    pushBool(false);
-    return;
-  }
-  
-  char ssid[65];
-  memcpy(ssid, &top[2], ssidLen);
-  ssid[ssidLen] = '\0'; // Добавляем null-terminator
-  
-  uint16_t ssidSize = elem_size(top);
-  stack_ptr += ssidSize; // Снимаем SSID со стека
+// Создать u32-переменную штатным механизмом ядра
+static uint16_t create_u32(const char* name) {
+    char cmd[80];
+    snprintf(cmd, sizeof(cmd), "%s = 0u32", name);
+    executeLine(cmd);
+    return _find_body(name);
+}
 
-  // 2. Читаем пароль
-  if (stack_is_empty()) {
-    currentOutput->println("⚠️ onSta: password (string) expected");
-    pushBool(false);
-    return;
-  }
-  
-  top = &stack_mem[stack_ptr];
-  if (top[0] != 0x0E) {
-    currentOutput->println("⚠️ onSta: password (string) expected");
-    pushBool(false);
-    return;
-  }
-  
-  uint8_t passLen = top[1];
-  if (passLen > 63) {
-    currentOutput->println("⚠️ onSta: password too long");
-    pushBool(false);
-    return;
-  }
-  
-  char password[65];
-  memcpy(password, &top[2], passLen);
-  password[passLen] = '\0';
-  
-  uint16_t passSize = elem_size(top);
-  stack_ptr += passSize; // Снимаем пароль со стека
-
-  // 3. Убедимся, что режим включает STA
-  wifi_mode_t mode = WiFi.getMode();
-  if ((mode & WIFI_MODE_STA) == 0) {
-    WiFi.mode((wifi_mode_t)(mode | WIFI_MODE_STA));
-  }
-
-  // 4. Сканируем и ищем сеть
-  bool found = false;
-  int n = WiFi.scanNetworks();
-  for (int i = 0; i < n; i++) {
-    if (WiFi.SSID(i) == ssid) {
-      found = true;
-      break;
+// Безопасное сканирование — сохраняет текущий режим WiFi
+static int safeScanNetworks() {
+    wifi_mode_t saved_mode = WiFi.getMode();
+    if (saved_mode == WIFI_MODE_NULL || saved_mode == WIFI_MODE_MAX) {
+        WiFi.mode(WIFI_STA);
+        delay(50);
+        int n = WiFi.scanNetworks();
+        WiFi.mode(WIFI_MODE_NULL);
+        return n;
     }
-  }
-
-  if (!found) {
-    currentOutput->printf("⚠️ onSta: network '%s' not found\n", ssid);
-    pushBool(false);
-    return;
-  }
-
-  // 5. Подключаемся
-  WiFi.begin(ssid, password);
-
-  // Ждём до 10 секунд
-  for (int i = 0; i < 100; i++) {
-    if (WiFi.status() == WL_CONNECTED) {
-      pushBool(true);
-      return;
+    if (saved_mode == WIFI_MODE_AP) {
+        WiFi.mode(WIFI_MODE_APSTA);
+        delay(50);
+        int n = WiFi.scanNetworks();
+        WiFi.mode(WIFI_MODE_AP);
+        return n;
     }
+    return WiFi.scanNetworks();
+}
+
+// ============================================================
+// === ОБРАБОТЧИК СОБЫТИЙ WiFi + Ethernet ===
+// ============================================================
+static void onWiFiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_STA_START:        inc_hdl_var(addr_w_start); break;
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED:    inc_hdl_var(addr_w_conn);  break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: inc_hdl_var(addr_w_disc);  break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:       inc_hdl_var(addr_w_ip);    break;
+        case ARDUINO_EVENT_ETH_START:             inc_hdl_var(addr_e_start); break;
+        case ARDUINO_EVENT_ETH_CONNECTED:         inc_hdl_var(addr_e_conn);  break;
+        case ARDUINO_EVENT_ETH_DISCONNECTED:      inc_hdl_var(addr_e_disc);  break;
+        case ARDUINO_EVENT_ETH_GOT_IP:            inc_hdl_var(addr_e_ip);    break;
+        default: break;
+    }
+}
+
+// ============================================================
+// === WiFi: режимы ===
+// ============================================================
+void modeStaFunc()   { WiFi.mode(WIFI_STA); }
+void modeApFunc()    { WiFi.mode(WIFI_AP); }
+void modeStaApFunc() {
+#if defined(ESP32)
+    WiFi.mode(WIFI_MODE_APSTA);
+#else
+    WiFi.mode(WIFI_AP_STA);
+#endif
+}
+void wifiOffFunc() {
+    WiFi.mode(WIFI_MODE_NULL);
+    g_wifi_channel = 0;
+}
+
+// ============================================================
+// === channel : ch → ===
+// ============================================================
+void channelFunc() {
+    uint32_t ch = 0;
+    if (!popUInt32(ch)) { currentOutput->println("channel: number expected"); return; }
+    if (ch > 253) { currentOutput->println("channel: invalid (1-253)"); return; }
+    g_wifi_channel = (int32_t)ch;
+    currentOutput->printf("channel set to %d\n", g_wifi_channel);
+}
+
+// ============================================================
+// === channel? : ssid → channel(u16) ===
+// ============================================================
+void channelQueryFunc() {
+    if (stack_is_empty()) { pushUInt16(0); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E && top[0] != 0x0D) { pushUInt16(0); return; }
+    uint8_t ssidLen = top[1];
+    if (ssidLen == 0 || ssidLen > 63) { pushUInt16(0); return; }
+    char ssid[65];
+    memcpy(ssid, &top[2], ssidLen); ssid[ssidLen] = '\0';
+    stack_ptr += elem_size(top);
+
+    int n = safeScanNetworks();
+    int best_ch = 0, best_rssi = -1000;
+    for (int i = 0; i < n; i++) {
+        if (WiFi.SSID(i) == ssid) {
+            int rssi = WiFi.RSSI(i);
+            int ch   = WiFi.channel(i);
+            if (rssi > best_rssi) { best_rssi = rssi; best_ch = ch; }
+        }
+    }
+    WiFi.scanDelete();
+    pushUInt16((uint16_t)best_ch);
+}
+
+// ============================================================
+// === band : ssid "2.4"|"5" → channel(u16) ===
+// ============================================================
+void bandFunc() {
+    if (stack_is_empty()) { pushUInt16(0); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E && top[0] != 0x0D) { pushUInt16(0); return; }
+    char band_str[10];
+    uint8_t band_len = top[1];
+    if (band_len > 9) band_len = 9;
+    memcpy(band_str, &top[2], band_len); band_str[band_len] = '\0';
+    stack_ptr += elem_size(top);
+
+    if (stack_is_empty()) { pushUInt16(0); return; }
+    top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E && top[0] != 0x0D) { pushUInt16(0); return; }
+    char ssid[65];
+    uint8_t ssidLen = top[1];
+    if (ssidLen == 0 || ssidLen > 63) { pushUInt16(0); return; }
+    memcpy(ssid, &top[2], ssidLen); ssid[ssidLen] = '\0';
+    stack_ptr += elem_size(top);
+
+    int n = safeScanNetworks();
+    int best_ch = 0, best_rssi = -1000;
+    bool want_5ghz = (strcmp(band_str, "5") == 0 || strcmp(band_str, "5G") == 0);
+    for (int i = 0; i < n; i++) {
+        if (WiFi.SSID(i) == ssid) {
+            int ch = WiFi.channel(i);
+            int rssi = WiFi.RSSI(i);
+            bool is_5ghz = (ch >= 32 && ch <= 177);
+            bool match = want_5ghz ? is_5ghz : !is_5ghz;
+            if (match && rssi > best_rssi) { best_rssi = rssi; best_ch = ch; }
+        }
+    }
+    WiFi.scanDelete();
+    pushUInt16((uint16_t)best_ch);
+}
+
+// ============================================================
+// === onSta : ssid password → BOOL ===
+// ============================================================
+void wifiFunc() {
+    if (stack_is_empty()) { pushBool(false); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E) { pushBool(false); return; }
+    uint8_t ssidLen = top[1];
+    if (ssidLen == 0 || ssidLen > 63) { pushBool(false); return; }
+    char ssid[65];
+    memcpy(ssid, &top[2], ssidLen); ssid[ssidLen] = '\0';
+    stack_ptr += elem_size(top);
+
+    if (stack_is_empty()) { pushBool(false); return; }
+    top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E) { pushBool(false); return; }
+    uint8_t passLen = top[1];
+    if (passLen > 63) { pushBool(false); return; }
+    char password[65];
+    memcpy(password, &top[2], passLen); password[passLen] = '\0';
+    stack_ptr += elem_size(top);
+
+    WiFi.mode(WIFI_STA);
     delay(100);
-  }
 
-  pushBool(false);
-}
-void dbmFunc() {
-  pushInt32(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -1000);
-}
-void ipStaFunc() {
-  pushStringRaw(WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "0.0.0.0");
-}
+    if (g_wifi_channel > 0) {
+        currentOutput->printf("connecting '%s' ch=%d\n", ssid, g_wifi_channel);
+        WiFi.begin(ssid, password, g_wifi_channel);
+    } else {
+        currentOutput->printf("connecting '%s'\n", ssid);
+        WiFi.begin(ssid, password);
+    }
 
-void onApFunc() {
-  String pass, ssid;
-  if (!popString(pass) || !popString(ssid)) {
+    for (int i = 0; i < 100; i++) {
+        wl_status_t st = WiFi.status();
+        if (st == WL_CONNECTED) {
+            currentOutput->printf("OK IP=%s\n", WiFi.localIP().toString().c_str());
+            pushBool(true);
+            return;
+        }
+        if (st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) {
+            currentOutput->println("onSta: router unreachable");
+            pushBool(false);
+            return;
+        }
+        delay(100);
+    }
+    currentOutput->printf("onSta: timeout '%s'\n", ssid);
     pushBool(false);
-    return;
-  }
-  wifi_mode_t mode = WiFi.getMode();
-  if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) WiFi.mode(WIFI_MODE_AP);
-  pushBool(WiFi.softAP(ssid.c_str(), pass.length() ? pass.c_str() : nullptr));
+}
+
+// ============================================================
+// === Информационные слова WiFi ===
+// ============================================================
+void dbmFunc() { pushInt32(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -1000); }
+void ipStaFunc() { pushStringRaw(WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "0.0.0.0"); }
+
+void scanFunc() {
+    int n = safeScanNetworks();
+    currentOutput->print("{\"networks\":[");
+    for (int i = 0; i < n; i++) {
+        if (i) currentOutput->print(",");
+        currentOutput->print("{\"ssid\":\"");
+        String s = WiFi.SSID(i);
+        for (char c : s) { if (c == '"' || c == '\\') currentOutput->print('\\'); currentOutput->print(c); }
+        currentOutput->print("\",\"rssi\":");
+        currentOutput->print(WiFi.RSSI(i));
+        currentOutput->print(",\"channel\":");
+        currentOutput->print(WiFi.channel(i));
+        currentOutput->print("}");
+    }
+    currentOutput->print("]}");
+    WiFi.scanDelete();
+}
+
+// ============================================================
+// === WiFi AP ===
+// ============================================================
+void onApFunc() {
+    String pass, ssid;
+    if (!popString(pass) || !popString(ssid)) { pushBool(false); return; }
+    wifi_mode_t mode = WiFi.getMode();
+    if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) WiFi.mode(WIFI_MODE_AP);
+    pushBool(WiFi.softAP(ssid.c_str(), pass.length() ? pass.c_str() : nullptr));
 }
 
 void setApFunc() {
-  wifi_mode_t mode = WiFi.getMode();
-  if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) {
-    currentOutput->println("setAp: modeAp/modeStaAp first");
-    pushBool(false);
-    return;
-  }
-  bool hidden = false; int32_t ch = 1;
-  if (!stack_is_empty()) {
-    uint8_t* t = &stack_mem[stack_ptr];
-    if (t[0] == 0 || t[0] == 1) {
-      hidden = (t[0] == 1);
-      stack_ptr++;
-    }
-  }
-  if (!stack_is_empty()) {
-    uint8_t* t = &stack_mem[stack_ptr];
-    if (t[0] >= 4 && t[0] <= 11) {
-      uint32_t v = 0;
-      uint16_t d = elem_size(t) - 1;
-      for (uint16_t k = 0; k < d && k < 4; k++)v |= (uint32_t)t[1 + k] << (k * 8);
-      ch = v;
-      stack_ptr += elem_size(t);
-    }
-  }
-  String pass, ssid;
-  if (!popString(pass) || !popString(ssid)) {
-    pushBool(false);
-    return;
-  }
-  if (ch < 1 || ch > 14) {
-    currentOutput->println("⚠️ setAp: channel 1–14");
-    pushBool(false);
-    return;
-  }
-  pushBool(WiFi.softAP(ssid.c_str(), pass.length() ? pass.c_str() : nullptr, (int)ch, hidden));
+    wifi_mode_t mode = WiFi.getMode();
+    if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) { pushBool(false); return; }
+    bool hidden = false; int32_t ch = 1;
+    if (!stack_is_empty()) { uint8_t* t = &stack_mem[stack_ptr]; if (t[0] == 0 || t[0] == 1) { hidden = (t[0] == 1); stack_ptr++; } }
+    if (!stack_is_empty()) { uint8_t* t = &stack_mem[stack_ptr]; if (t[0] >= 4 && t[0] <= 11) { uint32_t v; if (popUInt32(v)) ch = (int32_t)v; } }
+    String pass, ssid;
+    if (!popString(pass) || !popString(ssid)) { pushBool(false); return; }
+    if (ch < 1 || ch > 253) { pushBool(false); return; }
+    pushBool(WiFi.softAP(ssid.c_str(), pass.length() ? pass.c_str() : nullptr, (int)ch, hidden));
 }
 
 void apConfigFunc() {
-  wifi_mode_t mode = WiFi.getMode();
-  if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) {
-    currentOutput->println("apConfig: modeAp/modeStaAp first");
-    pushBool(false);
-    return;
-  }
-  String sn, gw, ip;
-  if (!popString(sn) || !popString(gw) || !popString(ip)) {
-    pushBool(false);
-    return;
-  }
-  IPAddress L, G, S;
-  if (!L.fromString(ip) || !G.fromString(gw) || !S.fromString(sn)) {
-    currentOutput->println("⚠️ apConfig: invalid IP");
-    pushBool(false);
-    return;
-  }
-  pushBool(WiFi.softAPConfig(L, G, S));
+    wifi_mode_t mode = WiFi.getMode();
+    if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) { pushBool(false); return; }
+    String sn, gw, ip;
+    if (!popString(sn) || !popString(gw) || !popString(ip)) { pushBool(false); return; }
+    IPAddress L, G, S;
+    if (!L.fromString(ip.c_str()) || !G.fromString(gw.c_str()) || !S.fromString(sn.c_str())) { pushBool(false); return; }
+    pushBool(WiFi.softAPConfig(L, G, S));
 }
 
 void ipApFunc() {
-  wifi_mode_t mode = WiFi.getMode();
-  pushStringRaw((mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) ? WiFi.softAPIP().toString().c_str() : "0.0.0.0");
-}
-void wifiOffFunc() {
-  pushBool(WiFi.mode(WIFI_MODE_NULL));
+    wifi_mode_t mode = WiFi.getMode();
+    pushStringRaw((mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) ? WiFi.softAPIP().toString().c_str() : "0.0.0.0");
 }
 
-void scanFunc() {
-  currentOutput->print("{\"networks\":[");
-  int n = WiFi.scanNetworks();
-  for (int i = 0; i < n; i++) {
-    if (i) currentOutput->print(",");
-    currentOutput->print("{\"ssid\":\"");
-    String s = WiFi.SSID(i);
-    for (char c : s) {
-      if (c == '"' || c == '\\') currentOutput->print('\\');
-      currentOutput->print(c);
+// ============================================================
+// === Ethernet ===
+// ============================================================
+#if ETH_ENC28J60_ENABLED
+void ethInitFunc() {
+    uint8_t mosi, miso, sck, cs;
+    if (!popUInt8(cs) || !popUInt8(sck) || !popUInt8(miso) || !popUInt8(mosi)) { pushBool(false); return; }
+    if (ethDriver) delete ethDriver;
+    ethDriver = new ENC28J60Driver(cs, 255, 255);
+    SPI.begin(sck, miso, mosi, cs);
+    ethDriver->setSPI(SPI);
+    ethDriver->setSpiFreq(10);
+    Ethernet.init(*ethDriver);
+    ethInstalled = true;
+    pushBool(true);
+}
+
+void ethInitExFunc() {
+    uint8_t mosi, miso, sck, cs, irq, rst;
+    if (!popUInt8(rst) || !popUInt8(irq) || !popUInt8(cs) || !popUInt8(sck) || !popUInt8(miso) || !popUInt8(mosi)) { pushBool(false); return; }
+    if (ethDriver) delete ethDriver;
+    ethDriver = new ENC28J60Driver(cs, (int8_t)irq, (int8_t)rst);
+    SPI.begin(sck, miso, mosi, cs);
+    ethDriver->setSPI(SPI);
+    ethDriver->setSpiFreq(10);
+    if (rst != 255) { pinMode(rst, OUTPUT); digitalWrite(rst, LOW); delay(10); digitalWrite(rst, HIGH); delay(50); }
+    if (irq != 255) pinMode(irq, INPUT);
+    Ethernet.init(*ethDriver);
+    ethInstalled = true;
+    pushBool(true);
+}
+
+void ethSetMacFunc() {
+    uint8_t mac[6];
+    for (int i = 5; i >= 0; i--) { if (!popUInt8(mac[i])) { pushBool(false); return; } }
+    memcpy(ethMac, mac, 6);
+    pushBool(true);
+}
+
+void ethBeginFunc() {
+    if (!ethInstalled) { pushBool(false); return; }
+    int res = Ethernet.begin(ethMac);
+    if (!res) {
+        for (int i = 0; i < 100; i++) { if (Ethernet.linkStatus() != LinkOFF) break; delay(100); }
+        res = Ethernet.begin(ethMac, 10000);
     }
-    currentOutput->print("\",\"rssi\":"); currentOutput->print(WiFi.RSSI(i)); currentOutput->print("}");
-  }
-  currentOutput->print("]}"); WiFi.scanDelete();
+    pushBool(res == 1);
 }
 
-void modeStaFunc() {
-  WiFi.mode(WIFI_STA);
-  // uint8_t res[1] = {1}; stack_push(res, 1); // push BOOL true
+void ethStaticFunc() {
+    if (!ethInstalled) { pushBool(false); return; }
+    String sDns, sSub, sGw, sIp;
+    if (!popString(sDns) || !popString(sSub) || !popString(sGw) || !popString(sIp)) { pushBool(false); return; }
+    IPAddress ip, gw, sub, dns;
+    if (!ip.fromString(sIp.c_str()) || !gw.fromString(sGw.c_str()) || !sub.fromString(sSub.c_str()) || !dns.fromString(sDns.c_str())) { pushBool(false); return; }
+    Ethernet.begin(ethMac, ip, dns, gw, sub);
+    pushBool(true);
 }
 
-void modeApFunc() {
-  WiFi.mode(WIFI_AP);
-  // uint8_t res[1] = {1}; stack_push(res, 1);
+void ethIpFunc() {
+    if (!ethInstalled) { pushStringRaw("0.0.0.0"); return; }
+    pushStringRaw(Ethernet.localIP().toString().c_str());
 }
 
-void modeStaApFunc() {
-#if defined(ESP32)
-  WiFi.mode(WIFI_MODE_APSTA);
-#else
-  WiFi.mode(WIFI_AP_STA);
+void ethLinkFunc() {
+    if (!ethInstalled) { pushBool(false); return; }
+    pushBool(Ethernet.linkStatus() == LinkON);
+}
+
+void ethDeinitFunc() {
+    if (!ethInstalled) { pushBool(false); return; }
+    Ethernet.end();
+    ethInstalled = false;
+    if (ethDriver) { delete ethDriver; ethDriver = nullptr; }
+    pushBool(true);
+}
 #endif
-  // uint8_t res[1] = {1}; stack_push(res, 1);
+
+// ============================================================
+// === status : → u8 (WiFi + Ethernet) ===
+// ============================================================
+void networkStatusFunc() {
+    uint8_t wifi_st = (WiFi.status() == WL_CONNECTED) ? 1 : 0;
+    uint8_t eth_st  = 0;
+#if ETH_ENC28J60_ENABLED
+    if (ethInstalled) {
+        if (Ethernet.linkStatus() == LinkON) {
+            IPAddress ip = Ethernet.localIP();
+            if (ip != IPAddress(0, 0, 0, 0)) eth_st = 1;
+        }
+    }
+#endif
+    pushUInt8((uint8_t)(wifi_st + eth_st * 2));
 }
 
-// === udp.ino — UDP интерфейс для HDL ===
-// Максимум 8 сокетов. Каждое слово имеет фиксированное число аргументов.
-#include <WiFiUdp.h>
+// ============================================================
+// === wifiInit ===
+// ============================================================
+void wifiInit() {
+    esp_log_level_set("wifi", ESP_LOG_NONE);
+    esp_log_level_set("wifi_init", ESP_LOG_NONE);
+    esp_log_level_set("esp_netif_handlers", ESP_LOG_NONE);
+    esp_log_level_set("eth_enc28j60", ESP_LOG_NONE);
+    WiFi.onEvent(onWiFiEvent);
 
-// === Структура сокета ===
+    focusTo("network");
+
+    // Переменные через штатный механизм ядра
+    addr_w_start = create_u32("wifi.starts");
+    addr_w_conn  = create_u32("wifi.connects");
+    addr_w_disc  = create_u32("wifi.disconnects");
+    addr_w_ip    = create_u32("wifi.ips");
+    addr_e_start = create_u32("eth.starts");
+    addr_e_conn  = create_u32("eth.connects");
+    addr_e_disc  = create_u32("eth.disconnects");
+    addr_e_ip    = create_u32("eth.ips");
+
+    addInternalWord("modeSta",   modeStaFunc);
+    addInternalWord("modeAp",    modeApFunc);
+    addInternalWord("modeStaAp", modeStaApFunc);
+    addInternalWord("onSta",     wifiFunc);
+    addInternalWord("channel",   channelFunc);
+    addInternalWord("channel?",  channelQueryFunc);
+    addInternalWord("band",      bandFunc);
+    addInternalWord("status",    networkStatusFunc);
+    addInternalWord("dbm",       dbmFunc);
+    addInternalWord("ipSta",     ipStaFunc);
+    addInternalWord("onAp",      onApFunc);
+    addInternalWord("setAp",     setApFunc);
+    addInternalWord("apConfig",  apConfigFunc);
+    addInternalWord("ipAp",      ipApFunc);
+    addInternalWord("scan",      scanFunc);
+    addInternalWord("wifiOff",   wifiOffFunc);
+
+    focusTo("main");
+}
+
+// ============================================================
+// === ethInit ===
+// ============================================================
+void ethInit() {
+#if ETH_ENC28J60_ENABLED
+    focusTo("eth");
+    addInternalWord("eth.Init",   ethInitFunc);
+    addInternalWord("eth.InitEx", ethInitExFunc);
+    addInternalWord("eth.Mac",    ethSetMacFunc);
+    addInternalWord("eth.Begin",  ethBeginFunc);
+    addInternalWord("eth.Static", ethStaticFunc);
+    addInternalWord("eth.Ip",     ethIpFunc);
+    addInternalWord("eth.Link",   ethLinkFunc);
+    addInternalWord("eth.Deinit", ethDeinitFunc);
+    focusTo("main");
+#endif
+}
+
+// ============================================================
+// === UDP ===
+// ============================================================
 struct UdpSocket {
     WiFiUDP udp;
     uint16_t port;
     bool active;
     uint32_t timeout_ms;
-    bool broadcast_enabled;
     IPAddress multicast_ip;
     bool is_multicast;
-    IPAddress last_remote_ip;
-    uint16_t last_remote_port;
-    int pending_size; // кэш parsePacket(), -1 = нет пакета
+    int pending_size;
 };
+static UdpSocket* g_udp_sockets[8] = {nullptr};
 
-static UdpSocket g_udp_sockets[8];
-
-// === Локальные вспомогательные функции стека ===
-static inline void udp_pushUInt8(uint8_t val) {
-    uint8_t buf[2] = {4, val};
-    stack_push(buf, 2);
+void word_out_udp() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) return;
+    String ip_str;
+    if (!popString(ip_str)) return;
+    uint32_t port32 = 0;
+    if (!popUInt32(port32)) return;
+    IPAddress ip;
+    if (!ip.fromString(ip_str.c_str())) return;
+    g_stream.attachUdp(&g_udp_sockets[v]->udp, ip, (uint16_t)port32);
+    currentOutput = &g_stream;
 }
 
-static inline void udp_pushUInt16(uint16_t val) {
-    uint8_t buf[3] = {6, (uint8_t)(val & 0xFF), (uint8_t)(val >> 8)};
-    stack_push(buf, 3);
-}
-
-static inline void udp_pushBool(bool v) {
-    uint8_t b[1] = {(uint8_t)v};
-    stack_push(b, 1);
-}
-
-static inline void udp_pushString(const char* s) {
-    uint8_t len = strlen(s);
-    if (len > 253) len = 253;
-    uint8_t buf[256];
-    buf[0] = 0x0E;
-    buf[1] = len;
-    if (len > 0) memcpy(&buf[2], s, len);
-    stack_push(buf, 2 + len);
-}
-
-static inline bool udp_popUInt32(uint32_t& out) {
-    if (stack_is_empty()) return false;
-    uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] < 4 || top[0] > 11) return false;
-    uint16_t sz = elem_size(top);
-    if (sz < 2) return false;
-    out = 0;
-    for (uint16_t i = 0; i < sz - 1 && i < 4; i++) {
-        out |= (uint32_t)top[1 + i] << (i * 8);
-    }
-    stack_ptr += sz;
-    return true;
-}
-
-static inline bool udp_popString(String& out) {
-    if (stack_is_empty()) return false;
-    uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] != 0x0D && top[0] != 0x0E) return false;
-    uint8_t len = top[1];
-    out = String((char*)&top[2], len);
-    stack_ptr += elem_size(top);
-    return true;
-}
-
-// Вспомогательная: снять массив со стека (при ошибке, чтобы не оставлять мусор)
-static inline void udp_discardArray() {
-    if (stack_is_empty()) return;
-    uint8_t* arr = &stack_mem[stack_ptr];
-    if (arr[0] == 17 || arr[0] == 20) {
-        stack_ptr += elem_size(arr);
-    }
-}
-
-// ============================================================
-// 1. udp.Open : port → socket(u8)
-//    R2L: 1900 → udp.Open
-// ============================================================
 void udpOpenFunc() {
     uint32_t port32 = 0;
-    if (!udp_popUInt32(port32)) { udp_pushUInt8(0xFF); return; }
-
+    if (!popUInt32(port32)) { pushUInt8(0xFF); return; }
     int8_t idx = -1;
-    for (int i = 0; i < 8; i++) {
-        if (!g_udp_sockets[i].active) { idx = i; break; }
-    }
-    if (idx == -1) { udp_pushUInt8(0xFF); return; }
-
-    UdpSocket& s = g_udp_sockets[idx];
-    s.active = true;
-    s.port = (uint16_t)port32;
-    s.broadcast_enabled = false;
-    s.timeout_ms = 1000;
-    s.is_multicast = false;
-    s.last_remote_ip = IPAddress(0, 0, 0, 0);
-    s.last_remote_port = 0;
-    s.pending_size = -1;
-    s.udp.setTimeout(s.timeout_ms);
-
-    if (s.udp.begin((uint16_t)port32)) {
-        udp_pushUInt8((uint8_t)idx);
-    } else {
-        s.active = false;
-        udp_pushUInt8(0xFF);
-    }
+    for (int i = 0; i < 8; i++) { if (!g_udp_sockets[i] || !g_udp_sockets[i]->active) { idx = i; break; } }
+    if (idx == -1) { pushUInt8(0xFF); return; }
+    if (!g_udp_sockets[idx]) { g_udp_sockets[idx] = new UdpSocket(); if (!g_udp_sockets[idx]) { pushUInt8(0xFF); return; } }
+    UdpSocket* s = g_udp_sockets[idx];
+    s->active = true; s->port = (uint16_t)port32; s->timeout_ms = 1000; s->is_multicast = false; s->pending_size = -1;
+    s->udp.setTimeout(s->timeout_ms);
+    if (s->udp.begin((uint16_t)port32)) pushUInt8((uint8_t)idx);
+    else { s->active = false; pushUInt8(0xFF); }
 }
 
-// ============================================================
-// 2. udp.Multicast : port ip_string → socket(u8)
-//    R2L: "239.255.255.250" → 1900 → udp.Multicast
-// ============================================================
 void udpMulticastFunc() {
-    uint32_t port32 = 0;
-    if (!udp_popUInt32(port32)) { udp_pushUInt8(0xFF); return; }
-
     String ip_str;
-    if (!udp_popString(ip_str)) { udp_pushUInt8(0xFF); return; }
-
+    if (!popString(ip_str)) { pushUInt8(0xFF); return; }
+    uint32_t port32 = 0;
+    if (!popUInt32(port32)) { pushUInt8(0xFF); return; }
     int8_t idx = -1;
-    for (int i = 0; i < 8; i++) {
-        if (!g_udp_sockets[i].active) { idx = i; break; }
-    }
-    if (idx == -1) { udp_pushUInt8(0xFF); return; }
-
+    for (int i = 0; i < 8; i++) { if (!g_udp_sockets[i] || !g_udp_sockets[i]->active) { idx = i; break; } }
+    if (idx == -1) { pushUInt8(0xFF); return; }
     IPAddress m_ip;
-    if (!m_ip.fromString(ip_str.c_str())) { udp_pushUInt8(0xFF); return; }
-
-    UdpSocket& s = g_udp_sockets[idx];
-    s.active = true;
-    s.port = (uint16_t)port32;
-    s.broadcast_enabled = false;
-    s.timeout_ms = 1000;
-    s.is_multicast = true;
-    s.multicast_ip = m_ip;
-    s.last_remote_ip = IPAddress(0, 0, 0, 0);
-    s.last_remote_port = 0;
-    s.pending_size = -1;
-    s.udp.setTimeout(s.timeout_ms);
-
-    if (s.udp.beginMulticast(m_ip, (uint16_t)port32)) {
-        udp_pushUInt8((uint8_t)idx);
-    } else {
-        s.active = false;
-        udp_pushUInt8(0xFF);
-    }
+    if (!m_ip.fromString(ip_str.c_str())) { pushUInt8(0xFF); return; }
+    if (!g_udp_sockets[idx]) { g_udp_sockets[idx] = new UdpSocket(); if (!g_udp_sockets[idx]) { pushUInt8(0xFF); return; } }
+    UdpSocket* s = g_udp_sockets[idx];
+    s->active = true; s->port = (uint16_t)port32; s->timeout_ms = 1000; s->is_multicast = true; s->multicast_ip = m_ip; s->pending_size = -1;
+    s->udp.setTimeout(s->timeout_ms);
+    if (s->udp.beginMulticast(m_ip, (uint16_t)port32)) pushUInt8((uint8_t)idx);
+    else { s->active = false; pushUInt8(0xFF); }
 }
 
-// ============================================================
-// 3. udp.Close : socket → bool
-//    R2L: sock → udp.Close
-// ============================================================
 void udpCloseFunc() {
     uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_pushBool(false); return;
-    }
-    g_udp_sockets[v].udp.stop();
-    g_udp_sockets[v].active = false;
-    g_udp_sockets[v].pending_size = -1;
-    udp_pushBool(true);
+    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) { pushBool(false); return; }
+    g_udp_sockets[v]->udp.stop();
+    g_udp_sockets[v]->active = false;
+    g_udp_sockets[v]->pending_size = -1;
+    delete g_udp_sockets[v];
+    g_udp_sockets[v] = nullptr;
+    pushBool(true);
 }
 
-// ============================================================
-// 4. udp.Send : socket data_string → bool
-//    R2L: "Hello" → sock → udp.Send
-// ============================================================
 void udpSendFunc() {
     uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_pushBool(false); return;
-    }
-    String data;
-    if (!udp_popString(data)) { udp_pushBool(false); return; }
-
-    UdpSocket& s = g_udp_sockets[v];
-    IPAddress target = s.last_remote_ip;
-    uint16_t tport = s.last_remote_port;
-
-    if (target == IPAddress(0, 0, 0, 0)) {
-        if (s.broadcast_enabled) {
-            target = IPAddress(255, 255, 255, 255);
-            tport = s.port;
-        } else {
-            udp_pushBool(false); return;
-        }
-    }
-
-    s.udp.beginPacket(target, tport);
-    s.udp.write((const uint8_t*)data.c_str(), data.length());
-    udp_pushBool(s.udp.endPacket() > 0);
-}
-
-// ============================================================
-// 5. udp.SendTo : socket ip port data_string → bool
-//    R2L: "Data" → 8080 → "192.168.1.50" → sock → udp.SendTo
-// ============================================================
-void udpSendToFunc() {
-    uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_pushBool(false); return;
-    }
+    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) { pushBool(false); return; }
     String ip_str;
-    if (!udp_popString(ip_str)) { udp_pushBool(false); return; }
+    if (!popString(ip_str)) { pushBool(false); return; }
     uint32_t port32 = 0;
-    if (!udp_popUInt32(port32)) { udp_pushBool(false); return; }
-    String data;
-    if (!udp_popString(data)) { udp_pushBool(false); return; }
-
+    if (!popUInt32(port32)) { pushBool(false); return; }
+    if (stack_is_empty()) { pushBool(false); return; }
+    uint8_t* data_ptr = &stack_mem[stack_ptr];
+    uint8_t tag = data_ptr[0];
+    uint16_t data_sz = elem_size(data_ptr);
     IPAddress ip;
-    if (!ip.fromString(ip_str.c_str())) { udp_pushBool(false); return; }
-
-    UdpSocket& s = g_udp_sockets[v];
-    s.last_remote_ip = ip;
-    s.last_remote_port = (uint16_t)port32;
-
-    s.udp.beginPacket(ip, (uint16_t)port32);
-    s.udp.write((const uint8_t*)data.c_str(), data.length());
-    udp_pushBool(s.udp.endPacket() > 0);
+    if (!ip.fromString(ip_str.c_str())) { stack_ptr += data_sz; pushBool(false); return; }
+    UdpSocket* s = g_udp_sockets[v];
+    s->udp.beginPacket(ip, (uint16_t)port32);
+    bool success = false;
+    if (tag == 0x0E || tag == 0x0D) { uint8_t len = data_ptr[1]; s->udp.write(&data_ptr[2], len); success = true; }
+    else if (tag == 15) { uint8_t len = data_ptr[1]; uint16_t addr = data_ptr[2] | (data_ptr[3] << 8); if (addr + len <= DATA_POOL_SIZE) { s->udp.write(&data_pool[addr], len); success = true; } }
+    else if (tag == 17 || tag == 20) { uint16_t base = data_ptr[1] | (data_ptr[2] << 8); uint16_t len = data_ptr[3] | (data_ptr[4] << 8); uint8_t tp = data_ptr[5]; uint8_t esz = type_registry[tp].size; uint32_t total_bytes = (uint32_t)len * esz; if (base + total_bytes <= DATA_POOL_SIZE) { s->udp.write(&data_pool[base], total_bytes); success = true; } }
+    else if (tag <= 11) { uint16_t payload_len = data_sz - 1; if (payload_len > 0) { s->udp.write(&data_ptr[1], payload_len); success = true; } }
+    stack_ptr += data_sz;
+    pushBool(success ? (s->udp.endPacket() > 0) : false);
 }
 
-// ============================================================
-// 6. udp.Available : socket → u16
-//    R2L: sock → udp.Available
-//    Вызывает parsePacket() и кэширует результат!
-// ============================================================
 void udpAvailableFunc() {
     uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_pushUInt16(0); return;
-    }
-    UdpSocket& s = g_udp_sockets[v];
-    int sz = s.udp.parsePacket();
-    s.pending_size = sz;
-    if (sz > 0) {
-        s.last_remote_ip = s.udp.remoteIP();
-        s.last_remote_port = s.udp.remotePort();
-        udp_pushUInt16((uint16_t)sz);
-    } else {
-        udp_pushUInt16(0);
-    }
+    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) { pushUInt16(0); return; }
+    UdpSocket* s = g_udp_sockets[v];
+    int sz = s->udp.parsePacket();
+    s->pending_size = sz;
+    pushUInt16((sz > 0) ? (uint16_t)sz : 0);
 }
 
-// ============================================================
-// 7. udp.Recv : socket → string
-//    R2L: sock → udp.Recv
-//    Использует кэш из udp.Available если есть
-// ============================================================
 void udpRecvFunc() {
     uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_pushString(""); return;
-    }
-    UdpSocket& s = g_udp_sockets[v];
-
-    // Используем кэш, если Available уже вызывался
-    int sz = s.pending_size;
-    if (sz <= 0) {
-        sz = s.udp.parsePacket();
-    }
-    s.pending_size = -1; // пакет потреблён
-
-    if (sz > 0) {
-        s.last_remote_ip = s.udp.remoteIP();
-        s.last_remote_port = s.udp.remotePort();
-        char buf[1500];
-        int len = s.udp.read(buf, (sz > 1499) ? 1499 : sz);
-        buf[len] = '\0';
-        udp_pushString(buf);
-    } else {
-        udp_pushString("");
-    }
+    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) { pushUInt16(0); pushStringRaw("0.0.0.0"); pushUInt16(0); return; }
+    uint16_t base = 0, max_len = 0;
+    if (!popAddrInfo(base, max_len)) { pushUInt16(0); pushStringRaw("0.0.0.0"); pushUInt16(0); return; }
+    UdpSocket* s = g_udp_sockets[v];
+    int sz = s->pending_size;
+    if (sz <= 0) sz = s->udp.parsePacket();
+    s->pending_size = -1;
+    if (sz <= 0) { pushUInt16(0); pushStringRaw("0.0.0.0"); pushUInt16(0); return; }
+    uint16_t rlen = ((uint16_t)sz > max_len) ? max_len : (uint16_t)sz;
+    if (base + rlen > DATA_POOL_SIZE) { while (s->udp.available()) s->udp.read(); pushUInt16(0); pushStringRaw("0.0.0.0"); pushUInt16(0); return; }
+    s->udp.read(&data_pool[base], rlen);
+    uint16_t tail = (uint16_t)sz - rlen;
+    while (tail > 0) { uint8_t trash[64]; uint16_t chunk = (tail > 64) ? 64 : tail; s->udp.read(trash, chunk); tail -= chunk; }
+    pushUInt16(rlen);
+    pushStringRaw(s->udp.remoteIP().toString().c_str());
+    pushUInt16(s->udp.remotePort());
 }
 
-// ============================================================
-// 8. udp.RecvFrom : socket → string ip_string port(u16)
-//    R2L: sock → udp.RecvFrom
-//    Возвращает: data (верх), ip (середина), port (низ)
-// ============================================================
-void udpRecvFromFunc() {
-    uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_pushUInt16(0);
-        udp_pushString("0.0.0.0");
-        udp_pushString("");
-        return;
-    }
-    UdpSocket& s = g_udp_sockets[v];
-
-    int sz = s.pending_size;
-    if (sz <= 0) {
-        sz = s.udp.parsePacket();
-    }
-    s.pending_size = -1;
-
-    if (sz > 0) {
-        s.last_remote_ip = s.udp.remoteIP();
-        s.last_remote_port = s.udp.remotePort();
-        char buf[1500];
-        int len = s.udp.read(buf, (sz > 1499) ? 1499 : sz);
-        buf[len] = '\0';
-
-        udp_pushUInt16(s.last_remote_port);
-        udp_pushString(s.last_remote_ip.toString().c_str());
-        udp_pushString(buf);
-    } else {
-        udp_pushUInt16(0);
-        udp_pushString("0.0.0.0");
-        udp_pushString("");
-    }
-}
-
-// ============================================================
-// 9. udp.Broadcast : socket bool → bool
-//    R2L: true → sock → udp.Broadcast
-// ============================================================
-void udpBroadcastFunc() {
-    uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_pushBool(false); return;
-    }
-    uint32_t flag = 0;
-    if (!udp_popUInt32(flag)) { udp_pushBool(false); return; }
-    g_udp_sockets[v].broadcast_enabled = (flag != 0);
-    udp_pushBool(true);
-}
-
-// ============================================================
-// 10. udp.Timeout : socket timeout_ms → bool
-//     R2L: 1000 → sock → udp.Timeout
-// ============================================================
 void udpTimeoutFunc() {
     uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_pushBool(false); return;
-    }
+    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) { pushBool(false); return; }
     uint32_t ms = 0;
-    if (!udp_popUInt32(ms)) { udp_pushBool(false); return; }
-    g_udp_sockets[v].timeout_ms = ms;
-    g_udp_sockets[v].udp.setTimeout(ms);
-    udp_pushBool(true);
+    if (!popUInt32(ms)) { pushBool(false); return; }
+    g_udp_sockets[v]->timeout_ms = ms;
+    g_udp_sockets[v]->udp.setTimeout(ms);
+    pushBool(true);
 }
 
-// ============================================================
-// 11. udp.ReadArray : socket array_ref → u16 (bytes_read)
-//     R2L: myArray → sock → udp.ReadArray
-//     Читает сырые байты прямо в data_pool
-// ============================================================
-void udpReadArrayFunc() {
-    uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_discardArray();
-        udp_pushUInt16(0); return;
-    }
-
-    if (stack_is_empty()) { udp_pushUInt16(0); return; }
-    uint8_t* arr = &stack_mem[stack_ptr];
-    if (arr[0] != 17 && arr[0] != 20) {
-        udp_discardArray();
-        udp_pushUInt16(0); return;
-    }
-    uint16_t arr_sz = elem_size(arr);
-    uint16_t base = arr[1] | (arr[2] << 8);
-    uint16_t max_len = arr[3] | (arr[4] << 8);
-    stack_ptr += arr_sz;
-
-    UdpSocket& s = g_udp_sockets[v];
-
-    int sz = s.pending_size;
-    if (sz <= 0) {
-        sz = s.udp.parsePacket();
-    }
-    s.pending_size = -1;
-
-    if (sz > 0) {
-        s.last_remote_ip = s.udp.remoteIP();
-        s.last_remote_port = s.udp.remotePort();
-        uint16_t rlen = ((uint16_t)sz > max_len) ? max_len : (uint16_t)sz;
-        s.udp.read(&data_pool[base], rlen);
-        udp_pushUInt16(rlen);
-    } else {
-        udp_pushUInt16(0);
-    }
-}
-
-// ============================================================
-// 12. udp.SendArray : socket array_ref → bool
-//     R2L: myArray → sock → udp.SendArray
-//     Отправляет сырые байты из data_pool
-// ============================================================
-void udpSendArrayFunc() {
-    uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_discardArray();
-        udp_pushBool(false); return;
-    }
-
-    if (stack_is_empty()) { udp_pushBool(false); return; }
-    uint8_t* arr = &stack_mem[stack_ptr];
-    if (arr[0] != 17 && arr[0] != 20) {
-        udp_discardArray();
-        udp_pushBool(false); return;
-    }
-    uint16_t arr_sz = elem_size(arr);
-    uint16_t base = arr[1] | (arr[2] << 8);
-    uint16_t arr_len = arr[3] | (arr[4] << 8);
-    uint8_t tp = arr[5];
-    stack_ptr += arr_sz;
-
-    uint8_t esz = type_registry[tp].size;
-    uint32_t total = (uint32_t)arr_len * esz;
-    if (total == 0 || base + total > DATA_POOL_SIZE) {
-        udp_pushBool(false); return;
-    }
-
-    UdpSocket& s = g_udp_sockets[v];
-    IPAddress target = s.last_remote_ip;
-    uint16_t tport = s.last_remote_port;
-
-    if (target == IPAddress(0, 0, 0, 0)) {
-        if (s.broadcast_enabled) {
-            target = IPAddress(255, 255, 255, 255);
-            tport = s.port;
-        } else {
-            udp_pushBool(false); return;
-        }
-    }
-
-    s.udp.beginPacket(target, tport);
-    s.udp.write(&data_pool[base], total);
-    udp_pushBool(s.udp.endPacket() > 0);
-}
-
-// ============================================================
-// 13. udp.SendArrayTo : socket ip port array_ref → bool
-//     R2L: myArray → 8080 → "192.168.1.50" → sock → udp.SendArrayTo
-// ============================================================
-void udpSendArrayToFunc() {
-    uint32_t v = 0;
-    if (!udp_popUInt32(v) || v >= 8 || !g_udp_sockets[v].active) {
-        udp_discardArray();
-        udp_pushBool(false); return;
-    }
-
-    String ip_str;
-    if (!udp_popString(ip_str)) { udp_pushBool(false); return; }
-
-    uint32_t port32 = 0;
-    if (!udp_popUInt32(port32)) { udp_pushBool(false); return; }
-
-    if (stack_is_empty()) { udp_pushBool(false); return; }
-    uint8_t* arr = &stack_mem[stack_ptr];
-    if (arr[0] != 17 && arr[0] != 20) {
-        udp_discardArray();
-        udp_pushBool(false); return;
-    }
-    uint16_t arr_sz = elem_size(arr);
-    uint16_t base = arr[1] | (arr[2] << 8);
-    uint16_t arr_len = arr[3] | (arr[4] << 8);
-    uint8_t tp = arr[5];
-    stack_ptr += arr_sz;
-
-    IPAddress ip;
-    if (!ip.fromString(ip_str.c_str())) { udp_pushBool(false); return; }
-
-    uint8_t esz = type_registry[tp].size;
-    uint32_t total = (uint32_t)arr_len * esz;
-    if (total == 0 || base + total > DATA_POOL_SIZE) {
-        udp_pushBool(false); return;
-    }
-
-    UdpSocket& s = g_udp_sockets[v];
-    s.last_remote_ip = ip;
-    s.last_remote_port = (uint16_t)port32;
-
-    s.udp.beginPacket(ip, (uint16_t)port32);
-    s.udp.write(&data_pool[base], total);
-    udp_pushBool(s.udp.endPacket() > 0);
-}
-
-// ============================================================
-// Регистрация слов в контексте udp
-// ============================================================
 void udpInit() {
-    executeLine("udp cont");
-    addInternalWord("udp.Open",        udpOpenFunc);
-    addInternalWord("udp.Multicast",   udpMulticastFunc);
-    addInternalWord("udp.Close",       udpCloseFunc);
-    addInternalWord("udp.Send",        udpSendFunc);
-    addInternalWord("udp.SendTo",      udpSendToFunc);
-    addInternalWord("udp.Available",   udpAvailableFunc);
-    addInternalWord("udp.Recv",        udpRecvFunc);
-    addInternalWord("udp.RecvFrom",    udpRecvFromFunc);
-    addInternalWord("udp.Broadcast",   udpBroadcastFunc);
-    addInternalWord("udp.Timeout",     udpTimeoutFunc);
-    addInternalWord("udp.ReadArray",   udpReadArrayFunc);
-    addInternalWord("udp.SendArray",   udpSendArrayFunc);
-    addInternalWord("udp.SendArrayTo", udpSendArrayToFunc);
-    executeLine("main");
+    focusTo("udp");
+    addInternalWord("udp.Open",      udpOpenFunc);
+    addInternalWord("udp.Multicast", udpMulticastFunc);
+    addInternalWord("udp.Close",     udpCloseFunc);
+    addInternalWord("udp.Send",      udpSendFunc);
+    addInternalWord("udp.Available", udpAvailableFunc);
+    addInternalWord("udp.Recv",      udpRecvFunc);
+    addInternalWord("udp.Timeout",   udpTimeoutFunc);
+    addInternalWord("out>udp",       word_out_udp);
+    focusTo("main");
+}
+
+// ============================================================
+// === TCP ===
+// ============================================================
+struct TcpSocket {
+    WiFiClient* client;
+    int serverFd;
+    bool active;
+    bool is_server;
+    uint32_t timeout_ms;
+};
+static TcpSocket* g_tcp_sockets[8] = {nullptr};
+
+void word_out_tcp() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || !g_tcp_sockets[v]->client) return;
+    g_stream.attachTcp(g_tcp_sockets[v]->client);
+    currentOutput = &g_stream;
+}
+
+static int8_t tcp_find_slot() {
+    for (int i = 0; i < 8; i++) { if (!g_tcp_sockets[i] || !g_tcp_sockets[i]->active) return i; }
+    return -1;
+}
+
+static void tcp_cleanup_idx(int8_t idx) {
+    if (idx < 0 || idx >= 8 || !g_tcp_sockets[idx]) return;
+    TcpSocket* s = g_tcp_sockets[idx];
+    if (s->client) { s->client->stop(); delete s->client; s->client = nullptr; }
+    if (s->serverFd >= 0) { ::close(s->serverFd); s->serverFd = -1; }
+    s->active = false;
+    s->is_server = false;
+}
+
+void tcpConnectFunc() {
+    String ip_str;
+    if (!popString(ip_str)) { pushUInt8(0xFF); return; }
+    uint32_t port32 = 0;
+    if (!popUInt32(port32)) { pushUInt8(0xFF); return; }
+    int8_t idx = tcp_find_slot();
+    if (idx == -1) { pushUInt8(0xFF); return; }
+    IPAddress ip;
+    if (!ip.fromString(ip_str.c_str())) { pushUInt8(0xFF); return; }
+    if (!g_tcp_sockets[idx]) { g_tcp_sockets[idx] = new TcpSocket(); if (!g_tcp_sockets[idx]) { pushUInt8(0xFF); return; } }
+    tcp_cleanup_idx(idx);
+    TcpSocket* s = g_tcp_sockets[idx];
+    s->client = new WiFiClient();
+    s->is_server = false;
+    s->timeout_ms = 5000;
+    s->client->setTimeout(s->timeout_ms);
+    if (s->client->connect(ip, (uint16_t)port32)) { s->active = true; pushUInt8((uint8_t)idx); }
+    else { delete s->client; s->client = nullptr; s->active = false; pushUInt8(0xFF); }
+}
+
+void tcpListenFunc() {
+    uint32_t port32 = 0;
+    if (!popUInt32(port32)) { pushUInt8(0xFF); return; }
+    int8_t idx = tcp_find_slot();
+    if (idx == -1) { pushUInt8(0xFF); return; }
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { pushUInt8(0xFF); return; }
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons((uint16_t)port32);
+    if (::bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { ::close(fd); pushUInt8(0xFF); return; }
+    if (::listen(fd, 5) < 0) { ::close(fd); pushUInt8(0xFF); return; }
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    if (!g_tcp_sockets[idx]) { g_tcp_sockets[idx] = new TcpSocket(); if (!g_tcp_sockets[idx]) { ::close(fd); pushUInt8(0xFF); return; } }
+    tcp_cleanup_idx(idx);
+    TcpSocket* s = g_tcp_sockets[idx];
+    s->serverFd = fd;
+    s->is_server = true;
+    s->active = true;
+    s->timeout_ms = 5000;
+    pushUInt8((uint8_t)idx);
+}
+
+void tcpAcceptFunc() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || !g_tcp_sockets[v]->is_server) { pushUInt8(0xFF); return; }
+    TcpSocket* srv = g_tcp_sockets[v];
+    struct sockaddr_in clientAddr;
+    socklen_t addrLen = sizeof(clientAddr);
+    int clientFd = ::accept(srv->serverFd, (struct sockaddr*)&clientAddr, &addrLen);
+    if (clientFd < 0) { pushUInt8(0xFF); return; }
+    int8_t idx = tcp_find_slot();
+    if (idx == -1) { ::close(clientFd); pushUInt8(0xFF); return; }
+    if (!g_tcp_sockets[idx]) { g_tcp_sockets[idx] = new TcpSocket(); if (!g_tcp_sockets[idx]) { ::close(clientFd); pushUInt8(0xFF); return; } }
+    tcp_cleanup_idx(idx);
+    TcpSocket* s = g_tcp_sockets[idx];
+    s->client = new WiFiClient(clientFd);
+    s->is_server = false;
+    s->active = true;
+    s->timeout_ms = srv->timeout_ms;
+    s->client->setTimeout(s->timeout_ms);
+    pushUInt8((uint8_t)idx);
+}
+
+void tcpSendFunc() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || g_tcp_sockets[v]->is_server || !g_tcp_sockets[v]->client) { pushBool(false); return; }
+    if (stack_is_empty()) { pushBool(false); return; }
+    uint8_t* data_ptr = &stack_mem[stack_ptr];
+    uint8_t tag = data_ptr[0];
+    uint16_t data_sz = elem_size(data_ptr);
+    WiFiClient* c = g_tcp_sockets[v]->client;
+    if (!c->connected()) { stack_ptr += data_sz; pushBool(false); return; }
+    bool success = false;
+    size_t written = 0;
+    if (tag == 0x0E || tag == 0x0D) { uint8_t len = data_ptr[1]; written = c->write(&data_ptr[2], len); success = (written == len); }
+    else if (tag == 15) { uint8_t len = data_ptr[1]; uint16_t addr = data_ptr[2] | (data_ptr[3] << 8); if (addr + len <= DATA_POOL_SIZE) { written = c->write(&data_pool[addr], len); success = (written == len); } }
+    else if (tag == 17 || tag == 20) { uint16_t base = data_ptr[1] | (data_ptr[2] << 8); uint16_t len = data_ptr[3] | (data_ptr[4] << 8); uint8_t tp = data_ptr[5]; uint8_t esz = type_registry[tp].size; uint32_t total_bytes = (uint32_t)len * esz; if (base + total_bytes <= DATA_POOL_SIZE) { written = c->write(&data_pool[base], total_bytes); success = (written == total_bytes); } }
+    else if (tag >= 4 && tag <= 11) { uint16_t payload_len = data_sz - 1; if (payload_len > 0) { written = c->write(&data_ptr[1], payload_len); success = (written == payload_len); } }
+    stack_ptr += data_sz;
+    pushBool(success);
+}
+
+void tcpRecvFunc() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || g_tcp_sockets[v]->is_server || !g_tcp_sockets[v]->client) { pushUInt16(0); return; }
+    uint16_t base = 0, max_len = 0;
+    if (!popAddrInfo(base, max_len)) { pushUInt16(0); return; }
+    WiFiClient* c = g_tcp_sockets[v]->client;
+    int avail = c->available();
+    if (avail <= 0) { pushUInt16(0); return; }
+    uint16_t rlen = ((uint16_t)avail > max_len) ? max_len : (uint16_t)avail;
+    if (base + rlen > DATA_POOL_SIZE) { pushUInt16(0); return; }
+    int bytesRead = c->read(&data_pool[base], rlen);
+    if (bytesRead < 0) bytesRead = 0;
+    pushUInt16((uint16_t)bytesRead);
+}
+
+void tcpAvailableFunc() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || g_tcp_sockets[v]->is_server || !g_tcp_sockets[v]->client) { pushUInt16(0); return; }
+    int avail = g_tcp_sockets[v]->client->available();
+    pushUInt16(avail > 0 ? (uint16_t)avail : 0);
+}
+
+void tcpConnectedFunc() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || g_tcp_sockets[v]->is_server || !g_tcp_sockets[v]->client) { pushBool(false); return; }
+    pushBool(g_tcp_sockets[v]->client->connected());
+}
+
+void tcpCloseFunc() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active) { pushBool(false); return; }
+    tcp_cleanup_idx((int8_t)v);
+    delete g_tcp_sockets[v];
+    g_tcp_sockets[v] = nullptr;
+    pushBool(true);
+}
+
+void tcpTimeoutFunc() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active) { pushBool(false); return; }
+    uint32_t ms = 0;
+    if (!popUInt32(ms)) { pushBool(false); return; }
+    g_tcp_sockets[v]->timeout_ms = ms;
+    if (g_tcp_sockets[v]->client) g_tcp_sockets[v]->client->setTimeout(ms);
+    pushBool(true);
+}
+
+void tcpRemoteIpFunc() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || g_tcp_sockets[v]->is_server || !g_tcp_sockets[v]->client) { pushStringRaw("0.0.0.0"); return; }
+    pushStringRaw(g_tcp_sockets[v]->client->remoteIP().toString().c_str());
+}
+
+void tcpRemotePortFunc() {
+    uint32_t v = 0;
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || g_tcp_sockets[v]->is_server || !g_tcp_sockets[v]->client) { pushUInt16(0); return; }
+    pushUInt16(g_tcp_sockets[v]->client->remotePort());
+}
+
+void reqQuestionFunc() {
+    uint16_t base = 0, len = 0;
+    if (!popAddrInfo(base, len)) { pushBool(false); return; }
+    if (len < 4 || base + len > DATA_POOL_SIZE) { pushBool(false); return; }
+    const char* methods[] = {"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH "};
+    const uint8_t method_lens[] = {4, 5, 4, 7, 5, 8, 6};
+    for (int i = 0; i < 7; i++) {
+        if (len >= method_lens[i] && memcmp(&data_pool[base], methods[i], method_lens[i]) == 0) { pushBool(true); return; }
+    }
+    pushBool(false);
+}
+
+void reqLineFunc() {
+    uint16_t base = 0, len = 0;
+    if (!popAddrInfo(base, len)) { pushBool(false); pushStringRaw(""); pushStringRaw(""); return; }
+    uint16_t line_end = 0;
+    while (line_end < len) {
+        uint8_t c = data_pool[base + line_end];
+        if (c == '\r' || c == '\n') break;
+        line_end++;
+    }
+    if (line_end == 0 || line_end >= len) { pushBool(false); pushStringRaw(""); pushStringRaw(""); return; }
+    const uint8_t* data = &data_pool[base];
+    struct Method { const char* name; uint8_t len; };
+    static const Method methods[] = {{"GET",3},{"POST",4},{"PUT",3},{"DELETE",6},{"HEAD",4},{"OPTIONS",7},{"PATCH",5}};
+    int method_idx = -1;
+    for (int i = 0; i < 7; i++) {
+        uint8_t mlen = methods[i].len;
+        if (line_end > mlen && data[mlen] == ' ' && memcmp(data, methods[i].name, mlen) == 0) { method_idx = i; break; }
+    }
+    if (method_idx < 0) { pushBool(false); pushStringRaw(""); pushStringRaw(""); return; }
+    uint8_t mlen = methods[method_idx].len;
+    uint16_t p_start = mlen + 1;
+    uint16_t p_end = p_start;
+    bool has_params = false;
+    while (p_end < line_end) {
+        uint8_t c = data[p_end];
+        if (c == ' ' || c == '\r' || c == '\n') break;
+        if (c == '?') { has_params = true; break; }
+        p_end++;
+    }
+    uint16_t path_len = p_end - p_start;
+    if (path_len > 255) path_len = 255;
+    uint8_t path_buf[257];
+    path_buf[0] = 0x0E;
+    path_buf[1] = (uint8_t)path_len;
+    if (path_len > 0) memcpy(&path_buf[2], &data[p_start], path_len);
+    uint8_t method_buf[10];
+    method_buf[0] = 0x0E;
+    method_buf[1] = mlen;
+    memcpy(&method_buf[2], methods[method_idx].name, mlen);
+    stack_push(path_buf, 2 + path_len);
+    stack_push(method_buf, 2 + mlen);
+    pushBool(has_params);
+}
+
+void tcpInit() {
+    focusTo("tcp");
+    addInternalWord("tcp.Connect",    tcpConnectFunc);
+    addInternalWord("tcp.Listen",     tcpListenFunc);
+    addInternalWord("tcp.Accept",     tcpAcceptFunc);
+    addInternalWord("tcp.Send",       tcpSendFunc);
+    addInternalWord("tcp.Recv",       tcpRecvFunc);
+    addInternalWord("tcp.Available",  tcpAvailableFunc);
+    addInternalWord("tcp.Connected",  tcpConnectedFunc);
+    addInternalWord("tcp.Close",      tcpCloseFunc);
+    addInternalWord("tcp.Timeout",    tcpTimeoutFunc);
+    addInternalWord("tcp.RemoteIp",   tcpRemoteIpFunc);
+    addInternalWord("tcp.RemotePort", tcpRemotePortFunc);
+    addInternalWord("out>tcp",        word_out_tcp);
+    addInternalWord("req?",           reqQuestionFunc);
+    addInternalWord("req.line",       reqLineFunc);
+    focusTo("main");
 }

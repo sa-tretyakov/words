@@ -22,7 +22,8 @@ pinMode pinEcho INPUT
 Слово sonar — выполняет одно измерение расстояния
 и печатает результат в сантиметрах.
 */
-: sonar 
+sonar :
+
   digitalWrite pinTrig LOW
   delayMicroseconds imp
   digitalWrite pinTrig HIGH

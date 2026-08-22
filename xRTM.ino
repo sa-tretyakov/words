@@ -1,6 +1,5 @@
 #include "driver/rmt_tx.h"
 #include "driver/rmt_rx.h"
-
 // 🔧 FIX: rmt_symbol_word → rmt_symbol_word_t (ESP-IDF 5.x)
 using rmt_symbol_word = rmt_symbol_word_t;
 
@@ -18,7 +17,9 @@ struct RmtBinding {
     uint32_t resolution_hz = 10000000;   // 10 MHz по умолчанию
     uint32_t mem_block_symbols = 64;
 };
-static RmtBinding rmt_bind[8];
+
+// 🔧 ДИНАМИЧЕСКОЕ ВЫДЕЛЕНИЕ: массив указателей вместо статических массивов
+static RmtBinding* rmt_bind[8] = {nullptr};
 
 // === Хэндлы каналов и энкодеров ===
 static rmt_channel_handle_t rmt_tx_chan[8]   = {};
@@ -28,15 +29,15 @@ static rmt_encoder_handle_t rmt_copy_enc[8]  = {};
 
 // === RX буферы и состояние ===
 #define RMT_RX_BUF_SYMBOLS 128
-static rmt_symbol_word_t rmt_rx_buf[8][RMT_RX_BUF_SYMBOLS];
+static rmt_symbol_word_t* rmt_rx_buf[8] = {nullptr};  // ← указатели вместо массивов
 static size_t rmt_rx_received[8] = {};
 static bool   rmt_rx_ready[8]    = {};
 
 // === RX callback ===
 static bool IRAM_ATTR rmt_rx_done_cb(rmt_channel_handle_t chan,
-                                     const rmt_rx_done_event_data_t *edata, void *) {
+    const rmt_rx_done_event_data_t *edata, void *) {
     for (int i = 0; i < 8; i++) {
-        if (rmt_rx_chan[i] == chan) {
+        if (rmt_rx_chan[i] == chan && rmt_rx_buf[i]) {  // ← проверка на nullptr
             size_t n = edata->num_symbols;
             if (n > RMT_RX_BUF_SYMBOLS) n = RMT_RX_BUF_SYMBOLS;
             memcpy(rmt_rx_buf[i], edata->received_symbols, n * sizeof(rmt_symbol_word_t));
@@ -56,11 +57,12 @@ void nullArrayFunc() {
 
 // === Пересоздание bytes-encoder ===
 static void _rebuild_bytes_encoder(uint8_t ch) {
+    if (!rmt_bind[ch]) return;  // ← проверка на nullptr
     if (rmt_bytes_enc[ch]) {
         rmt_del_encoder(rmt_bytes_enc[ch]);
         rmt_bytes_enc[ch] = nullptr;
     }
-    uint16_t a = rmt_bind[ch].proto_addr;
+    uint16_t a = rmt_bind[ch]->proto_addr;
     if (a == 0 || a + 8 > DATA_POOL_SIZE) return;
     rmt_bytes_encoder_config_t enc_cfg = {};
     rmt_symbol_word_t* tpl = (rmt_symbol_word_t*)&data_pool[a];
@@ -74,7 +76,8 @@ static void _rebuild_bytes_encoder(uint8_t ch) {
 void rtmSetProtoFunc() {
     uint8_t ch; uint16_t a, l;
     if (!popUInt8(ch) || ch >= 8 || !popAddrInfo(a, l)) { pushBool(false); return; }
-    rmt_bind[ch].proto_addr = a; rmt_bind[ch].proto_len = l;
+    if (!rmt_bind[ch]) { pushBool(false); return; }  // ← проверка
+    rmt_bind[ch]->proto_addr = a; rmt_bind[ch]->proto_len = l;
     rmt_proto_addr[ch] = a;
     if (rtmInstalled[ch]) _rebuild_bytes_encoder(ch);
     pushBool(true);
@@ -83,20 +86,23 @@ void rtmSetProtoFunc() {
 void rtmSetHeaderFunc() {
     uint8_t ch; uint16_t a, l;
     if (!popUInt8(ch) || ch >= 8 || !popAddrInfo(a, l)) { pushBool(false); return; }
-    rmt_bind[ch].hdr_addr = a; rmt_bind[ch].hdr_len = l;
+    if (!rmt_bind[ch]) { pushBool(false); return; }  // ← проверка
+    rmt_bind[ch]->hdr_addr = a; rmt_bind[ch]->hdr_len = l;
     pushBool(true);
 }
 
 void rtmSetFooterFunc() {
     uint8_t ch; uint16_t a, l;
     if (!popUInt8(ch) || ch >= 8 || !popAddrInfo(a, l)) { pushBool(false); return; }
-    rmt_bind[ch].ftr_addr = a; rmt_bind[ch].ftr_len = l;
+    if (!rmt_bind[ch]) { pushBool(false); return; }  // ← проверка
+    rmt_bind[ch]->ftr_addr = a; rmt_bind[ch]->ftr_len = l;
     pushBool(true);
 }
 
 void rtmSetDataFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch >= 8) { pushBool(false); return; }
+    if (!rmt_bind[ch]) { pushBool(false); return; }  // ← проверка
     uint8_t buf[8];
     uint16_t sz = stack_pop(buf, sizeof(buf));
     if (sz < 2) { pushBool(false); return; }
@@ -117,40 +123,38 @@ void rtmSetDataFunc() {
     uint8_t tp = hdr[5];
     uint8_t esz = type_registry[tp].size;
     uint32_t total_bytes = (uint32_t)l * esz;
-    rmt_bind[ch].data_addr = a;
-    rmt_bind[ch].data_len  = (uint16_t)total_bytes;
-    rmt_bind[ch].ready     = (rmt_bind[ch].proto_addr != 0);
+    rmt_bind[ch]->data_addr = a;
+    rmt_bind[ch]->data_len  = (uint16_t)total_bytes;
+    rmt_bind[ch]->ready     = (rmt_bind[ch]->proto_addr != 0);
     pushBool(true);
 }
 
 // === ОТПРАВКА ===
 void rtmSendBeginFunc() {
     uint8_t ch;
-    if (!popUInt8(ch) || ch >= 8 || !rtmInstalled[ch] || !rmt_bind[ch].ready) {
+    if (!popUInt8(ch) || ch >= 8 || !rtmInstalled[ch] || !rmt_bind[ch] || !rmt_bind[ch]->ready) {
         pushBool(false); return;
     }
     if (!rmt_tx_chan[ch] || !rmt_bytes_enc[ch]) { pushBool(false); return; }
-
-    RmtBinding* b = &rmt_bind[ch];
+    RmtBinding* b = rmt_bind[ch];
     rmt_transmit_config_t tx_cfg = {};
     tx_cfg.loop_count = 0;
     esp_err_t err = ESP_OK;
-
     if (b->hdr_addr && b->hdr_len && rmt_copy_enc[ch]) {
         err = rmt_transmit(rmt_tx_chan[ch], rmt_copy_enc[ch],
-                           &data_pool[b->hdr_addr],
-                           b->hdr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
+            &data_pool[b->hdr_addr],
+            b->hdr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
         if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
     }
     if (err == ESP_OK) {
         err = rmt_transmit(rmt_tx_chan[ch], rmt_bytes_enc[ch],
-                           &data_pool[b->data_addr], b->data_len, &tx_cfg);
+            &data_pool[b->data_addr], b->data_len, &tx_cfg);
         if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
     }
     if (err == ESP_OK && b->ftr_addr && b->ftr_len && rmt_copy_enc[ch]) {
         err = rmt_transmit(rmt_tx_chan[ch], rmt_copy_enc[ch],
-                           &data_pool[b->ftr_addr],
-                           b->ftr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
+            &data_pool[b->ftr_addr],
+            b->ftr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
         if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
     }
     pushBool(err == ESP_OK);
@@ -159,29 +163,27 @@ void rtmSendBeginFunc() {
 void rtmAllBeginFunc() {
     bool started = false;
     for (uint8_t ch = 0; ch < 8; ch++) {
-        if (!rtmInstalled[ch] || !rmt_bind[ch].ready ||
+        if (!rtmInstalled[ch] || !rmt_bind[ch] || !rmt_bind[ch]->ready ||
             !rmt_tx_chan[ch] || !rmt_bytes_enc[ch]) continue;
-
-        RmtBinding* b = &rmt_bind[ch];
+        RmtBinding* b = rmt_bind[ch];
         rmt_transmit_config_t tx_cfg = {};
         tx_cfg.loop_count = 0;
         esp_err_t err = ESP_OK;
-
         if (b->hdr_addr && b->hdr_len && rmt_copy_enc[ch]) {
             err = rmt_transmit(rmt_tx_chan[ch], rmt_copy_enc[ch],
-                               &data_pool[b->hdr_addr],
-                               b->hdr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
+                &data_pool[b->hdr_addr],
+                b->hdr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
             if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
         }
         if (err == ESP_OK) {
             err = rmt_transmit(rmt_tx_chan[ch], rmt_bytes_enc[ch],
-                               &data_pool[b->data_addr], b->data_len, &tx_cfg);
+                &data_pool[b->data_addr], b->data_len, &tx_cfg);
             if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
         }
         if (err == ESP_OK && b->ftr_addr && b->ftr_len && rmt_copy_enc[ch]) {
             err = rmt_transmit(rmt_tx_chan[ch], rmt_copy_enc[ch],
-                               &data_pool[b->ftr_addr],
-                               b->ftr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
+                &data_pool[b->ftr_addr],
+                b->ftr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
             if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
         }
         if (err == ESP_OK) started = true;
@@ -195,14 +197,21 @@ void rtmInitFunc() {
     if (!popUInt8(ch) || ch >= 8 || !popUInt8(gpio) ||
         !popUInt8(mode) || mode > 1) { pushBool(false); return; }
     if (rtmInstalled[ch]) { pushBool(false); return; }
-
+    
+    // 🔧 ДИНАМИЧЕСКОЕ ВЫДЕЛЕНИЕ: создаём binding только при необходимости
+    if (!rmt_bind[ch]) {
+        rmt_bind[ch] = (RmtBinding*)malloc(sizeof(RmtBinding));
+        if (!rmt_bind[ch]) { pushBool(false); return; }
+        *rmt_bind[ch] = RmtBinding();  // Инициализация по умолчанию
+    }
+    
     esp_err_t err = ESP_FAIL;
     if (mode == 0) {
         rmt_tx_channel_config_t tx_cfg = {};
         tx_cfg.gpio_num            = (gpio_num_t)gpio;
         tx_cfg.clk_src             = RMT_CLK_SRC_DEFAULT;
-        tx_cfg.resolution_hz       = rmt_bind[ch].resolution_hz;
-        tx_cfg.mem_block_symbols   = rmt_bind[ch].mem_block_symbols;
+        tx_cfg.resolution_hz       = rmt_bind[ch]->resolution_hz;
+        tx_cfg.mem_block_symbols   = rmt_bind[ch]->mem_block_symbols;
         tx_cfg.trans_queue_depth   = 4;
         tx_cfg.flags.with_dma      = false;
         err = rmt_new_tx_channel(&tx_cfg, &rmt_tx_chan[ch]);
@@ -212,11 +221,17 @@ void rtmInitFunc() {
             err = rmt_new_copy_encoder(&copy_cfg, &rmt_copy_enc[ch]);
         }
     } else {
+        // 🔧 ДИНАМИЧЕСКОЕ ВЫДЕЛЕНИЕ: RX-буфер только для RX-режима
+        if (!rmt_rx_buf[ch]) {
+            rmt_rx_buf[ch] = (rmt_symbol_word_t*)malloc(RMT_RX_BUF_SYMBOLS * sizeof(rmt_symbol_word_t));
+            if (!rmt_rx_buf[ch]) { pushBool(false); return; }
+        }
+        
         rmt_rx_channel_config_t rx_cfg = {};
         rx_cfg.gpio_num            = (gpio_num_t)gpio;
         rx_cfg.clk_src             = RMT_CLK_SRC_DEFAULT;
-        rx_cfg.resolution_hz       = rmt_bind[ch].resolution_hz;
-        rx_cfg.mem_block_symbols   = rmt_bind[ch].mem_block_symbols;
+        rx_cfg.resolution_hz       = rmt_bind[ch]->resolution_hz;
+        rx_cfg.mem_block_symbols   = rmt_bind[ch]->mem_block_symbols;
         rx_cfg.flags.with_dma      = false;
         err = rmt_new_rx_channel(&rx_cfg, &rmt_rx_chan[ch]);
         if (err == ESP_OK) err = rmt_enable(rmt_rx_chan[ch]);
@@ -228,7 +243,7 @@ void rtmInitFunc() {
             rxcfg.signal_range_min_ns = 0;
             rxcfg.signal_range_max_ns = 10000000;
             rmt_receive(rmt_rx_chan[ch], rmt_rx_buf[ch],
-                        sizeof(rmt_rx_buf[ch]), &rxcfg);
+                RMT_RX_BUF_SYMBOLS * sizeof(rmt_symbol_word_t), &rxcfg);
         }
     }
     if (err == ESP_OK) rtmInstalled[ch] = true;
@@ -237,18 +252,18 @@ void rtmInitFunc() {
 
 void rtmClkFunc() {
     uint8_t ch, div;
-    if (!popUInt8(ch) || ch >= 8 || !rtmInstalled[ch] ||
+    if (!popUInt8(ch) || ch >= 8 || !rtmInstalled[ch] || !rmt_bind[ch] ||
         !popUInt8(div) || div == 0) { pushBool(false); return; }
     uint32_t new_res = 80000000UL / div;
-    rmt_bind[ch].resolution_hz = new_res;
+    rmt_bind[ch]->resolution_hz = new_res;
     pushBool(true);
 }
 
 void rtmMemFunc() {
     uint8_t blocks, ch;
     if (!popUInt8(blocks) || blocks == 0 || blocks > 8 ||
-        !popUInt8(ch) || ch >= 8 || !rtmInstalled[ch]) { pushBool(false); return; }
-    rmt_bind[ch].mem_block_symbols = (uint32_t)blocks * 48;
+        !popUInt8(ch) || ch >= 8 || !rtmInstalled[ch] || !rmt_bind[ch]) { pushBool(false); return; }
+    rmt_bind[ch]->mem_block_symbols = (uint32_t)blocks * 48;
     pushBool(true);
 }
 
@@ -268,7 +283,6 @@ void rtmCarrierFunc() {
         pushBool(false); return;
     }
     if (!rmt_tx_chan[ch]) { pushBool(false); return; }
-
     if (enable) {
         rmt_carrier_config_t car_cfg = {};
         car_cfg.frequency_hz = freq;
@@ -312,6 +326,11 @@ void rtmDeinitFunc() {
     if (rmt_rx_chan[ch])   { if (rmt_del_channel(rmt_rx_chan[ch])   == ESP_OK) rmt_rx_chan[ch]   = nullptr; else err = ESP_FAIL; }
     if (rmt_bytes_enc[ch]) { if (rmt_del_encoder(rmt_bytes_enc[ch]) == ESP_OK) rmt_bytes_enc[ch] = nullptr; else err = ESP_FAIL; }
     if (rmt_copy_enc[ch])  { if (rmt_del_encoder(rmt_copy_enc[ch])  == ESP_OK) rmt_copy_enc[ch]  = nullptr; else err = ESP_FAIL; }
+    
+    // 🔧 ОСВОБОЖДЕНИЕ ДИНАМИЧЕСКОЙ ПАМЯТИ
+    if (rmt_rx_buf[ch]) { free(rmt_rx_buf[ch]); rmt_rx_buf[ch] = nullptr; }
+    if (rmt_bind[ch]) { free(rmt_bind[ch]); rmt_bind[ch] = nullptr; }
+    
     if (err == ESP_OK) rtmInstalled[ch] = false;
     pushBool(err == ESP_OK);
 }
@@ -343,25 +362,24 @@ void rtmReadFunc() {
     if (!popUInt16(maxLen) || !popUInt16(daddr) || !popUInt8(ch) ||
         ch >= 8 || !rtmInstalled[ch]) { pushUInt16(0); return; }
     if (daddr >= DATA_POOL_SIZE || daddr + maxLen > DATA_POOL_SIZE) { pushUInt16(0); return; }
-    if (!rmt_rx_ready[ch]) { pushUInt16(0); return; }
-
+    if (!rmt_rx_ready[ch] || !rmt_rx_buf[ch]) { pushUInt16(0); return; }  // ← проверка
     size_t avail_bytes = rmt_rx_received[ch] * sizeof(rmt_symbol_word_t);
     size_t toCopy = (avail_bytes > maxLen) ? maxLen : avail_bytes;
     memcpy(&data_pool[daddr], rmt_rx_buf[ch], toCopy);
     rmt_rx_ready[ch] = false;
-
     if (rmt_rx_chan[ch]) {
         rmt_receive_config_t rxcfg = {};
         rxcfg.signal_range_min_ns = 0;
         rxcfg.signal_range_max_ns = 10000000;
-        rmt_receive(rmt_rx_chan[ch], rmt_rx_buf[ch], sizeof(rmt_rx_buf[ch]), &rxcfg);
+        rmt_receive(rmt_rx_chan[ch], rmt_rx_buf[ch],
+            RMT_RX_BUF_SYMBOLS * sizeof(rmt_symbol_word_t), &rxcfg);
     }
     pushUInt16(toCopy);
 }
 
 // 🔧 FIX: функция переименована, чтобы не конфликтовать с HAL rmtInit()
 void rmtModuleInit() {
-    executeLine("rmt cont");
+    focusTo("rmt");
     addInternalWord("rmt.Init",      rtmInitFunc);
     addInternalWord("rmt.Clk",       rtmClkFunc);
     addInternalWord("rmt.Mem",       rtmMemFunc);
@@ -380,14 +398,12 @@ void rmtModuleInit() {
     addInternalWord("rmt.SendBegin", rtmSendBeginFunc);
     addInternalWord("rmt.AllBegin",  rtmAllBeginFunc);
     addInternalWord("nullArray",     nullArrayFunc);
-    executeLine("main");
+    focusTo("main");
 }
 
 #include "driver/i2s.h"
-
 // === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
 static bool i2sInstalled[2] = {false, false};
-
 struct I2sBinding {
     uint16_t data_addr = 0;
     uint16_t data_len  = 0;
@@ -415,25 +431,19 @@ static inline int _i2s_bps_code(uint8_t bps) {
 void i2sInitFunc() {
     uint8_t ch, mode, bits;
     uint32_t rate;
-
     if (!popUInt8(ch) || ch > 1) { pushBool(false); return; }
     if (!popUInt8(mode) || mode > 4) { pushBool(false); return; }
-
     if (stack_is_empty()) { pushBool(false); return; }
     uint8_t buf[8]; uint16_t sz = stack_pop(buf, sizeof(buf));
     if (sz < 2 || buf[0] < 4 || buf[0] > 11) { pushBool(false); return; }
     rate = 0;
     for (uint16_t k = 0; k < sz - 1 && k < 4; k++) rate |= (uint32_t)buf[1 + k] << (k * 8);
     if (rate == 0) { pushBool(false); return; }
-
     if (!popUInt8(bits)) { pushBool(false); return; }
     if (i2sInstalled[ch]) { pushBool(false); return; }
-
     int bps_code = _i2s_bps_code(bits);
-
     i2s_config_t cfg = {};
     cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER);
-
     if (mode == 0) {
         cfg.mode = (i2s_mode_t)(cfg.mode | I2S_MODE_TX);
     } else if (mode == 1) {
@@ -451,7 +461,6 @@ void i2sInitFunc() {
     else {
         pushBool(false); return;
     }
-
     cfg.sample_rate          = rate;
     cfg.bits_per_sample      = (i2s_bits_per_sample_t)bps_code;
     cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT;
@@ -460,7 +469,6 @@ void i2sInitFunc() {
     cfg.dma_buf_len          = 256;
     cfg.use_apll             = false;
     cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
-
     esp_err_t err = i2s_driver_install((i2s_port_t)ch, &cfg, 0, NULL);
     if (err == ESP_OK) {
         i2sInstalled[ch]      = true;
@@ -478,7 +486,6 @@ void i2sInitFunc() {
 void i2sPinsFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
-
     int pins[4];
     for (int i = 0; i < 4; i++) {
         if (stack_is_empty()) { pushBool(false); return; }
@@ -508,14 +515,11 @@ void i2sPinsFunc() {
 void i2sSetDataFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1) { pushBool(false); return; }
-
     uint8_t buf[8];
     uint16_t sz = stack_pop(buf, sizeof(buf));
     if (sz < 2) { pushBool(false); return; }
-
     uint8_t tag = buf[0];
     const uint8_t* hdr = buf;
-
     if (tag == 0x12 && sz == 3) {
         uint16_t var_addr = buf[1] | (buf[2] << 8);
         if (var_addr < dict_ptr) {
@@ -526,13 +530,11 @@ void i2sSetDataFunc() {
         }
     }
     if (tag != 17 && tag != 20) { pushBool(false); return; }
-
     uint16_t a = hdr[1] | (hdr[2] << 8);
     uint16_t l = hdr[3] | (hdr[4] << 8);
     uint8_t  tp = hdr[5];
     uint8_t  esz = type_registry[tp].size;
     uint32_t total_bytes = (uint32_t)l * esz;
-
     i2s_bind[ch].data_addr = a;
     i2s_bind[ch].data_len  = (uint16_t)total_bytes;
     i2s_bind[ch].ready     = true;
@@ -549,10 +551,10 @@ void i2sWriteFunc() {
     }
     size_t written = 0;
     i2s_write((i2s_port_t)ch,
-              &data_pool[i2s_bind[ch].data_addr],
-              i2s_bind[ch].data_len,
-              &written,
-              portMAX_DELAY);
+        &data_pool[i2s_bind[ch].data_addr],
+        i2s_bind[ch].data_len,
+        &written,
+        portMAX_DELAY);
     pushUInt16((uint16_t)written);
 }
 
@@ -580,10 +582,10 @@ void i2sReadFunc() {
     }
     size_t read_bytes = 0;
     i2s_read((i2s_port_t)ch,
-             &data_pool[i2s_bind[ch].data_addr],
-             i2s_bind[ch].data_len,
-             &read_bytes,
-             portMAX_DELAY);
+        &data_pool[i2s_bind[ch].data_addr],
+        i2s_bind[ch].data_len,
+        &read_bytes,
+        portMAX_DELAY);
     pushUInt16((uint16_t)read_bytes);
 }
 
@@ -595,7 +597,6 @@ void i2sReadNBFunc() {
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch] || !i2s_bind[ch].ready) {
         pushUInt16(0); return;
     }
-
     uint32_t timeout_ms = 0;
     if (!stack_is_empty()) {
         uint8_t* top = &stack_mem[stack_ptr];
@@ -609,14 +610,13 @@ void i2sReadNBFunc() {
             }
         }
     }
-
     TickType_t ticks = (timeout_ms == 0) ? 0 : pdMS_TO_TICKS(timeout_ms);
     size_t read_bytes = 0;
     i2s_read((i2s_port_t)ch,
-             &data_pool[i2s_bind[ch].data_addr],
-             i2s_bind[ch].data_len,
-             &read_bytes,
-             ticks);
+        &data_pool[i2s_bind[ch].data_addr],
+        i2s_bind[ch].data_len,
+        &read_bytes,
+        ticks);
     pushUInt16((uint16_t)read_bytes);
 }
 
@@ -697,21 +697,18 @@ void i2sPdmFunc() {
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) {
         pushBool(false); return;
     }
-
 #if CONFIG_IDF_TARGET_ESP32
     if (ch != 0) {
         currentOutput->println("i2s.Pdm: internal DAC only on port 0");
         pushBool(false); return;
     }
     pushBool(i2s_set_dac_mode(I2S_DAC_CHANNEL_BOTH_EN) == ESP_OK);
-
 #elif CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32S2
     esp_err_t err = i2s_set_pdm_rx_down_sample((i2s_port_t)ch, I2S_PDM_DSR_8S);
     if (err != ESP_OK) {
         currentOutput->println("i2s.Pdm: use i2s.Init with mode=4 (PDM RX)");
     }
     pushBool(err == ESP_OK);
-
 #else
     currentOutput->println("i2s.Pdm: not supported on this chip");
     pushBool(false);
@@ -725,7 +722,6 @@ void i2sFormatFunc() {
     uint8_t ch, fmt;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
     if (!popUInt8(fmt) || fmt > 5) { pushBool(false); return; }
-
     int ch_mode;
     uint8_t new_channels = 2;
     switch (fmt) {
@@ -737,11 +733,10 @@ void i2sFormatFunc() {
         case 5: ch_mode = (int)I2S_CHANNEL_STEREO; new_channels = 2; break;
         default: pushBool(false); return;
     }
-
     esp_err_t err = i2s_set_clk((i2s_port_t)ch,
-                                i2s_bind[ch].rate,
-                                (uint32_t)_i2s_bps_code(i2s_bind[ch].bps),
-                                (i2s_channel_t)ch_mode);
+        i2s_bind[ch].rate,
+        (uint32_t)_i2s_bps_code(i2s_bind[ch].bps),
+        (i2s_channel_t)ch_mode);
     if (err == ESP_OK) {
         i2s_bind[ch].channels = new_channels;
     }
@@ -755,11 +750,10 @@ void i2sMonoFunc() {
     uint8_t ch, side;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
     if (!popUInt8(side) || side > 1) { pushBool(false); return; }
-
     esp_err_t err = i2s_set_clk((i2s_port_t)ch,
-                                i2s_bind[ch].rate,
-                                (uint32_t)_i2s_bps_code(i2s_bind[ch].bps),
-                                I2S_CHANNEL_MONO);
+        i2s_bind[ch].rate,
+        (uint32_t)_i2s_bps_code(i2s_bind[ch].bps),
+        I2S_CHANNEL_MONO);
     if (err == ESP_OK) {
         i2s_bind[ch].channels = 1;
     }
@@ -774,7 +768,6 @@ void i2sSamplesFunc() {
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch] || !i2s_bind[ch].ready) {
         pushUInt32(0); return;
     }
-
     I2sBinding* b = &i2s_bind[ch];
     uint8_t bytes_per_sample = b->bps / 8;
     if (bytes_per_sample == 0 || b->channels == 0) {
@@ -789,7 +782,7 @@ void i2sSamplesFunc() {
 // РЕГИСТРАЦИЯ
 // =========================================================
 void i2sInit() {
-    executeLine("i2s cont");
+    focusTo("i2s");
     addInternalWord("i2s.Init",       i2sInitFunc);
     addInternalWord("i2s.Pins",       i2sPinsFunc);
     addInternalWord("i2s.SetData",    i2sSetDataFunc);
@@ -807,5 +800,5 @@ void i2sInit() {
     addInternalWord("i2s.Format",     i2sFormatFunc);
     addInternalWord("i2s.Mono",       i2sMonoFunc);
     addInternalWord("i2s.Samples",    i2sSamplesFunc);
-    executeLine("main");
+    focusTo("main");
 }

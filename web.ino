@@ -1,12 +1,17 @@
+extern HDLStream g_stream;
 void webInit() {
-  executeLine("web cont");
+  focusTo("web");
   addInternalWord("onHTTP", initHTTP);
   addInternalWord("HTTP", h_http);
   addInternalWord("onSoket", word_onSoket);
   addInternalWord("Soket", word_Soket);
+#ifdef pril // #endif  
+ addInternalWord("onSoketPril", word_onSoketPril);
+ addInternalWord("SoketPril", word_SoketPril); 
+#endif
   addInternalWord("out>ws", word_out_ws);
   addInternalWord("flush", word_flush_ws); // ← Исправлено имя
-  executeLine("main");
+  focusTo("main");
 }
 
 void h_http() {
@@ -51,7 +56,6 @@ void initHTTP() {
   //HTTP.serveStatic("/lang/", FILESYSTEM, "/lang/", "max-age=31536000"); // кеширование на 1 год
   // ------------------Редактор FORTH
   HTTP.on("/forth", HTTP_GET, []() {
-    //String     webForth="ok";
     httpOkHtml(webForth);
   });
 
@@ -60,31 +64,20 @@ void initHTTP() {
 
 // Инициализация FFS
 void initFS() {
-
-  //HTTP страницы для работы с FFS
-  //list directory
   HTTP.on("/list", HTTP_GET, handleFileList);
-  //загрузка редактора editor
   HTTP.on("/edit", HTTP_GET, []() {
-    if (!handleFileRead("/edit.htm")) http404send();//HTTP.send(404, "text/plain", "FileNotFound");
+    if (!handleFileRead("/edit.htm")) http404send();
   });
-  //Создание файла
   HTTP.on("/edit", HTTP_PUT, handleFileCreate);
-  //Удаление файла
   HTTP.on("/edit", HTTP_DELETE, handleFileDelete);
-  //first callback is called after the request has ended with all parsed arguments
-  //second callback handles file uploads at that location
   HTTP.on("/edit", HTTP_POST, []() {
-    //HTTP.send(200, "text/plain", "");
     httpOkText("");
   }, handleFileUpload);
-  //called when the url is not defined here
-  //use it to load content from SPIFFS
   HTTP.onNotFound([]() {
     if (!handleFileRead(HTTP.uri()))
       currentOutput->println(HTTP.uri());
       executeLine(HTTP.uri().c_str());
-      http404send();//HTTP.send(404, "text/plain", "FileNotFound");
+      http404send();
   });
 }
 
@@ -108,11 +101,6 @@ String getContentType(String filename) {
   return "text/plain";
 }
 
-
-
-
-
-
 void handleFileUpload() {
   if (HTTP.uri() != "/edit") return;
   HTTPUpload& upload = HTTP.upload();
@@ -132,36 +120,34 @@ void handleFileUpload() {
 }
 
 void handleFileDelete() {
-  if (HTTP.args() == 0) return http500send("BAD ARGS");// HTTP.send(500, "text/plain", "BAD ARGS");
+  if (HTTP.args() == 0) return http500send("BAD ARGS");
   String path = HTTP.arg(0);
   if (path == "/")
-    return http500send("BAD PATH");// HTTP.send(500, "text/plain", "BAD PATH");
+    return http500send("BAD PATH");
   if (!SPIFFS.exists(path))
-    return http404send();//HTTP.send(404, "text/plain", "FileNotFound");
+    return http404send();
   SPIFFS.remove(path);
-  //HTTP.send(200, "text/plain", "");
   httpOkText("");
   path = String();
 }
 
 void handleFileCreate() {
   if (HTTP.args() == 0)
-    return http500send("BAD ARGS");//  HTTP.send(500, "text/plain", "BAD ARGS");
+    return http500send("BAD ARGS");
   String path = HTTP.arg(0);
   if (path == "/")
-    return http500send("BAD PATH");//  HTTP.send(500, "text/plain", "BAD PATH");
+    return http500send("BAD PATH");
   if (SPIFFS.exists(path))
-    return http500send("FILE EXISTS");//  HTTP.send(500, "text/plain", "FILE EXISTS");
+    return http500send("FILE EXISTS");
   File file = SPIFFS.open(path, "w");
   if (file)
     file.close();
   else
-    return http500send("CREATE FAILED");// HTTP.send(500, "text/plain", "CREATE FAILED");
-  //HTTP.send(200, "text/plain", "");
+    return http500send("CREATE FAILED");
   httpOkText("");
   path = String();
-
 }
+
 bool handleFileRead(String path) {
   String setIndex =  "index.htm";
   if (setIndex == "") setIndex = "index.htm";
@@ -178,6 +164,7 @@ bool handleFileRead(String path) {
   }
   return false;
 }
+
 void handleFileList() {
   if (!HTTP.hasArg("dir")) {
     http500send("BAD ARGS");//
@@ -387,12 +374,17 @@ void http404send() {
 void wsServerEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
-      if (currentOutput == &wsPrint) currentOutput = &Serial;
+      // 🔙 Возвращаем вывод в Serial ТОЛЬКО при отключении, если он был направлен в сокет
+      if (currentOutput == &g_stream) { 
+          g_stream.detach(); 
+          currentOutput = &Serial; 
+      }
       break;
+      
     case WStype_CONNECTED: {
-        // 🔀 Временно переключаем вывод на клиент
-        Print* saved = currentOutput;
-        currentOutput = &wsPrint;
+        // 🔀 Переключаем вывод на WebSocket НАВСЕГДА, пока соединение активно!
+        g_stream.attachWs(&wsServer);
+        currentOutput = &g_stream;
 
         // 📋 Штатная последовательность при подключении
         currentOutput->println();
@@ -401,48 +393,35 @@ void wsServerEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length)
         word_prompt();
 
         // 🚀 Отправляем буфер клиенту
-        wsPrint.flush();
+        g_stream.flush();
 
-        // 🔙 Возвращаем вывод (чтобы не сломать Serial-терминал)
-        currentOutput = saved;
+        // ⛔ НЕ возвращаем currentOutput = saved; 
+        // Вывод должен остаться перенаправленным в сокет до момента WStype_DISCONNECTED
         break;
-      }
-    case WStype_TEXT: {
-        if (length == 0) break;
+       }
+       
+case WStype_TEXT: {
+    if (length == 0 || length > 255) break;
 
-        // 1️⃣ Копируем фрейм целиком (WebSocket уже отдал законченное сообщение)
-        size_t len = (length < 255) ? length : 255;
-        memcpy(ws_cmd, payload, len);
-        ws_cmd[len] = '\0';
+    // ЛОКАЛЬНЫЙ буфер — живёт только в рамках этого case
+    char local_cmd[256];
+    memcpy(local_cmd, payload, length);
+    local_cmd[length] = '\0';
 
-        // 2️⃣ Убираем возможные \r\n или пробелы с конца
-        while (len > 0 && (ws_cmd[len - 1] == '\r' || ws_cmd[len - 1] == '\n' || ws_cmd[len - 1] == ' ')) {
-          ws_cmd[--len] = '\0';
-        }
-        if (len == 0) break; // Пустая команда → игнорируем
+    executeLine(local_cmd);  // ← работает с локальной, изолированной копией
 
-       // Serial.print("WS Exec: "); Serial.println(ws_cmd); // Для отладки
-
-        // 3️⃣ Исполняем с перенаправлением вывода
-        Print* saved = currentOutput;
-        currentOutput = &wsPrint;          // Весь print/json> полетит в сокет
-        // 2️⃣ ЭХО команды (как в Serial!) + перенос строки
-        currentOutput->println();
-        currentOutput->print(ws_cmd);
-        currentOutput->println();
-        executeLine(ws_cmd);
-        currentOutput->println();
+    currentOutput->println();
         printStack();
         printActiveTasks(); // ← СПИСОК ЗАДАЧ
         word_prompt();
-        wsPrint.flush();                   // Принудительно отправляем буфер
-        currentOutput = saved;             // Возвращаем вывод обратно
-        break;
-      }
-    default: break;
+    g_stream.flush();
+
+    break;
+}   
+    default: 
+      break;
   }
 }
-
 void word_onSoket() {
   wsServer.begin();
   wsServer.onEvent(wsServerEvent);
@@ -454,13 +433,58 @@ void word_Soket() {
 }
 
 void word_out_ws() {
-  currentOutput = &wsPrint;
-  //currentOutput->println("out>ws: OK");
+g_stream.attachWs(&wsServer);
+currentOutput = &g_stream;
 }
 
 // ✅ ИСПРАВЛЕНО: Имя функции совпадает с регистрацией
 void word_flush_ws() {
-  if (currentOutput == &wsPrint) wsPrint.flush();
+if (currentOutput == &g_stream) g_stream.flush();
+
+  
 }
 
 // prilServer
+#ifdef pril // #endif
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+
+    switch(type) {
+        case WStype_DISCONNECTED:
+            break;
+        case WStype_CONNECTED:
+            {
+                IPAddress ip = prilServer.remoteIP(num);
+    prilServer.sendTXT(num, "Connected");
+            }
+            break;
+        case WStype_TEXT:
+   if (length > 0) {
+        String command = String((const char *)payload);
+        currentOutput->println(command);
+      }         
+            // prilServer.sendTXT(num, "message here");
+            // prilServer.broadcastTXT("message here");
+            break;
+        case WStype_BIN:
+            // prilServer.sendBIN(num, payload, length);
+            break;
+  case WStype_ERROR:      
+  case WStype_FRAGMENT_TEXT_START:
+  case WStype_FRAGMENT_BIN_START:
+  case WStype_FRAGMENT:
+  case WStype_FRAGMENT_FIN:
+      break;
+    }
+
+}
+void word_onSoketPril() {
+    prilServer.begin();
+    prilServer.onEvent(webSocketEvent);
+  currentOutput->println("WebSocket server started on port 81");
+}
+
+void word_SoketPril() {
+  prilServer.loop();
+}
+#endif

@@ -1,93 +1,39 @@
 ## udp.Open
-udp.Open port
-  Создание UDP-сокета на указанном порту.
-  Максимум 8 сокетов одновременно.
-  Возвращает UINT8 — индекс сокета (0..7) или 0xFF при ошибке.
-  Пример: sock = udp.Open 1900
+udp.Open port → u8
+Открывает UDP-сокет на порту. Возвращает индекс (0-7) или 0xFF.
+Пример: 5000 udp.Open -> sock
 
 ## udp.Multicast
-udp.Multicast port multicast_ip
-  Создание UDP-сокета, присоединённого к multicast-группе.
-  Максимум 8 сокетов одновременно.
-  Возвращает UINT8 — индекс сокета (0..7) или 0xFF при ошибке.
-  Пример: sock = udp.Multicast 1900 "239.255.255.250"
+udp.Multicast ip port → u8
+Открывает UDP-сокет для multicast-группы.
+Пример: "239.1.1.1" 5000 udp.Multicast -> sock
 
 ## udp.Close
-udp.Close socket
-  Закрытие UDP-сокета и освобождение ресурсов.
-  Возвращает BOOL.
-  Пример: udp.Close sock
+udp.Close sock → BOOL
+Закрывает UDP-сокет.
+Пример: udp.Close sock
 
 ## udp.Send
-udp.Send socket data
-  Отправка строки через сокет.
-  Если сокет ранее получал пакет — отправляет на адрес последнего отправителя.
-  Если включён broadcast и адрес неизвестен — отправляет на 255.255.255.255.
-  Возвращает BOOL.
-  Пример: udp.Send sock "Hello UDP"
-
-## udp.SendTo
-udp.SendTo socket ip port data
-  Отправка строки на конкретный IP и порт.
-  Запоминает адрес для последующих вызовов udp.Send.
-  Возвращает BOOL.
-  Пример: udp.SendTo sock "192.168.1.50" 8080 "Test message"
-
-## udp.SendArray
-udp.SendArray socket array
-  Отправка сырых байт массива через сокет.
-  Если сокет ранее получал пакет — отправляет на адрес последнего отправителя.
-  Если включён broadcast и адрес неизвестен — отправляет на 255.255.255.255.
-  Возвращает BOOL.
-  Пример: udp.SendArray sock payload
-
-## udp.SendArrayTo
-udp.SendArrayTo socket ip port array
-  Отправка сырых байт массива на конкретный IP и порт.
-  Запоминает адрес для последующих вызовов udp.SendArray.
-  Возвращает BOOL.
-  Пример: udp.SendArrayTo sock "192.168.1.50" 8080 payload
+udp.Send sock ip port data → BOOL
+Отправляет данные через UDP.
+Пример: udp.Send sock "192.168.1.100" 5000 "Hello"
 
 ## udp.Available
-udp.Available socket
-  Проверка наличия данных в буфере приёма.
-  Вызывает parsePacket() и запоминает адрес отправителя.
-  Возвращает UINT16 — количество доступных байт (0 если пакетов нет).
-  Пример: size = udp.Available sock
+udp.Available sock → u16
+Количество байт в принятом пакете. 0 если нет данных.
+Пример: udp.Available sock -> bytes
 
 ## udp.Recv
-udp.Recv socket
-  Чтение доступного UDP-пакета как строки.
-  Автоматически вызывает parsePacket() если не был вызван udp.Available.
-  Запоминает адрес отправителя для последующего udp.Send.
-  Возвращает STRING (пустая строка если пакетов нет).
-  Пример: data = udp.Recv sock
-
-## udp.RecvFrom
-udp.RecvFrom socket
-  Чтение пакета с информацией об отправителе.
-  Возвращает на стек (сверху вниз): data STRING, ip STRING, port UINT16.
-  Порядок присваивания R2L: port = ..., ip = ..., data = ...
-  Пример: data ip port = udp.RecvFrom sock
-
-## udp.ReadArray
-udp.ReadArray socket array
-  Чтение UDP-пакета напрямую в массив (без промежуточных строк).
-  Автоматически определяет размер массива из его заголовка.
-  Не допускает переполнения буфера.
-  Возвращает UINT16 — количество реально прочитанных байт (0 если пакетов нет).
-  Пример: read_bytes = udpBuffer sock udp.ReadArray
-
-## udp.Broadcast
-udp.Broadcast socket enable
-  Включение/выключение режима широковещательной рассылки.
-  enable: 1 (true) — включить, 0 (false) — выключить.
-  Возвращает BOOL.
-  Пример: udp.Broadcast sock 1
+udp.Recv sock array → u16 ip port
+Принимает UDP-пакет в массив. Возвращает длину, IP и порт.
+Пример: udp.Recv sock buf -> len ip port
 
 ## udp.Timeout
-udp.Timeout socket timeout_ms
-  Установка таймаута для операций чтения/записи в миллисекундах.
-  По умолчанию: 1000 мс.
-  Возвращает BOOL.
-  Пример: udp.Timeout sock 500
+udp.Timeout sock ms → BOOL
+Устанавливает таймаут UDP в миллисекундах.
+Пример: udp.Timeout sock 2000
+
+## out>udp
+out>udp sock ip port
+Перенаправляет весь вывод (print) в UDP-сокет.
+Пример: out>udp sock "192.168.1.100" 5000
