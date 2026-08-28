@@ -49,7 +49,7 @@ start :
        onHTTP              // Инициализация HTTP-сервера
        +loop  "HTTP"       // Запуск HTTP в фоновом цикле
         
-      //  onSoket             // Инициализация WebSocket-сервера
+        onSoket             // Инициализация WebSocket-сервера
       //  +loop  "Soket"        // Запуск WebSocket в фоновом цикле
         
         // 5. Звуковое подтверждение успеха

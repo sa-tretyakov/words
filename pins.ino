@@ -34,6 +34,7 @@ void gpioInit() {
     addInternalWord("pulseIn",      pulseInFunc);       // pin state [timeout] → u32.
     addInternalWord("shiftOut",     shiftOutWord);      // dataPin clockPin bitOrder value → void.
     addInternalWord("chip",         chipWord);          // → STRING (имя чипа).
+    addInternalWord("chip.id", chipIdFunc);
     addInternalWord("LOW",          lowWord);           // → u8 (0).
     addInternalWord("HIGH",         highWord);          // → u8 (1).
     addInternalWord("INPUT",        inputWord);         // → u8 (INPUT).
@@ -41,6 +42,7 @@ void gpioInit() {
     addInternalWord("INPUT_PULLUP", inputPullupWord);   // → u8 (INPUT_PULLUP).
     addInternalWord("LSBFIRST",     lsbfirstWord);      // → u8 (0).
     addInternalWord("MSBFIRST",     msbfirstWord);      // → u8 (1).
+    focusTo("main");
     focusTo("io");
     addInternalWord("CR",    crWord);                   // → STRING "\r".
     addInternalWord("LF",    lfWord);                   // → STRING "\n".

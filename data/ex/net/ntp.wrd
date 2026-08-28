@@ -1,0 +1,57 @@
+// load ex/net/ntp.wrd <-- xxx oops
+ntp focus
+// Создаём буфер для обмена ntp
+  ntp.req = array u8 48
+
+unix.time = 0u32
+millis.sync = 0u32
+time.zone = 7
+time.now :
+millis.now = millis
+result = unix.time + ( millis.now - millis.sync ) / 1000
+result = result + ( time.zone * 3600 )
+ss = result % 60
+mm = ( result / 60 ) % 60
+hh = ( result / 3600 ) % 24
+// locals
+print hh
+print ":"
+print mm
+print ":"
+ln print ss
+flush
+;
+getNTP : // 
+ntp.server = 
+ntp.client.port = 2390u16
+ntp.soket = udp.Open ntp.client.port
+if 255 == ntp.soket {
+print "ntp soket not init"
+exit
+}
+copy ntp.req 0 47 0u8
+ntp.req [ 0 ] = 0x1Bu8
+ntp.ip = dns.resolve ntp.server 
+ntp.port = 123
+udp.Send ntp.soket ntp.ip ntp.port ntp.req
+->
+delayMicroseconds 100000
+    n = udp.Available ntp.soket
+    if n > 0 {
+print "Время получено"
+udp.Recv ntp.soket ntp.req
+oops
+ntp.time = ( ntp.req [ 40 ] << 24 ) + ( ntp.req [ 41 ] << 16 ) + ( ntp.req [ 42 ] << 8 ) + ntp.req [ 43 ]
+unix.time = ntp.time - 2208988800
+millis.sync = millis
+// json>
+}
+flush
+udp.Close ntp.soket
+->
+;
+
+getNTP "ntp2.vniiftri.ru"
+getNTP "ntp1.vniiftri.ru"
+time.now 1000 +task 
+main

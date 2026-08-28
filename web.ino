@@ -4,13 +4,13 @@ void webInit() {
   addInternalWord("onHTTP", initHTTP);
   addInternalWord("HTTP", h_http);
   addInternalWord("onSoket", word_onSoket);
-  addInternalWord("Soket", word_Soket);
 #ifdef pril // #endif  
  addInternalWord("onSoketPril", word_onSoketPril);
  addInternalWord("SoketPril", word_SoketPril); 
 #endif
-  addInternalWord("out>ws", word_out_ws);
   addInternalWord("flush", word_flush_ws); // ← Исправлено имя
+  focusTo("streams");
+  addInternalWord("out>ws", word_out_ws);
   focusTo("main");
 }
 
@@ -73,11 +73,47 @@ void initFS() {
   HTTP.on("/edit", HTTP_POST, []() {
     httpOkText("");
   }, handleFileUpload);
+// === УНИВЕРСАЛЬНЫЙ HDL-РОУТЕР ===
   HTTP.onNotFound([]() {
-    if (!handleFileRead(HTTP.uri()))
-      currentOutput->println(HTTP.uri());
-      executeLine(HTTP.uri().c_str());
-      http404send();
+    String uri = HTTP.uri();
+    Serial.print("[HTTP] "); Serial.println(uri);  // ← отладка
+
+    // 1. Сначала пытаемся отдать статический файл
+    if (handleFileRead(uri)) {
+      Serial.println("[HTTP] → static file");
+      return;  // ← ВАЖНО: фигурные скобки не нужны, return выходит из лямбды
+    }
+
+    // 2. Убираем начальный '/' для поиска в словаре
+    String name = uri;
+    if (name.startsWith("/")) name.remove(0, 1);
+
+    // 3. Ищем слово HDL с таким именем
+    uint16_t addr = dict_find(name.c_str());
+    if (addr != 0xFFFF) {
+      Serial.print("[HTTP] → HDL word at 0x"); Serial.println(addr, HEX);
+      
+      String contentType = getContentType("/" + name);
+      Print* savedOutput = currentOutput;
+
+      // 🔑 Chunked transfer — чтобы sendContent реально работал
+      HTTP.setContentLength(CONTENT_LENGTH_UNKNOWN);
+      HTTP.send(200, contentType, "");
+
+      g_stream.attachHttp(&HTTP);
+      currentOutput = &g_stream;
+
+      executeLine(name.c_str());
+
+      g_stream.flush();
+      g_stream.detach();
+      currentOutput = savedOutput;
+      return;
+    }
+
+    // 4. Ни файла, ни слова — честная 404
+    Serial.println("[HTTP] → 404");
+    http404send();
   });
 }
 
@@ -110,7 +146,6 @@ void handleFileUpload() {
     fsUploadFile = SPIFFS.open(filename, "w");
     filename = String();
   } else if (upload.status == UPLOAD_FILE_WRITE) {
-    //DBG_OUTPUT_PORT.print("handleFileUpload Data: "); DBG_OUTPUT_PORT.println(upload.currentSize);
     if (fsUploadFile)
       fsUploadFile.write(upload.buf, upload.currentSize);
   } else if (upload.status == UPLOAD_FILE_END) {
@@ -370,11 +405,11 @@ void http404send() {
 
 
 
+
 // ✅ Точная сигнатура, ожидаемая библиотекой
 void wsServerEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
-      // 🔙 Возвращаем вывод в Serial ТОЛЬКО при отключении, если он был направлен в сокет
       if (currentOutput == &g_stream) { 
           g_stream.detach(); 
           currentOutput = &Serial; 
@@ -382,55 +417,39 @@ void wsServerEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length)
       break;
       
     case WStype_CONNECTED: {
-        // 🔀 Переключаем вывод на WebSocket НАВСЕГДА, пока соединение активно!
+        // Переключаем вывод на WebSocket
         g_stream.attachWs(&wsServer);
         currentOutput = &g_stream;
+        
 
-        // 📋 Штатная последовательность при подключении
-        currentOutput->println();
-        printStack();
-        printActiveTasks();
-        word_prompt();
-
-        // 🚀 Отправляем буфер клиенту
+      printStack();
+      printActiveTasks();
+      word_prompt();
         g_stream.flush();
-
-        // ⛔ НЕ возвращаем currentOutput = saved; 
-        // Вывод должен остаться перенаправленным в сокет до момента WStype_DISCONNECTED
         break;
        }
        
-case WStype_TEXT: {
-    if (length == 0 || length > 255) break;
-
-    // ЛОКАЛЬНЫЙ буфер — живёт только в рамках этого case
-    char local_cmd[256];
-    memcpy(local_cmd, payload, length);
-    local_cmd[length] = '\0';
-
-    executeLine(local_cmd);  // ← работает с локальной, изолированной копией
-
-    currentOutput->println();
-        printStack();
-        printActiveTasks(); // ← СПИСОК ЗАДАЧ
-        word_prompt();
-    g_stream.flush();
-
-    break;
-}   
+    case WStype_TEXT: {
+        // 🔀 ТОЛЬКО приём данных. Никакого executeLine, printStack или flush здесь!
+        if (length > 0 && length < 255) {
+            memcpy(ws_cmd, payload, length);
+            ws_cmd[length] = '\0';
+            ws_cmd_ready = true; // Сигнализируем главному циклу, что есть команда
+        }
+        break;
+      }
+      
     default: 
       break;
   }
 }
+
 void word_onSoket() {
   wsServer.begin();
   wsServer.onEvent(wsServerEvent);
   currentOutput->println("WebSocket server started on port 82");
 }
 
-void word_Soket() {
-  wsServer.loop();
-}
 
 void word_out_ws() {
 g_stream.attachWs(&wsServer);

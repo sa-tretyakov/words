@@ -85,7 +85,81 @@ static int safeScanNetworks() {
     }
     return WiFi.scanNetworks();
 }
+// WiFi STA MAC с двоеточиями: "A1:B2:C3:D4:E5:F6"
+void macFunc() {
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    char buf[18];
+    snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    pushStringRaw(buf);
+}
 
+// WiFi STA MAC без двоеточий: "A1B2C3D4E5F6"
+void macRawFunc() {
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    char buf[13];
+    snprintf(buf, sizeof(buf), "%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    pushStringRaw(buf);
+}
+
+// WiFi AP MAC с двоеточиями
+void macApFunc() {
+    uint8_t mac[6];
+    WiFi.softAPmacAddress(mac);
+    char buf[18];
+    snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    pushStringRaw(buf);
+}
+
+// Ethernet MAC с двоеточиями
+void macEthFunc() {
+#if ETH_ENC28J60_ENABLED
+    if (!ethInstalled) { pushStringRaw("00:00:00:00:00:00"); return; }
+    char buf[18];
+    snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+             ethMac[0], ethMac[1], ethMac[2], ethMac[3], ethMac[4], ethMac[5]);
+    pushStringRaw(buf);
+#else
+    pushStringRaw("00:00:00:00:00:00");
+#endif
+}
+
+// chip.id — уникальный ID чипа из eFuse (для USN)
+void chipIdFunc() {
+    uint64_t id = ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL;
+    char buf[13];
+    snprintf(buf, sizeof(buf), "%012llX", (unsigned long long)id);
+    pushStringRaw(buf);
+}
+// ============================================================
+// === DNS: Разрешение имён ===
+// ============================================================
+void dnsResolveFunc() {
+    if (stack_is_empty()) { pushStringRaw("0.0.0.0"); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    // Ожидаем STRING (0x0E) или NAME (0x0D)
+    if (top[0] != 0x0E && top[0] != 0x0D) { pushStringRaw("0.0.0.0"); return; }
+    
+    uint8_t len = top[1];
+    if (len == 0 || len > 63) { pushStringRaw("0.0.0.0"); return; }
+    
+    char host[65];
+    memcpy(host, &top[2], len);
+    host[len] = '\0';
+    stack_ptr += elem_size(top); // Снимаем имя со стека
+
+    IPAddress ip;
+    // Используем штатный резолвер ESP32
+    if (WiFi.hostByName(host, ip)) {
+        pushStringRaw(ip.toString().c_str());
+    } else {
+        pushStringRaw("0.0.0.0");
+    }
+}
 // ============================================================
 // === ОБРАБОТЧИК СОБЫТИЙ WiFi + Ethernet ===
 // ============================================================
@@ -156,7 +230,63 @@ void channelQueryFunc() {
     WiFi.scanDelete();
     pushUInt16((uint16_t)best_ch);
 }
+// === scanPrefix : "prefix" → "ssid" (пустая строка если не найдено) ===
+void scanPrefixFunc() {
+    // 1. Проверяем наличие строки на стеке
+    if (stack_is_empty()) { pushStringRaw(""); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E && top[0] != 0x0D) { pushStringRaw(""); return; }
+    
+    uint8_t plen = top[1];
+    if (plen == 0 || plen > 63) { pushStringRaw(""); return; }
+    
+    // 2. Читаем префикс и снимаем со стека
+    char prefix[65];
+    memcpy(prefix, &top[2], plen);
+    prefix[plen] = '\0';
+    stack_ptr += elem_size(top);
 
+    // 3. Сканируем сети
+    int n = safeScanNetworks();
+    int best_i = -1;
+    int best_rssi = -1000;
+    char best_ssid[33] = {0}; // Локальный буфер для лучшего совпадения
+
+    for (int i = 0; i < n; i++) {
+        String s = WiFi.SSID(i);
+        const char* ssid = s.c_str();
+        
+        // Сравниваем начало строки с префиксом
+        if (strncmp(ssid, prefix, plen) == 0) {
+            int rssi = WiFi.RSSI(i);
+            if (rssi > best_rssi) {
+                best_rssi = rssi;
+                best_i = i;
+                strncpy(best_ssid, ssid, 32); // Копируем имя в наш буфер
+                best_ssid[32] = '\0';
+            }
+        }
+    }
+    
+    // 4. Очищаем память сканера
+    WiFi.scanDelete();
+
+    // 5. Помещаем результат в стек HDL. 
+    // Это БЕЗОПАСНО, так как pushStringRaw делает внутреннее копирование (memcpy) 
+    // до того, как функция scanPrefixFunc завершится и локальный best_ssid будет уничтожен.
+    if (best_i >= 0) {
+        pushStringRaw(best_ssid);
+    } else {
+        pushStringRaw("");
+    }
+}
+void gwStaFunc() {
+    if (WiFi.status() != WL_CONNECTED) {
+        pushStringRaw("0.0.0.0");
+        return;
+    }
+    pushStringRaw(WiFi.gatewayIP().toString().c_str());
+}
 // ============================================================
 // === band : ssid "2.4"|"5" → channel(u16) ===
 // ============================================================
@@ -194,7 +324,30 @@ void bandFunc() {
     WiFi.scanDelete();
     pushUInt16((uint16_t)best_ch);
 }
-
+// ============================================================
+// === setHostname : "name" → BOOL ===
+// ============================================================
+void setHostnameFunc() {
+    if (stack_is_empty()) { pushBool(false); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E && top[0] != 0x0D) { pushBool(false); return; }
+    uint8_t len = top[1];
+    if (len == 0 || len > 32) { pushBool(false); return; }
+    char hostname[33];
+    memcpy(hostname, &top[2], len);
+    hostname[len] = '\0';
+    stack_ptr += elem_size(top);
+    
+    bool ok = WiFi.setHostname(hostname);
+    
+#if ETH_ENC28J60_ENABLED
+    if (ethInstalled) {
+        ok = Ethernet.setHostname(hostname) && ok;
+    }
+#endif
+    
+   //pushBool(ok);
+}
 // ============================================================
 // === onSta : ssid password → BOOL ===
 // ============================================================
@@ -435,13 +588,20 @@ void wifiInit() {
     addInternalWord("status",    networkStatusFunc);
     addInternalWord("dbm",       dbmFunc);
     addInternalWord("ipSta",     ipStaFunc);
+    addInternalWord("gwSta", gwStaFunc);
     addInternalWord("onAp",      onApFunc);
     addInternalWord("setAp",     setApFunc);
     addInternalWord("apConfig",  apConfigFunc);
     addInternalWord("ipAp",      ipApFunc);
     addInternalWord("scan",      scanFunc);
+    addInternalWord("scanPrefix", scanPrefixFunc);
     addInternalWord("wifiOff",   wifiOffFunc);
-
+    addInternalWord("dns.resolve", dnsResolveFunc); // <-- ДОБАВИТЬ ЭТУ СТРОКУ
+    addInternalWord("setHostname", setHostnameFunc);  // ← НОВОЕ СЛОВО
+    addInternalWord("mac",       macFunc);
+    addInternalWord("mac.raw",   macRawFunc);
+    addInternalWord("mac.ap",    macApFunc);
+    addInternalWord("mac.eth",   macEthFunc);
     focusTo("main");
 }
 
@@ -605,6 +765,7 @@ void udpInit() {
     addInternalWord("udp.Available", udpAvailableFunc);
     addInternalWord("udp.Recv",      udpRecvFunc);
     addInternalWord("udp.Timeout",   udpTimeoutFunc);
+    focusTo("streams");
     addInternalWord("out>udp",       word_out_udp);
     focusTo("main");
 }
@@ -858,8 +1019,9 @@ void tcpInit() {
     addInternalWord("tcp.Timeout",    tcpTimeoutFunc);
     addInternalWord("tcp.RemoteIp",   tcpRemoteIpFunc);
     addInternalWord("tcp.RemotePort", tcpRemotePortFunc);
-    addInternalWord("out>tcp",        word_out_tcp);
     addInternalWord("req?",           reqQuestionFunc);
     addInternalWord("req.line",       reqLineFunc);
+    focusTo("streams");
+    addInternalWord("out>tcp",        word_out_tcp);
     focusTo("main");
 }

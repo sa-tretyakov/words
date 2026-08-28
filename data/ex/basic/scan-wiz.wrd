@@ -1,0 +1,85 @@
+// load ex/basic/scan-wiz.wrd <-- xxx
+wiz focus
+
+// Создаём буфер на 1500 байт (стандартный максимум для UDP-пакета)
+wiz.buf = array u8 255
+SSDP/UPnP = "239.255.255.250"
+wiz.soket = 255u8
+const broadcast = "255.255.255.255"
+wiz.param focus
+wiz.myport = 49152
+wiz.port = 38899
+wiz.ip = broadcast
+wiz
+wiz.init :
+wiz.soket = udp.Open wiz.myport
+if 255 == wiz.soket {
+print "wiz soket not init"
+exit
+}
+;
+
+
+
+task.wiz.kill = 0u16  // Сюда будем запоминать ID фоновой задачи
+wiz.Read :
+    n = udp.Available wiz.soket
+    if n > 0 {
+        // Вычёрпываем пакет из сокета в буфер, чтобы освободить сетевую очередь
+        udp.Recv wiz.soket wiz.buf 
+        // Разбираем стек (сверху вниз лежат: порт, IP, размер)
+        print " search-ответ от " 
+        print 
+        print ":" 
+        wiz.ip = 
+        print wiz.ip
+        print " получено "
+        print
+        ln
+        part$ wiz.buf 0 n
+        ->
+        ln print
+        print "/ ok>"
+        flush
+        __remove_task__ task.wiz.kill  // Останавливаем фоновую задачу
+    }
+;
+
+wiz.search :
+udp.Send wiz.soket broadcast wiz.port "{"method":"getSystemConfig","params":{}}"
+ ->
+    // Планируем фоновую задачу для чтения ответа
+    task.wiz.kill = wiz.Read #  // Получаем адрес слова
+    wiz.Read 100 +task         // Запускаем задачу через 100 мс
+;
+
+
+
+wiz.init
+wiz.search
+// шлем строку
+wiz.get : // "{"method":"syncPilot","params":{}}"
+udp.Send wiz.soket wiz.ip wiz.port 
+->
+    task.wiz.kill = wiz.Read #  // Получаем адрес слова
+    wiz.Read 100 +task         // Запускаем задачу через 100 мс
+;
+
+// Включаем лампу
+wiz.on :
+wiz.get "{"method":"setPilot","params":{"state":true}}"
+;
+
+// Выключаем
+wiz.off :
+wiz.get "{"method":"setPilot","params":{"state":false}}"
+;
+
+
+
+// wiz.get "{"method":"syncPilot","params":{}}"
+// wiz.get "{"method":"getPilot","params":{}}"
+// wiz.get "{"method":"setPilot","params":{"r":255,"g":255,"b":255,"dimming":100}}"
+// wiz.get "{"method":"setPilot","params":{"temp":4000,"dimming":100}}"
+// wiz.get "{"method":"setPilot","params":{"state":true}}"
+main

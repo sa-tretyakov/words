@@ -1,0 +1,79 @@
+// load ex/http/webconst.wrd
+
+webconst focus
+const http.version = "HTTP/1.1 "
+
+http.ok :
+ http.version + "200 OK" + CRLF
+ ;
+  
+http.notFound :
+http.version + "404 Not Found" + CRLF
+;
+
+http.notModified :
+http.version + "304 Not Modified" + CRLF
+;
+ 
+http.redirect :
+http.version + "301 Moved Permanently" + CRLF
+; 
+http.tempRedirect :
+http.version + "302 Found" + CRLF
+; 
+http.badRequest :
+http.version + "400 Bad Request" + CRLF
+;
+http.error.line :
+http.version + "500 Internal Server Error" + CRLF
+;
+println :
+print
+ln
+;
+
+Empty.Line :
+ln
+;
+
+const GET = "GET "
+const Host: = "Host: " 
+
+const h.type       = "Content-Type: "
+const h.length     = "Content-Length: "
+const h.encoding   = "Content-Encoding: gzip"
+const h.cache      = "Cache-Control: max-age="
+const h.modified   = "Last-Modified: "
+const h.etag       = "ETag: "
+const h.location   = "Location: "
+const h.connection = "Connection: close"
+
+
+
+const htm  = "htm"
+const html = "html"
+const wrd  = "wrd"
+const json = "json"
+const css  = "css"
+const js   = "js"
+const png  = "png"
+const gif  = "gif"
+const jpg  = "jpg"
+const ico  = "ico"
+const xml  = "xml"
+const pdf  = "pdf"
+const zip  = "zip"
+const gz   = "gz"
+
+const t.html = "text/html"
+const t.json = "application/json"
+const t.css  = "text/css"
+const t.js   = "application/javascript"
+const t.png  = "image/png"
+const t.gif  = "image/gif"
+const t.jpg  = "image/jpeg"
+const t.ico  = "image/x-icon"
+const t.xml  = "text/xml"
+const t.pdf  = "application/x-pdf"
+const t.zip  = "application/x-zip"
+const t.gz   = "application/x-gzip"

@@ -1,0 +1,78 @@
+// load /ex/basic/magic-home.wrd <--
+
+magic-home focus
+MagicHome device // Имя устройства
+
+mh.ip = "10.10.123.255" // Здесь будет адрес устройства
+mh.port = 48899         // порт устройства
+mh.myport = 10000       // Наш порт по которому отправим данные
+mh.soket = 255u8        // Здесь будет хранится номер открытого сокета 255 нет сокета
+// Строки для инициальзации подключения устройства
+AT+ON = "+++"
+AT+WSSSID = "AT+WSSSID=" + ssid + CRLF 
+AT+WSKEY = "AT+WSKEY=,," + ssidPass + CRLF 
+AT+WMODE = "AT+WMODE=STA" + CRLF 
+AT+Z = "AT+Z" + CRLF 
+AT+RESET = "RESET" + CRLF 
+// Создадим очередь из строк с имаенм atCommands
+atCommands = array $S 6u8
+// Выдадим каджой строке в очереде atCommands свой номер
+atCommands [ ] = AT+ON AT+WSSSID AT+WSKEY AT+WMODE AT+Z AT+RESET
+mh.num = 0u8 // Текуший номер в очереди
+strS = len atCommands // Длинна в очереди
+// Мы научим устройство делать переодическую задачу но имени задачи пока не знаем
+// поэтому подготовим место для доступа по ID
+task.mh.kill = 0u16  // Сюда будем запоминать ID фоновой задачи
+
+// Это слово будет вызываться с периодичностью в 200 ms как задача task
+// оно будет отправлять комманды из очередии через сокет mh.soket по адресу устройства mh.ip на порт mh.port
+mh.sendAT :
+if  mh.num < strS  { // если еще не конец очереди
+// print atCommands [ mh.num ]
+// flush
+udp.Send mh.soket mh.ip mh.port atCommands [ mh.num ] // отправим комманду с номером mh.num
+mh.num += 1u8 // увеличим номер очереди
+exit // досрочно прекратим выполнение слова
+}
+// если достигли конца очереди
+ __remove_task__ task.mh.kill  // Останавливаем фоновую задачу по ID
+ udp.Close mh.soket  // закрываем сокет как больше не нужный
+ print "Стоп / ok>" // Выводим сообщение
+ flush 
+ mh.num = 0u8 // сбрасываем счетчик очереди
+ start // Подключаемся к роутеру
+;
+
+
+
+mh.init :
+mh.soket = udp.Open mh.myport
+if 255 == mh.soket {
+print "MagicHome soket not init"
+exit
+}
+ln print "Отправляем комманды"
+    task.mh.kill = mh.sendAT  #  // Получаем адрес слова
+    mh.sendAT 200 +task         // Запускаем задачу через 200 мс
+;
+
+
+mh.connect :
+mh.ssid = scanPrefix "LEDnet"
+if mh.ssid != "" {
+onSta mh.ssid  ""
+        ->                  // Сбрасываем результат подключения со стека (drop)
+        
+        print "MagicHome connected "
+        print ipSta         // Печатаем полученный IP-адрес
+        ln
+        mh.init
+        exit
+        
+}
+ln print "MagicHome не найден быстро включайте и выключайте контроллер"
+ln print "ленты пока она не начнет мигать разными цветами"
+ln print "Затем скажите mh.connect"
+;
+
+mh.connect

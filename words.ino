@@ -44,6 +44,8 @@ static uint8_t     g_tok_count = 0;
 static int8_t      g_tok_idx   = -1; // Текущий индекс в R2L-цикле
 
 
+
+
 // === ЯВНЫЕ ПРОТОТИПЫ (Fix для Arduino IDE multi-tab scope) ===
 void printStack();
 uint16_t elem_size(const uint8_t* buf);
@@ -122,40 +124,52 @@ RTC_NOINIT_ATTR uint8_t crashCounter;
 class HDLStream : public Print {
 public:
     enum Target : uint8_t {
-        T_NONE, T_WS, T_TCP, T_UDP, T_I2C, T_I2S
+        T_NONE, T_WS, T_TCP, T_UDP, T_I2C, T_I2S, T_HTTP   // ← добавлен T_HTTP
     };
 
     HDLStream() : target(T_NONE), ws(nullptr), tcp(nullptr),
-                  udp(nullptr), i2c_dev(0), i2s_port(0), buf_len(0) {}
+                   udp(nullptr), i2c_dev(0), i2s_port(0),
+                   http_srv(nullptr), buf_len(0) {}          // ← добавлена инициализация http_srv
 
     void attachWs(WebSocketsServer* srv) {
         flush(); target = T_WS; ws = srv;
-        tcp = nullptr; udp = nullptr;
+        tcp = nullptr; udp = nullptr; http_srv = nullptr;
     }
 
     void attachTcp(WiFiClient* c) {
         flush(); target = T_TCP; tcp = c;
-        ws = nullptr; udp = nullptr;
+        ws = nullptr; udp = nullptr; http_srv = nullptr;
     }
 
     void attachUdp(WiFiUDP* u, IPAddress ip, uint16_t port) {
         flush(); target = T_UDP; udp = u; dest_ip = ip; dest_port = port;
-        ws = nullptr; tcp = nullptr;
+        ws = nullptr; tcp = nullptr; http_srv = nullptr;
     }
 
     void attachI2c(uint8_t dev) {
         flush(); target = T_I2C; i2c_dev = dev;
-        ws = nullptr; tcp = nullptr; udp = nullptr;
+        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
     }
 
     void attachI2s(uint8_t port) {
         flush(); target = T_I2S; i2s_port = port;
-        ws = nullptr; tcp = nullptr; udp = nullptr;
+        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
     }
+
+    // ▼▼▼ НОВЫЙ МЕТОД: подключение к HTTP-серверу ▼▼▼
+    void attachHttp(WebServer* srv) {
+        flush();
+        target = T_HTTP;
+        http_srv = srv;
+        ws = nullptr;
+        tcp = nullptr;
+        udp = nullptr;
+    }
+    // ▲▲▲ КОНЕЦ НОВОГО МЕТОДА ▲▲▲
 
     void detach() {
         flush(); target = T_NONE;
-        ws = nullptr; tcp = nullptr; udp = nullptr;
+        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
     }
 
     size_t write(uint8_t c) override {
@@ -206,6 +220,11 @@ public:
                 i2s_write((i2s_port_t)i2s_port, buf, buf_len, &w, 0);
                 break;
             }
+            // ▼▼▼ НОВЫЙ CASE: отправка в HTTP-клиент ▼▼▼
+            case T_HTTP:
+                if (http_srv) http_srv->sendContent(String((char*)buf, buf_len));
+                break;
+            // ▲▲▲ КОНЕЦ НОВОГО CASE ▲▲▲
             default: break;
         }
         buf_len = 0;
@@ -218,15 +237,16 @@ private:
     WiFiUDP* udp;
     uint8_t i2c_dev;
     uint8_t i2s_port;
+    WebServer* http_srv;           // ← добавлено поле
     IPAddress dest_ip;
     uint16_t dest_port;
     char buf[256];
     uint8_t buf_len;
 };
-
 static HDLStream g_stream;
-
-// char ws_cmd[256];
+// Глобальные переменные для асинхронного приёма (в начале web.ino)
+char ws_cmd[256];
+volatile bool ws_cmd_ready = false;
 uint8_t ws_len = 0;
 
 // === ПАМЯТЬ ===
@@ -733,328 +753,347 @@ void wordMarker() {
   stack_push(out, 2 + nlen);
 }
 static void apply_op(const uint8_t* l_data, uint16_t l_len, uint8_t l_tag, uint16_t dict_write_addr) {
-  if (stack_is_empty()) return;
-  uint8_t* top = &stack_mem[stack_ptr];
-  if (top[0] != 0x0C) return; // Верх должен быть маркером операции
-  uint8_t op_len = top[1];
-  if (op_len == 0 || op_len > 4) return;
-  char op[5] = {0};
-  memcpy(op, &top[2], op_len);
-  // Структурные маркеры не обрабатываем как операторы
-if (op[0] == ')' || op[0] == '(' || op[0] == '[' || op[0] == ']') {
-    // Возвращаем маркер на место — он должен остаться на стеке
-    return;
-}
-  uint16_t r_addr = stack_ptr + 2 + op_len;
-  if (r_addr >= STACK_SIZE) return;
-  uint16_t r_sz = elem_size(&stack_mem[r_addr]);
-  if (r_sz == 0) return;
-  uint8_t r_tag = stack_mem[r_addr];
+    if (stack_is_empty()) return;
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0C) return; // Верх должен быть маркером операции
+    uint8_t op_len = top[1];
+    if (op_len == 0 || op_len > 4) return;
+    char op[5] = {0};
+    memcpy(op, &top[2], op_len);
 
-  // 🔹 FIX: Разыменовываем ADDR (0x12) для LHS
-  uint8_t actual_l_tag = l_tag;
-  uint16_t actual_l_len = l_len;
-  const uint8_t* actual_l_data = l_data;
-  uint16_t actual_write_addr = dict_write_addr;
+    // Структурные маркеры не обрабатываем как операторы
+    if (op[0] == ')' || op[0] == '(' || op[0] == '[' || op[0] == ']') {
+        // Возвращаем маркер на место — он должен остаться на стеке
+        return;
+    }
 
-  if (l_tag == 0x12 && l_len == 2) {
-    uint16_t var_addr = l_data[0] | (l_data[1] << 8);
-     if (var_addr < dict_ptr || var_addr >= local_dict_ptr) {
-      uint8_t vn = dict_pool[var_addr + 2];
-      uint16_t body = var_addr + 5 + vn;
-      uint8_t vt = dict_pool[body];
-      if (vt >= 4 && vt <= 11) { // Только числовые типы
-        uint16_t vsz = elem_size(&dict_pool[body]);
-        actual_l_tag = vt;
-        actual_l_len = vsz - 1;
-        actual_l_data = &dict_pool[body + 1];
-        actual_write_addr = body + 1; // Пишем обратно в тело переменной
-      }
-    }
-  }
-// 🔹 ПРОВЕРКА СОВМЕСТИМОСТИ ТИПОВ
-// При несовместимости — молча return. Маркер и RHS остаются на стеке.
-{
-    bool l_num = (actual_l_tag >= 4 && actual_l_tag <= 11);
-    bool r_num = (r_tag >= 4 && r_tag <= 11);
-    bool l_txt = (actual_l_tag >= 12 && actual_l_tag <= 14) || actual_l_tag == 15;
-    bool r_txt = (r_tag >= 12 && r_tag <= 14) || r_tag == 15;
-    bool l_addr = (l_tag == 0x12);
-    
-    bool compatible = false;
-    
-    if (op_len == 1) {
-        char c = op[0];
-        if (c == '+') {
-            if ((l_num && r_num) || (l_txt && r_txt)) compatible = true;
-        }
-        else if (c == '-' || c == '*' || c == '/' || c == '%' || c == '^' || 
-                 c == '&' || c == '|') {
-            if (l_num && r_num) compatible = true;
-        }
-        else if (c == '=') {
-            if (l_addr) compatible = true;
-        }
-        else if (c == '<' || c == '>') {
-            if ((l_num && r_num) || (l_txt && r_txt)) compatible = true;
+    uint16_t r_addr = stack_ptr + 2 + op_len;
+    if (r_addr >= STACK_SIZE) return;
+    uint16_t r_sz = elem_size(&stack_mem[r_addr]);
+    if (r_sz == 0) return;
+    uint8_t r_tag = stack_mem[r_addr];
+
+    // 🔹 FIX: Разыменовываем ADDR (0x12) для LHS
+    uint8_t actual_l_tag = l_tag;
+    uint16_t actual_l_len = l_len;
+    const uint8_t* actual_l_data = l_data;
+    uint16_t actual_write_addr = dict_write_addr;
+
+    if (l_tag == 0x12 && l_len == 2) {
+        uint16_t var_addr = l_data[0] | (l_data[1] << 8);
+        if (var_addr < dict_ptr || var_addr >= local_dict_ptr) {
+            uint8_t vn = dict_pool[var_addr + 2];
+            uint16_t body = var_addr + 5 + vn;
+            uint8_t vt = dict_pool[body];
+            if (vt >= 4 && vt <= 11) { // Только числовые типы
+                uint16_t vsz = elem_size(&dict_pool[body]);
+                actual_l_tag = vt;
+                actual_l_len = vsz - 1;
+                actual_l_data = &dict_pool[body + 1];
+                actual_write_addr = body + 1; // Пишем обратно в тело переменной
+            }
         }
     }
-    else if (op_len == 2) {
-        if (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0) {
-            compatible = true;
+
+    // 🔹 ПРОВЕРКА СОВМЕСТИМОСТИ ТИПОВ
+    // При несовместимости — молча return. Маркер и RHS остаются на стеке.
+    {
+        bool l_num = (actual_l_tag >= 4 && actual_l_tag <= 11);
+        bool r_num = (r_tag >= 4 && r_tag <= 11);
+        bool l_txt = (actual_l_tag >= 12 && actual_l_tag <= 14) || actual_l_tag == 15;
+        bool r_txt = (r_tag >= 12 && r_tag <= 14) || r_tag == 15;
+        bool l_addr = (l_tag == 0x12);
+        bool compatible = false;
+
+        if (op_len == 1) {
+            char c = op[0];
+            if (c == '+') {
+                if ((l_num && r_num) || (l_txt && r_txt)) compatible = true;
+            }
+            else if (c == '-' || c == '*' || c == '/' || c == '%' || c == '^' || 
+                     c == '&' || c == '|') {
+                if (l_num && r_num) compatible = true;
+            }
+            else if (c == '=') {
+                if (l_addr) compatible = true;
+            }
+            else if (c == '<' || c == '>') {
+                if ((l_num && r_num) || (l_txt && r_txt)) compatible = true;
+            }
         }
-        else if (strcmp(op, "<=") == 0 || strcmp(op, ">=") == 0) {
-            if ((l_num && r_num) || (l_txt && r_txt)) compatible = true;
+        else if (op_len == 2) {
+            if (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0) {
+                compatible = true;
+            }
+            else if (strcmp(op, "<=") == 0 || strcmp(op, ">=") == 0) {
+                if ((l_num && r_num) || (l_txt && r_txt)) compatible = true;
+            }
+            else if (strcmp(op, "<<") == 0 || strcmp(op, ">>") == 0) {
+                if (l_num && r_num) compatible = true;
+            }
+            else if (strcmp(op, "+=") == 0 || strcmp(op, "-=") == 0 || 
+                     strcmp(op, "*=") == 0 || strcmp(op, "/=") == 0) {
+                if (l_addr && ((l_num && r_num) || (l_txt && r_txt))) compatible = true;
+            }
         }
-        else if (strcmp(op, "<<") == 0 || strcmp(op, ">>") == 0) {
-            if (l_num && r_num) compatible = true;
-        }
-        else if (strcmp(op, "+=") == 0 || strcmp(op, "-=") == 0 || 
-                 strcmp(op, "*=") == 0 || strcmp(op, "/=") == 0) {
-            if (l_addr && ((l_num && r_num) || (l_txt && r_txt))) compatible = true;
-        }
-    }
-    
-if (!compatible) {
-    // 🔑 LHS не на стеке (его передал вызывающий код как параметры).
-    // Кладём его обратно, чтобы следующий вызов (например, find) мог снять.
-    if (l_tag >= 12 && l_tag <= 14) {
-        // Строка: l_data[0] = длина, l_data[1..] = данные
-        uint8_t tmp[257];
-        tmp[0] = l_tag;
-        tmp[1] = l_data[0];
-        uint8_t slen = l_data[0];
-        if (slen > 253) slen = 253;
-        memcpy(&tmp[2], &l_data[1], slen);
-        stack_push(tmp, 2 + slen);
-    } 
-    else if (l_tag == 0x12) {
-        // ADDR
-        uint8_t tmp[3] = {0x12, l_data[0], l_data[1]};
-        stack_push(tmp, 3);
-    } 
-    else {
-        // Число или другой тип: l_data = данные, l_len = длина данных
-        uint8_t tmp[8];
-        tmp[0] = l_tag;
-        memcpy(&tmp[1], l_data, l_len);
-        stack_push(tmp, 1 + l_len);
-    }
-    return;
-}
-    
-    // 🔹 == и != между разными типами → false / true
-    if (op_len == 2 && (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0)) {
-        bool same_kind = (actual_l_tag == r_tag) || (l_num && r_num) || (l_txt && r_txt);
-        if (!same_kind) {
-            stack_ptr += elem_size(&stack_mem[stack_ptr]);  // RHS
-            stack_ptr += 2 + op_len;                         // маркер
-            stack_ptr += elem_size(&stack_mem[stack_ptr]);  // LHS
-            pushBool(strcmp(op, "!=") == 0);
+
+        if (!compatible) {
+            // 🔑 LHS не на стеке (его передал вызывающий код как параметры).
+            // Кладём его обратно, чтобы следующий вызов (например, find) мог снять.
+            if (l_tag >= 12 && l_tag <= 14) {
+                // Строка: l_data[0] = длина, l_data[1..] = данные
+                uint8_t tmp[257];
+                tmp[0] = l_tag;
+                tmp[1] = l_data[0];
+                uint8_t slen = l_data[0];
+                if (slen > 253) slen = 253;
+                memcpy(&tmp[2], &l_data[1], slen);
+                stack_push(tmp, 2 + slen);
+            }
+            else if (l_tag == 0x12) {
+                // ADDR
+                uint8_t tmp[3] = {0x12, l_data[0], l_data[1]};
+                stack_push(tmp, 3);
+            }
+            else {
+                // Число или другой тип: l_data = данные, l_len = длина данных
+                uint8_t tmp[8];
+                tmp[0] = l_tag;
+                memcpy(&tmp[1], l_data, l_len);
+                stack_push(tmp, 1 + l_len);
+            }
             return;
         }
+
+        // 🔹 == и != между разными типами → false / true
+        if (op_len == 2 && (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0)) {
+            bool same_kind = (actual_l_tag == r_tag) || (l_num && r_num) || (l_txt && r_txt);
+            if (!same_kind) {
+                stack_ptr += elem_size(&stack_mem[stack_ptr]);  // RHS
+                stack_ptr += 2 + op_len;                         // маркер
+                stack_ptr += elem_size(&stack_mem[stack_ptr]);  // LHS
+                pushBool(strcmp(op, "!=") == 0);
+                return;
+            }
+        }
     }
-}
-  // 🔹 СЛОЖЕНИЕ СТРОК (Конкатенация)
-  if (op_len == 1 && op[0] == '+' && (actual_l_tag >= 12 && actual_l_tag <= 14) && (r_tag >= 12 && r_tag <= 14)) {
-    uint8_t l_txt_len = actual_l_data[0];
-    uint8_t r_txt_len = stack_mem[r_addr + 1];
-    uint16_t new_len = (uint16_t)l_txt_len + r_txt_len;
-    if (new_len > 254) new_len = 254;
-    uint8_t res[256];
-    res[0] = 0x0E;
-    res[1] = (uint8_t)new_len;
-    uint16_t cl = (l_txt_len > new_len) ? new_len : l_txt_len;
-    memcpy(&res[2], &actual_l_data[1], cl);
-    uint16_t cr = new_len - cl;
-    if (cr > r_txt_len) cr = r_txt_len;
-    memcpy(&res[2 + cl], &stack_mem[r_addr + 2], cr);
-    uint16_t rsz = 2 + new_len;
-    if (stack_ptr < rsz) {
-      currentOutput->println("stack overflow");
-      return;
+
+    // 🔹 СЛОЖЕНИЕ СТРОК (Конкатенация)
+    if (op_len == 1 && op[0] == '+' && (actual_l_tag >= 12 && actual_l_tag <= 14) && (r_tag >= 12 && r_tag <= 14)) {
+        uint8_t l_txt_len = actual_l_data[0];
+        uint8_t r_txt_len = stack_mem[r_addr + 1];
+        uint16_t new_len = (uint16_t)l_txt_len + r_txt_len;
+        if (new_len > 254) new_len = 254;
+        uint8_t res[256];
+        res[0] = 0x0E;
+        res[1] = (uint8_t)new_len;
+        uint16_t cl = (l_txt_len > new_len) ? new_len : l_txt_len;
+        memcpy(&res[2], &actual_l_data[1], cl);
+        uint16_t cr = new_len - cl;
+        if (cr > r_txt_len) cr = r_txt_len;
+        memcpy(&res[2 + cl], &stack_mem[r_addr + 2], cr);
+        uint16_t rsz = 2 + new_len;
+        if (stack_ptr < rsz) {
+            currentOutput->println("stack overflow");
+            return;
+        }
+        stack_ptr += 2 + op_len + r_sz;
+        stack_ptr -= rsz;
+        memcpy(&stack_mem[stack_ptr], res, rsz);
+        return;
     }
+
+    // 🔹 СРАВНЕНИЕ СТРОК (== и !=)
+    if (op_len == 2 && (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0) &&
+        (actual_l_tag >= 12 && actual_l_tag <= 14) && (r_tag >= 12 && r_tag <= 14)) {
+        uint8_t l_len = actual_l_data[0];
+        uint8_t r_len = stack_mem[r_addr + 1];
+        bool eq = (l_len == r_len) && (memcmp(&actual_l_data[1], &stack_mem[r_addr + 2], l_len) == 0);
+        stack_ptr += 2 + op_len + r_sz;
+        uint8_t res = (strcmp(op, "!=") == 0) ? !eq : eq;
+        stack_push(&res, 1);
+        return;
+    }
+
+    // 🔽 Декодирование LHS (Числа)
+    int32_t l_i = 0; float l_f = 0;
+    bool l_is_float = (actual_l_tag == 11);
+    if (l_is_float) memcpy(&l_f, actual_l_data, 4);
+    else {
+        l_i = decode_int_le(actual_l_data, actual_l_len, actual_l_tag);
+        l_f = (float)l_i;
+    }
+
+    // 🔽 Декодирование RHS (Числа)
+    bool r_is_float = (r_tag == 11);
+    int32_t r_i = 0; float r_f = 0;
+    if (r_is_float) memcpy(&r_f, &stack_mem[r_addr + 1], 4);
+    else {
+        r_i = decode_int_le(&stack_mem[r_addr + 1], r_sz - 1, r_tag);
+        r_f = (float)r_i;
+    }
+
+    // 🔥 ОБЪЯВЛЕНИЯ ПЕРЕМЕННЫХ РЕЗУЛЬТАТА
+    bool res_float = l_is_float || r_is_float;
+    int32_t res_i = 0;
+    float res_f = 0;
+    float L = l_is_float ? l_f : (float)l_i;
+    float R = r_is_float ? r_f : (float)r_i;
+    bool is_assign = false;
+    bool is_compare = false;
+    bool unknown = false;
+
+    // === ЛОГИКА ОПЕРАТОРОВ ===
+    if (strcmp(op, "=") == 0) {
+        is_assign = true; res_i = r_i; res_f = R;
+    }
+    else if (strcmp(op, "+=") == 0) {
+        res_i = l_i + r_i; res_f = L + R; is_assign = true;
+    }
+    else if (strcmp(op, "-=") == 0) {
+        res_i = l_i - r_i; res_f = L - R; is_assign = true;
+    }
+    else if (strcmp(op, "*=") == 0) {
+        res_i = l_i * r_i; res_f = L * R; is_assign = true;
+    }
+    else if (strcmp(op, "/=") == 0) {
+        res_i = (r_i != 0) ? (l_i / r_i) : 0;
+        res_f = (R != 0.0f) ? (L / R) : 0.0f;
+        is_assign = true;
+    }
+    else if (strcmp(op, "+") == 0) {
+        res_i = l_i + r_i;
+        res_f = L + R;
+    }
+    else if (strcmp(op, "-") == 0) {
+        res_i = l_i - r_i;
+        res_f = L - R;
+    }
+    else if (strcmp(op, "*") == 0) {
+        res_i = l_i * r_i;
+        res_f = L * R;
+    }
+    else if (strcmp(op, "/") == 0) {
+        res_i = (r_i != 0) ? (l_i / r_i) : 0;
+        res_f = (R != 0.0f) ? (L / R) : 0.0f;
+    }
+    else if (strcmp(op, "%") == 0) {
+        res_i = (r_i != 0) ? (l_i % r_i) : 0;
+        res_float = false;
+    }
+    else if (strcmp(op, "^") == 0) {
+        res_i = l_i ^ r_i;
+        res_float = false;
+    }
+    else if (strcmp(op, "<<") == 0) {
+        res_i = l_i << r_i;
+        res_float = false;
+    }
+    else if (strcmp(op, ">>") == 0) {
+        res_i = l_i >> r_i;
+        res_float = false;
+    }
+    else if (strcmp(op, "&") == 0) {
+        res_i = l_i & r_i;
+        res_float = false;
+    }
+    else if (strcmp(op, "|") == 0) {
+        res_i = l_i | r_i;
+        res_float = false;
+    }
+    else if (strcmp(op, "==") == 0) {
+        res_i = (L == R);
+        is_compare = true;
+        res_float = false;
+    }
+    else if (strcmp(op, "!=") == 0) {
+        res_i = (L != R);
+        is_compare = true;
+        res_float = false;
+    }
+    else if (strcmp(op, "<") == 0) {
+        res_i = (L < R);
+        is_compare = true;
+        res_float = false;
+    }
+    else if (strcmp(op, ">") == 0) {
+        res_i = (L > R);
+        is_compare = true;
+        res_float = false;
+    }
+    else if (strcmp(op, "<=") == 0) {
+        res_i = (L <= R);
+        is_compare = true;
+        res_float = false;
+    }
+    else if (strcmp(op, ">=") == 0) {
+        res_i = (L >= R);
+        is_compare = true;
+        res_float = false;
+    }
+    else {
+        unknown = true;
+    }
+
+    // Чистим маркер и правый операнд со стека
     stack_ptr += 2 + op_len + r_sz;
-    stack_ptr -= rsz;
-    memcpy(&stack_mem[stack_ptr], res, rsz);
-    return;
-  }
 
-  // 🔹 СРАВНЕНИЕ СТРОК (== и !=)
-  if (op_len == 2 && (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0) &&
-      (actual_l_tag >= 12 && actual_l_tag <= 14) && (r_tag >= 12 && r_tag <= 14)) {
-    uint8_t l_len = actual_l_data[0];
-    uint8_t r_len = stack_mem[r_addr + 1];
-    bool eq = (l_len == r_len) && (memcmp(&actual_l_data[1], &stack_mem[r_addr + 2], l_len) == 0);
-    stack_ptr += 2 + op_len + r_sz;
-    uint8_t res = (strcmp(op, "!=") == 0) ? !eq : eq;
-    stack_push(&res, 1);
-    return;
-  }
-
-// 🔽 Декодирование LHS (Числа)
-int32_t l_i = 0; float l_f = 0;
-bool l_is_float = (actual_l_tag == 11);
-if (l_is_float) memcpy( &l_f, actual_l_data, 4);
-else {
-    l_i = decode_int_le(actual_l_data, actual_l_len, actual_l_tag);
-    l_f = (float)l_i;
-}
-
-// 🔽 Декодирование RHS (Числа)
-bool r_is_float = (r_tag == 11);
-int32_t r_i = 0; float r_f = 0;
-if (r_is_float) memcpy( &r_f,  &stack_mem[r_addr + 1], 4);
-else {
-    r_i = decode_int_le(&stack_mem[r_addr + 1], r_sz - 1, r_tag);
-    r_f = (float)r_i;
-}
-
-  // 🔥 ОБЪЯВЛЕНИЯ ПЕРЕМЕННЫХ РЕЗУЛЬТАТА
-  bool res_float = l_is_float || r_is_float;
-  int32_t res_i = 0;
-  float res_f = 0;
-  float L = l_is_float ? l_f : (float)l_i;
-  float R = r_is_float ? r_f : (float)r_i;
-  bool is_assign = false;
-  bool is_compare = false;
-  bool unknown = false;
-
-  // === ЛОГИКА ОПЕРАТОРОВ ===
-  if (strcmp(op, "=") == 0) {
-    is_assign = true; res_i = r_i; res_f = R;
-  }
-  else if (strcmp(op, "+=") == 0) {
-    res_i = l_i + r_i; res_f = L + R; is_assign = true;
-  }
-  else if (strcmp(op, "-=") == 0) {
-    res_i = l_i - r_i; res_f = L - R; is_assign = true;
-  }
-  else if (strcmp(op, "*=") == 0) {
-    res_i = l_i * r_i; res_f = L * R; is_assign = true;
-  }
-  else if (strcmp(op, "/=") == 0) {
-    res_i = (r_i != 0) ? (l_i / r_i) : 0;
-    res_f = (R != 0.0f) ? (L / R) : 0.0f;
-    is_assign = true;
-  }
-  else if (strcmp(op, "+") == 0)  {
-    res_i = l_i + r_i;
-    res_f = L + R;
-  }
-  else if (strcmp(op, "-") == 0)  {
-    res_i = l_i - r_i;
-    res_f = L - R;
-  }
-  else if (strcmp(op, "*") == 0)  {
-    res_i = l_i * r_i;
-    res_f = L * R;
-  }
-  else if (strcmp(op, "/") == 0)  {
-    res_i = (r_i != 0) ? (l_i / r_i) : 0;
-    res_f = (R != 0.0f) ? (L / R) : 0.0f;
-  }
-  else if (strcmp(op, "%") == 0)  {
-    res_i = (r_i != 0) ? (l_i % r_i) : 0;
-    res_float = false;
-  }
-  else if (strcmp(op, "^") == 0)  {
-    res_i = l_i ^ r_i;
-    res_float = false;
-  }
-  else if (strcmp(op, "<<") == 0) {
-    res_i = l_i << r_i;
-    res_float = false;
-  }
-  else if (strcmp(op, ">>") == 0) {
-    res_i = l_i >> r_i;
-    res_float = false;
-  }
-  else if (strcmp(op, "&") == 0)  {
-    res_i = l_i & r_i;
-    res_float = false;
-  }
-  else if (strcmp(op, "|") == 0)  {
-    res_i = l_i | r_i;
-    res_float = false;
-  }
-  else if (strcmp(op, "==") == 0) {
-    res_i = (L == R);
-    is_compare = true;
-    res_float = false;
-  }
-  else if (strcmp(op, "!=") == 0) {
-    res_i = (L != R);
-    is_compare = true;
-    res_float = false;
-  }
-  else if (strcmp(op, "<") == 0)  {
-    res_i = (L < R);
-    is_compare = true;
-    res_float = false;
-  }
-  else if (strcmp(op, ">") == 0)  {
-    res_i = (L > R);
-    is_compare = true;
-    res_float = false;
-  }
-  else if (strcmp(op, "<=") == 0) {
-    res_i = (L <= R);
-    is_compare = true;
-    res_float = false;
-  }
-  else if (strcmp(op, ">=") == 0) {
-    res_i = (L >= R);
-    is_compare = true;
-    res_float = false;
-  }
-  else {
-    unknown = true;
-  }
-
-  // Чистим маркер и правый операнд со стека
-  stack_ptr += 2 + op_len + r_sz;
-
-  // 🟢 Неизвестный оператор → возвращаем LHS на стек
-  if (unknown) {
-    uint8_t tmp[8]; tmp[0] = actual_l_tag; memcpy(&tmp[1], actual_l_data, actual_l_len);
-    stack_push(tmp, 1 + actual_l_len);
-    return;
-  }
-
-// 🟢 ПРИСВАИВАНИЕ
-if (is_assign) {
-    uint8_t casted[8];
-    if (l_is_float) {
-        memcpy(casted, &res_f, 4);
-    } else {
-        int32_t v = res_float ? (int32_t)res_f : res_i;
-        encode_uint_le(casted, (uint32_t)v, actual_l_len);
+    // 🟢 Неизвестный оператор → возвращаем LHS на стек
+    if (unknown) {
+        uint8_t tmp[8]; tmp[0] = actual_l_tag; memcpy(&tmp[1], actual_l_data, actual_l_len);
+        stack_push(tmp, 1 + actual_l_len);
+        return;
     }
-    if (actual_write_addr) for (uint16_t i = 0; i < actual_l_len; i++) dict_pool[actual_write_addr + i] = casted[i];
-    return;
-}
 
-  // 🔵 ЛОГИЧЕСКОЕ СРАВНЕНИЕ
-  if (is_compare) {
-    uint8_t res_buf[1] = { (uint8_t)(res_i ? 1 : 0) };
-    stack_push(res_buf, 1);
-    return;
-  }
+    // 🟢 ПРИСВАИВАНИЕ
+    if (is_assign) {
+        uint8_t casted[8];
+        if (l_is_float) {
+            memcpy(casted, &res_f, 4);
+        } else {
+            int32_t v = res_float ? (int32_t)res_f : res_i;
+            encode_uint_le(casted, (uint32_t)v, actual_l_len);
+        }
+        if (actual_write_addr) for (uint16_t i = 0; i < actual_l_len; i++) dict_pool[actual_write_addr + i] = casted[i];
+        return;
+    }
+
+    // 🔵 ЛОГИЧЕСКОЕ СРАВНЕНИЕ
+    if (is_compare) {
+        uint8_t res_buf[1] = { (uint8_t)(res_i ? 1 : 0) };
+        stack_push(res_buf, 1);
+        return;
+    }
 
 // ⚫ МАТЕМАТИКА / БИТОВЫЕ ОПЕРАЦИИ
+// 🔧 ФИКС: расширение типа для операций, которые могут увеличить значение
+uint8_t res_tag = actual_l_tag;
+uint16_t res_len = actual_l_len;
+if (!res_float) {
+    bool is_shift_or_mul = (strcmp(op, "<<") == 0 || strcmp(op, ">>") == 0 || strcmp(op, "*") == 0);
+    if (is_shift_or_mul) {
+        // u8(4), i8(5), u16(6), i16(7), u24(8) → u32(9)
+        // i32(10) → остаётся i32(10)
+        // u32(9) → остаётся u32(9)
+        if (res_tag >= 4 && res_tag <= 8) {
+            res_tag = 9;   // u32
+            res_len = 4;
+        } else if (res_tag == 10) {
+            res_len = 4;   // i32
+        }
+    }
+}
+
 uint8_t res_buf[8];
-res_buf[0] = res_float ? 11 : actual_l_tag;
+res_buf[0] = res_float ? 11 : res_tag;
 if (res_float) {
     memcpy(&res_buf[1], &res_f, 4);
     stack_push(res_buf, 5);
 } else {
-    encode_uint_le(&res_buf[1], (uint32_t)res_i, actual_l_len);
-    stack_push(res_buf, 1 + actual_l_len);
+    encode_uint_le(&res_buf[1], (uint32_t)res_i, res_len);
+    stack_push(res_buf, 1 + res_len);
 }
 }
-
-
 void choiceFunc() {
     uint8_t abuf[3];
     if (stack_pop(abuf, 3) != 3 || abuf[0] != 0x12) return;
@@ -1180,58 +1219,56 @@ void choiceFunc() {
         stack_push(tmp, 2 + slen);
         return;
     }
-// 🔹 STRING / NAME / MARKER (теги 12-14) — in-place перезапись
-if (var_tag >= 12 && var_tag <= 14) {
-    uint8_t old_len = dict_pool[val_start + 1];
-    uint16_t max_data = val_size - 2; // вычитаем тег(1) + len(1)
-    
-    if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
-        uint8_t* top = &stack_mem[stack_ptr];
-        if (top[1] == 1 && top[2] == '=') {
-            stack_ptr += 3;
-            if (stack_is_empty()) { stack_ptr = old_sp; return; }
-            uint8_t* src = &stack_mem[stack_ptr];
-            uint16_t src_sz = elem_size(src);
-            uint16_t new_len = 0;
-            const uint8_t* new_data = nullptr;
-            
-            if (src[0] == 0x0E || (src[0] >= 12 && src[0] <= 14)) {
-                new_len = src[1];
-                new_data = &src[2];
-            } else if (src[0] == 15) {
-                new_len = src[1];
-                uint16_t a = src[2] | (src[3] << 8);
-                if (a + new_len > DATA_POOL_SIZE) { stack_ptr += src_sz; stack_ptr = old_sp; return; }
-                new_data = &data_pool[a];
-            } else {
-                stack_ptr += src_sz; stack_ptr = old_sp; return;
+
+    // 🔹 STRING / NAME / MARKER (теги 12-14) — in-place перезапись
+    if (var_tag >= 12 && var_tag <= 14) {
+        uint8_t old_len = dict_pool[val_start + 1];
+        uint16_t max_data = val_size - 2; // вычитаем тег(1) + len(1)
+        if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
+            uint8_t* top = &stack_mem[stack_ptr];
+            if (top[1] == 1 && top[2] == '=') {
+                stack_ptr += 3;
+                if (stack_is_empty()) { stack_ptr = old_sp; return; }
+                uint8_t* src = &stack_mem[stack_ptr];
+                uint16_t src_sz = elem_size(src);
+                uint16_t new_len = 0;
+                const uint8_t* new_data = nullptr;
+                if (src[0] == 0x0E || (src[0] >= 12 && src[0] <= 14)) {
+                    new_len = src[1];
+                    new_data = &src[2];
+                } else if (src[0] == 15) {
+                    new_len = src[1];
+                    uint16_t a = src[2] | (src[3] << 8);
+                    if (a + new_len > DATA_POOL_SIZE) { stack_ptr += src_sz; stack_ptr = old_sp; return; }
+                    new_data = &data_pool[a];
+                } else {
+                    stack_ptr += src_sz; stack_ptr = old_sp; return;
+                }
+                if (new_len > max_data) {
+                    currentOutput->println("string too long");
+                    stack_ptr += src_sz; stack_ptr = old_sp; return;
+                }
+                dict_pool[val_start + 1] = new_len;
+                if (new_len > 0) memcpy(&dict_pool[val_start + 2], new_data, new_len);
+                stack_ptr += src_sz;
+                mark_dirty(addr);
+                return;
             }
-            
-            if (new_len > max_data) {
-                currentOutput->println("string too long");
-                stack_ptr += src_sz; stack_ptr = old_sp; return;
-            }
-            
-            dict_pool[val_start + 1] = new_len;
-            if (new_len > 0) memcpy(&dict_pool[val_start + 2], new_data, new_len);
-            stack_ptr += src_sz;
-            mark_dirty(addr);
+            // Не '=' — передаём в apply_op (конкатенация, сравнение)
+            uint8_t tmp[257];
+            tmp[0] = 0x0E; tmp[1] = old_len;
+            if (old_len > 0) memcpy(&tmp[2], &dict_pool[val_start + 2], old_len);
+            apply_op(&tmp[1], old_len, 0x0E, 0);
             return;
         }
-        // Не '=' — передаём в apply_op (конкатенация, сравнение)
+        // Нет маркера — чтение: кладём строку на стек
         uint8_t tmp[257];
         tmp[0] = 0x0E; tmp[1] = old_len;
         if (old_len > 0) memcpy(&tmp[2], &dict_pool[val_start + 2], old_len);
-        apply_op(&tmp[1], old_len, 0x0E, 0);
+        stack_push(tmp, 2 + old_len);
         return;
     }
-    // Нет маркера — чтение: кладём строку на стек
-    uint8_t tmp[257];
-    tmp[0] = 0x0E; tmp[1] = old_len;
-    if (old_len > 0) memcpy(&tmp[2], &dict_pool[val_start + 2], old_len);
-    stack_push(tmp, 2 + old_len);
-    return;
-}
+
 #define RESTORE_AND_PUSH() do { stack_ptr = old_sp; stack_push(&dict_pool[val_start], val_size); return; } while(0)
 
     if (stack_is_empty() || stack_mem[stack_ptr] != 0x0C) RESTORE_AND_PUSH();
@@ -1303,22 +1340,18 @@ if (var_tag >= 12 && var_tag <= 14) {
         // ✅ ХЕЛПЕР decode_uint_le вместо ручного цикла
         uint32_t idx_val = decode_uint_le(&nxt[1], idx_sz - 1);
         stack_ptr += idx_sz;
-
         if (stack_is_empty() || stack_mem[stack_ptr] != 0x0C) RESTORE_AND_PUSH();
         uint8_t* end_b = &stack_mem[stack_ptr];
         if (end_b[1] != 1 || end_b[2] != ']') RESTORE_AND_PUSH();
         stack_ptr += 3;
-
         uint16_t base = dict_pool[val_start + 1] | (dict_pool[val_start + 2] << 8);
         uint16_t arr_len = dict_pool[val_start + 3] | (dict_pool[val_start + 4] << 8);
         uint8_t  tp = dict_pool[val_start + 5];
         uint8_t  esz = type_registry[tp].size;
-
         if (idx_val >= arr_len) {
             currentOutput->println("idx OOB");
             RESTORE_AND_PUSH();
         }
-
         uint16_t data_addr = base + idx_val * esz;
         bool is_assign = false;
         if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
@@ -1370,33 +1403,84 @@ if (var_tag >= 12 && var_tag <= 14) {
             return;
         }
 
-        // === ЧТЕНИЕ ПО ИНДЕКСУ arr[i] ===
-        if (tp == 15) {
-            uint8_t slen  = data_pool[data_addr];
-            uint16_t d_addr = data_pool[data_addr + 1] | (data_pool[data_addr + 2] << 8);
-            uint8_t tmp[257] = {0x0E, slen};
-            if (slen > 0 && d_addr + slen <= DATA_POOL_SIZE) memcpy(&tmp[2], &data_pool[d_addr], slen);
-            stack_push(tmp, 2 + slen); return;
-        }
-        if (tp == 18) {
-            uint16_t word_addr = data_pool[data_addr] | (data_pool[data_addr + 1] << 8);
-            if (word_addr != 0 && word_addr < dict_ptr) {
-                exec_word(word_addr);
+// === ЧТЕНИЕ ПО ИНДЕКСУ arr[i] ===
+if (tp == 15) {
+    uint8_t slen  = data_pool[data_addr];
+    uint16_t d_addr = data_pool[data_addr + 1] | (data_pool[data_addr + 2] << 8);
+    uint8_t tmp[257] = {0x0E, slen};
+    if (slen > 0 && d_addr + slen <= DATA_POOL_SIZE) memcpy(&tmp[2], &data_pool[d_addr], slen);
+    // 🔧 ФИКС: проверяем маркер операции на стеке
+    if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
+        uint8_t* top = &stack_mem[stack_ptr];
+        uint8_t op_len = top[1];
+        if (op_len >= 1 && op_len <= 2) {
+            char op[3] = {0};
+            memcpy(op, &top[2], op_len);
+            // Не сворачиваем, если это скобка
+            if (op[0] != '(' && op[0] != ')' && op[0] != '[' && op[0] != ']') {
+                apply_op(&tmp[1], slen, 0x0E, 0);
+                return;
             }
+        }
+    }
+    stack_push(tmp, 2 + slen);
+    return;
+}
+if (tp == 18) {
+    uint16_t word_addr = data_pool[data_addr] | (data_pool[data_addr + 1] << 8);
+    if (word_addr != 0 && word_addr < dict_ptr) {
+        exec_word(word_addr);
+    }
+    return;
+}
+uint8_t res[8]; res[0] = tp;
+memcpy(&res[1], &data_pool[data_addr], esz);
+// 🔧 ФИКС: проверяем маркер операции на стеке
+if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
+    uint8_t* top = &stack_mem[stack_ptr];
+    uint8_t op_len = top[1];
+    if (op_len >= 1 && op_len <= 2) {
+        char op[3] = {0};
+        memcpy(op, &top[2], op_len);
+        // Не сворачиваем, если это скобка
+        if (op[0] != '(' && op[0] != ')' && op[0] != '[' && op[0] != ']') {
+            apply_op(&res[1], esz, tp, 0);
             return;
         }
-        uint8_t res[8]; res[0] = tp;
-        memcpy(&res[1], &data_pool[data_addr], esz);
-        stack_push(res, 1 + esz);
-        return;
+    }
+}
+stack_push(res, 1 + esz);
+return;
     }
 
-// 🔑 5. Скалярные операции и присваивания (=, +=, -= и т.д.)
-mark_dirty(addr);
-// Передаём адрес переменной (тег 0x12), чтобы apply_op знала, что это L-value
-uint8_t addr_payload[2] = { (uint8_t)(addr & 0xFF), (uint8_t)(addr >> 8) };
-apply_op(addr_payload, 2, 0x12, val_start + 1);
+    // 🔑 5. Скалярные операции и присваивания (=, +=, -= и т.д.)
+    mark_dirty(addr);
+    uint8_t addr_payload[2] = { (uint8_t)(addr & 0xFF), (uint8_t)(addr >> 8) };
+    
+    // 🔧 ФИКС: Проверяем маркер перед вызовом apply_op (как сделано для arr[i])
+    bool can_apply = false;
+    if (!stack_is_empty() && stack_mem[stack_ptr] == 0x0C) {
+        uint8_t* top = &stack_mem[stack_ptr];
+        uint8_t op_len = top[1];
+        if (op_len >= 1 && op_len <= 2) {
+            char op[3] = {0};
+            memcpy(op, &top[2], op_len);
+            // Если это НЕ скобка, разрешаем apply_op свернуть выражение
+            if (op[0] != '(' && op[0] != ')' && op[0] != '[' && op[0] != ']') {
+                can_apply = true;
+            }
+        }
+    }
+    
+    if (can_apply) {
+        // Маркер есть и это оператор (+, -, / и т.д.) — сворачиваем
+        apply_op(addr_payload, 2, 0x12, val_start + 1);
+    } else {
+        // Маркера нет или это скобка ')' — просто кладём значение переменной на стек
+        stack_push(&dict_pool[val_start], val_size);
+    }
 }
+
 
 void printRawValue(const uint8_t* buf) {
     if (!buf) return;
@@ -2433,56 +2517,65 @@ static void create_self_address_word(const char* name) {
   create_internal_word(name_buf, body, 1, 0x02, wordNop);
 }
 void word_cont() {
-  // 1. Захватываем имя контекста из потока токенов (R2L: предыдущий токен в тексте)
-  int name_idx = g_tok_idx - 1;
-  if (name_idx < 0) {
-    currentOutput->println("cont: укажите имя контекста");
-    return;
-  }
-
-  uint8_t nlen = g_tok_len[name_idx];
-  if (nlen == 0 || nlen > 63) {
-    currentOutput->println("cont: недопустимая длина имени");
-    return;
-  }
-
-  char name[64];
-  memcpy(name, g_tok_start[name_idx], nlen);
-  name[nlen] = '\0';
-
-  // 2. Ищем контекст в словаре
-  uint16_t addr = dict_find(name);
-  if (addr != 0xFFFF) {
-    // Контекст уже существует — просто переключаемся
-    uint8_t flags = dict_pool[addr + 4 + nlen];
-    if (flags == 0x0C) {
-      uint16_t body_start = addr + 5 + nlen;
-      if (body_start < dict_ptr && dict_pool[body_start] == 0x03) {
-        currentContext = dict_pool[body_start + 1];
-      }
+    // 1. Захватываем имя контекста из потока токенов (R2L: предыдущий токен в тексте)
+    int name_idx = g_tok_idx - 1;
+    if (name_idx < 0) {
+        currentOutput->println("cont: укажите имя контекста");
+        return;
     }
-  } else {
-    // 3. Контекста нет — создаём новый
-    uint8_t body[2] = {0x03, g_next_ctx};
+    uint8_t nlen = g_tok_len[name_idx];
+    if (nlen == 0 || nlen > 63) {
+        currentOutput->println("cont: недопустимая длина имени");
+        return;
+    }
+    char name[64];
+    memcpy(name, g_tok_start[name_idx], nlen);
+    name[nlen] = '\0';
     
-    // Временно кладём NAME на стек для create_internal_word
-    uint8_t name_buf[65];
-    name_buf[0] = 0x0D;
-    name_buf[1] = nlen;
-    memcpy(&name_buf[2], name, nlen);
-    stack_push(name_buf, 2 + nlen);
-
-    create_internal_word(&stack_mem[stack_ptr], body, 2, 0x0C, exec_context_word);
-    stack_ptr += 2 + nlen; // Снимаем NAME со стека
-
-    currentContext = g_next_ctx;
-    g_next_ctx++;
-  }
-
-  // 4. Пропускаем токен имени в R2L-цикле (как в cord/body/as)
-  g_tok_idx -= 1;
+    // 🔑 СПЕЦИАЛЬНЫЙ СЛУЧАЙ: main
+    if (strcmp(name, "main") == 0) {
+        currentContext = 0;
+        g_tok_idx -= 1;
+        return;
+    }
+    
+    // 2. Ищем контекст в словаре
+    uint16_t addr = dict_find(name);
+    if (addr != 0xFFFF) {
+        // Контекст уже существует — просто переключаемся
+        uint8_t flags = dict_pool[addr + 4 + nlen];
+        if (flags == 0x0C) {
+            uint16_t body_start = addr + 5 + nlen;
+            if (body_start < dict_ptr && dict_pool[body_start] == 0x03) {
+                currentContext = dict_pool[body_start + 1];
+            }
+        }
+    } else {
+        // 3. Контекста нет — создаём новый
+        uint8_t parent_ctx = currentContext;  // ← СОХРАНЯЕМ текущего родителя
+        uint8_t body[2] = {0x03, g_next_ctx};
+        
+        // Временно кладём NAME на стек для create_internal_word
+        uint8_t name_buf[65];
+        name_buf[0] = 0x0D;
+        name_buf[1] = nlen;
+        memcpy(&name_buf[2], name, nlen);
+        stack_push(name_buf, 2 + nlen);
+        create_internal_word(&stack_mem[stack_ptr], body, 2, 0x0C, exec_context_word);
+        stack_ptr += 2 + nlen;
+        
+        // ← ИСПРАВЛЕНИЕ: записываем родителя в поле ctx нового контекста
+        if (dict_last != 0xFFFF) {
+            uint8_t new_nlen = dict_pool[dict_last + 2];
+            dict_pool[dict_last + 3 + new_nlen] = parent_ctx;
+        }
+        currentContext = g_next_ctx;
+        g_next_ctx++;
+    }
+    
+    // 4. Пропускаем токен имени в R2L-цикле (как в cord/body/as)
+    g_tok_idx -= 1;
 }
-
 
 void print_context() {
   if (currentContext == 0) {
@@ -2852,40 +2945,109 @@ void wordLit() {
     stack_push(lit_ptr, sz);
   }
 }
-void word_words() {
-  uint16_t p = 0;
-  uint8_t line_pos = 0;
-  bool any_printed = false;
-  while (p < dict_ptr) {
-    uint16_t next = dict_pool[p] | (dict_pool[p + 1] << 8);
-    uint8_t nlen = dict_pool[p + 2];
-    uint8_t ctx = dict_pool[p + 3 + nlen];
-    uint8_t flags = dict_pool[p + 4 + nlen];
-    // Фильтр по текущему контексту
-    if (ctx == currentContext) {
-      // Проверка: является ли слово определением контекста
-      bool is_ctx_def = false;
-      if (flags == 0x0C) {
-        uint16_t body = p + 5 + nlen;
-        if (body < dict_ptr && dict_pool[body] == 0x03) is_ctx_def = true;
-      }
-      uint8_t word_len = nlen + 1 + (is_ctx_def ? 1 : 0); // +1 за символ ▸
-      // Перенос строки при лимите 64 символа
-      if (line_pos > 0 && line_pos + word_len > 64) {
-        currentOutput->println();
-        line_pos = 0;
-      }
-      if (is_ctx_def) currentOutput->print("▸");
-      currentOutput->write(&dict_pool[p + 3], nlen);
-      currentOutput->print(' ');
-      line_pos += word_len;
-      any_printed = true;
+// 🔹 Вспомогательная: печатает "▸ имя_контекста" по его ID (только для режима all)
+static void print_ctx_header(uint8_t ctx_id) {
+    currentOutput->println();
+    if (ctx_id == 0) {
+        currentOutput->println("▸ main");
+        return;
     }
-    if (next == 0) break;
-    p = next;
-  }
-  if (any_printed) currentOutput->println();
+    uint16_t cp = 0;
+    while (cp < dict_ptr) {
+        uint16_t cnext = dict_pool[cp] | (dict_pool[cp + 1] << 8);
+        uint8_t cnlen  = dict_pool[cp + 2];
+        uint8_t cflags = dict_pool[cp + 4 + cnlen];
+        if (cflags == 0x0C) {
+            uint16_t cbody = cp + 5 + cnlen;
+            if (cbody < dict_ptr && dict_pool[cbody] == 0x03) {
+                uint8_t stored_ctx = dict_pool[cbody + 1];
+                if (stored_ctx == ctx_id) {
+                    currentOutput->print("▸ ");
+                    currentOutput->write(&dict_pool[cp + 3], cnlen);
+                    currentOutput->println();
+                    return;
+                }
+            }
+        }
+        if (cnext == 0) break;
+        cp = cnext;
+    }
+    currentOutput->printf("▸ ctx_%u\n", ctx_id);
 }
+
+// === ЕДИНОЕ ЯДРО: вывод списка слов ===
+// filter_by_context = true  → только текущий контекст (слово words)
+// filter_by_context = false → все слова системы (слово all)
+static void words_core(bool filter_by_context) {
+    uint16_t p = 0;
+    uint8_t line_pos = 0;
+    bool any_printed = false;
+    uint8_t last_printed_ctx = 255;
+
+    while (p < dict_ptr) {
+        uint16_t next = dict_pool[p] | (dict_pool[p + 1] << 8);
+        uint8_t nlen  = dict_pool[p + 2];
+        uint8_t ctx   = dict_pool[p + 3 + nlen];
+        uint8_t flags = dict_pool[p + 4 + nlen];
+
+        // Фильтр по текущему контексту (для words)
+        if (filter_by_context && ctx != currentContext) {
+            if (next == 0) break;
+            p = next;
+            continue;
+        }
+
+        // Проверка: это слово является определением контекста?
+        bool is_ctx_def = false;
+        if (flags == 0x0C) {
+            uint16_t body = p + 5 + nlen;
+            if (body < dict_ptr && dict_pool[body] == 0x03) is_ctx_def = true;
+        }
+
+        // === РЕЖИМ all: заголовок при смене контекста + пропуск самих определений ===
+        if (!filter_by_context) {
+            if (is_ctx_def) {
+                // В режиме all сами определения контекстов не выводим как слова —
+                // они уже показаны в заголовке группы.
+                if (next == 0) break;
+                p = next;
+                continue;
+            }
+            if (ctx != last_printed_ctx) {
+                if (line_pos > 0) {
+                    currentOutput->println();
+                    line_pos = 0;
+                }
+                print_ctx_header(ctx);
+                line_pos = 0;
+                last_printed_ctx = ctx;
+            }
+        }
+
+        // === Печать слова ===
+        // Если это определение контекста (в режиме words) — печатаем со значком ▸
+        uint8_t prefix_len = is_ctx_def ? 2 : 0;   // "▸ "
+        uint8_t word_len = prefix_len + nlen + 1;  // +1 за пробел
+
+        if (line_pos > 0 && line_pos + word_len > 64) {
+            currentOutput->println();
+            line_pos = 0;
+        }
+
+        if (is_ctx_def) currentOutput->print("▸");
+        currentOutput->write(&dict_pool[p + 3], nlen);
+        currentOutput->print(' ');
+        line_pos += word_len;
+        any_printed = true;
+
+        if (next == 0) break;
+        p = next;
+    }
+    if (any_printed && line_pos > 0) currentOutput->println();
+}
+// === ДВЕ ТОНКИЕ ОБЁРТКИ ===
+void word_words()     { words_core(true);  }
+void word_words_all() { words_core(false); }
 
 void word_cord() {
     // Забираем имя из потока (R2L — предыдущий токен)
@@ -3070,53 +3232,102 @@ void word_type() {
     }
     f.close();
 }
+// === ОБЩАЯ ФУНКЦИЯ ЗАГРУЗКИ ФАЙЛА ===
+// Возвращает true если файл успешно загружен, false при ошибке.
+// Все сообщения об ошибках печатает сама.
+static bool execute_file(const char* full_path) {
+    File f = FILESYSTEM.open(full_path, "r");
+    if (!f || f.isDirectory()) {
+        currentOutput->print(getMsg("load error: file not found or is directory: "));
+        currentOutput->println(full_path);
+        if (f) f.close();
+        return false;
+    }
+    
+    String line;
+    while (f.available()) {
+        line = f.readStringUntil('\n');
+        if (line.length() == 0) continue;
+        if (line.endsWith("\r")) line.remove(line.length() - 1);
+        process_tasks(true);
+        executeLine(line.c_str());
+    }
+    f.close();
+    return true;
+}
 void word_load() {
-if (stack_is_empty()) {
-currentOutput->println(getMsg("load error: stack empty"));
-return;
+    if (stack_is_empty()) {
+        currentOutput->println(getMsg("load error: stack empty"));
+        return;
+    }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0D && top[0] != 0x0E) {
+        currentOutput->println(getMsg("load error: expected filename"));
+        return;
+    }
+    uint16_t sz = elem_size(top);
+    uint8_t len = top[1];
+    if (len > 255) len = 255;
+    char fname[257];
+    memcpy(fname, &top[2], len);
+    fname[len] = '\0';
+    stack_ptr += sz;
+    
+    char full_path[256];
+    build_full_path(full_path, sizeof(full_path), fname);
+    execute_file(full_path);
 }
-uint8_t* top = &stack_mem[stack_ptr];
-uint8_t tag = top[0];
-if (tag != 0x0D && tag != 0x0E) {
-currentOutput->println(getMsg("load error: expected filename"));
-return;
-}
-uint16_t sz = elem_size(top);
-uint8_t len = top[1];
-if (len > 255) len = 255;
-char fname[257];
-memcpy(fname, &top[2], len);
-fname[len] = '\0';
-stack_ptr += sz;
-
-char full_path[64];
-size_t dlen = strlen(g_currentDir);
-size_t flen = strlen(fname);
-if (dlen + 1 + flen + 1 > sizeof(full_path)) {
-currentOutput->println(getMsg("load error: path too long (>63 chars)"));
-return;
-}
-if (dlen > 1) snprintf(full_path, sizeof(full_path), "%s/%s", g_currentDir, fname);
-else snprintf(full_path, sizeof(full_path), "/%s", fname);
-
-File f = FILESYSTEM.open(full_path, "r");
-if (!f || f.isDirectory()) {
-currentOutput->print(getMsg("load error: file not found or is directory: "));
-currentOutput->println(full_path);
-if (f) f.close();
-return;
-}
-
-String line;
-uint16_t lines_executed = 0;
-while (f.available()) {
-line = f.readStringUntil('\n');
-if (line.length() == 0) continue;
-if (line.endsWith("\r")) line.remove(line.length() - 1); process_tasks(true);
-executeLine(line.c_str());
-lines_executed++;
-}
-f.close();
+void word_load_query() {
+    // 1. БЕРЕМ ИМЯ ФАЙЛА СО СТЕКА (оно там, так как в R2L строка читается первой)
+    if (stack_is_empty()) {
+        currentOutput->println(getMsg("load?: filename expected"));
+        return;
+    }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0D && top[0] != 0x0E) {
+        currentOutput->println(getMsg("load?: filename must be string/name"));
+        return;
+    }
+    uint16_t sz = elem_size(top);
+    uint8_t fn_len = top[1];
+    if (fn_len > 255) fn_len = 255;
+    
+    char fname[257];
+    memcpy(fname, &top[2], fn_len);
+    fname[fn_len] = '\0';
+    stack_ptr += sz; // 🔑 Снимаем имя файла со стека
+    
+    // 2. СМОТРИМ СЛЕДУЮЩИЙ ТОКЕН в R2L-потоке (это имя слова, например "webconst")
+    int idx = g_tok_idx - 1;
+    if (idx < 0) {
+        currentOutput->println(getMsg("load?: word name expected"));
+        return;
+    }
+    uint8_t len = g_tok_len[idx];
+    if (len == 0 || len > 63) {
+        currentOutput->println(getMsg("load?: invalid word name"));
+        return;
+    }
+    char word_name[64];
+    memcpy(word_name, g_tok_start[idx], len);
+    word_name[len] = '\0';
+    
+    // 3. ПРОВЕРЯЕМ, есть ли слово в словаре
+    if (dict_find(word_name) != 0xFFFF) {
+        // Слово УЖЕ есть. Ничего не загружаем.
+        // 🔑 КЛЮЧЕВОЕ: пропускаем этот токен, чтобы он не исполнился как отдельная команда!
+        g_tok_idx -= 1;
+        return;
+    }
+    
+    // 4. Слова НЕТ. Загружаем файл.
+    char full_path[256];
+    build_full_path(full_path, sizeof(full_path), fname);
+    execute_file(full_path);
+    
+    // 🔑 КЛЮЧЕВОЕ: даже после загрузки мы должны пропустить токен имени, 
+    // так как он был аргументом для load?, а не самостоятельной командой.
+    g_tok_idx -= 1;
 }
 void word_save() {
   char full_path[256];
@@ -3453,7 +3664,38 @@ if (g_tok_idx + 1 < g_tok_count) {
         is_assign_attempt = true;
     }
 }
-
+// === ПЕРЕХВАТ name ===
+if (strcmp(token, "name") == 0) {
+    int prev_idx = g_tok_idx - 1;
+    if (prev_idx < 0) {
+        currentOutput->println("name: no word before");
+        return;
+    }
+    uint8_t plen = g_tok_len[prev_idx];
+    if (plen == 0 || plen > 63) {
+        currentOutput->println("name: invalid name");
+        return;
+    }
+    // Извлекаем имя предыдущего токена
+    char pname[64];
+    memcpy(pname, g_tok_start[prev_idx], plen);
+    pname[plen] = '\0';
+    // Проверяем, что это слово в словаре
+    uint16_t paddr = dict_find(pname);
+    if (paddr == 0xFFFF) {
+        currentOutput->print("name: not found: ");
+        currentOutput->println(pname);
+        return;
+    }
+    // Компилируем STRING-литерал [0x00 0x00] [0x0E] [len] [bytes...]
+    dict_pool[dict_ptr++] = 0x00; dict_pool[dict_ptr++] = 0x00;
+    dict_pool[dict_ptr++] = 0x0E;
+    dict_pool[dict_ptr++] = plen;
+    for (uint8_t i = 0; i < plen; i++) dict_pool[dict_ptr++] = pname[i];
+    // Пропускаем токен-источник в R2L-цикле
+    g_tok_idx -= 1;
+    return;
+}
 // === 5. ПОИСК В СЛОВАРЕ ===
 uint16_t addr = dict_find(token);
 
@@ -4026,172 +4268,181 @@ void delayMicrosecondsWord() {
 }
 
 
-// 🔹 ЕДИНАЯ ЯДРЕНАЯ ФУНКЦИЯ ЭКСПОРТА
-static void json_export_core(bool delta_mode) {
-  currentOutput->print('{');
-  bool first = true;
-  uint16_t p = 0;
-  while (p < dict_ptr) {
-    uint16_t next = dict_pool[p] | (dict_pool[p + 1] << 8);
-    uint8_t nlen  = dict_pool[p + 2];
-    uint8_t ctx   = dict_pool[p + 3 + nlen];
-    uint8_t flags = dict_pool[p + 4 + nlen];
-    
-    if (ctx != currentContext || (flags & 0x10)) {
-      if (next == 0) break; p = next; continue;
-    }
-    
-    bool is_var   = (flags & 0x02) != 0;
-    bool is_alias = (flags & 0x20) != 0;
-    bool is_chain = (flags & 0x40) != 0;
-    bool is_dirty = (flags & 0x80) != 0;
-    
-    // 🔹 ЕДИНЫЙ ФИЛЬТР: пропускаем всё, что не проходит по критериям
-    if (!is_var || is_alias || is_chain || (delta_mode && !is_dirty)) {
-      if (next == 0) break; p = next; continue;
-    }
-    
-    uint16_t body_start = p + 5 + nlen;
-    uint16_t end = next ? next : dict_ptr;
-    uint16_t val_size = (end - 4) - body_start;
-    
-    if (val_size == 0) {
-      if (next == 0) break;
-      p = next;
-      continue;
-    }
-    
-    uint8_t tag = dict_pool[body_start];
-    uint16_t data_ptr_addr = body_start;
-    
-    // 🔹 Алиасы на переменные уже отфильтрованы выше, но если цель нужна — берём её тело
-    if (is_alias && !is_var) {
-      uint16_t target = dict_pool[body_start] | (dict_pool[body_start + 1] << 8);
-      if (target < dict_ptr) {
-        uint8_t t_nlen = dict_pool[target + 2];
-        uint8_t t_flags = dict_pool[target + 4 + t_nlen];
-        if ((t_flags & 0x02) != 0) {
-          tag = dict_pool[target + 5 + t_nlen];
-          data_ptr_addr = target + 5 + t_nlen;
-        }
-      }
-    }
-    
-    if (!first) currentOutput->print(',');
-    first = false;
-    
-    // Печать имени
-    currentOutput->print('"');
-    for (uint8_t i = 0; i < nlen; i++) currentOutput->write(dict_pool[p + 3 + i]);
-    currentOutput->print("\":");
-    
-    // 🔹 ВЫВОД ЗНАЧЕНИЯ (идентично для обоих режимов)
-    if (tag == 17 || tag == 20) {
-      uint16_t base = dict_pool[data_ptr_addr + 1] | (dict_pool[data_ptr_addr + 2] << 8);
-      uint16_t len  = dict_pool[data_ptr_addr + 3] | (dict_pool[data_ptr_addr + 4] << 8);
-      uint8_t  el_tp = dict_pool[data_ptr_addr + 5];
-      
-      if (tag == 20) {
-        currentOutput->printf("[%u, %u, %u]", base, len, el_tp);
-      } else {
-        uint8_t esz = type_registry[el_tp].size;
-        currentOutput->print('[');
-        for (uint16_t i = 0; i < len; i++) {
-          if (i > 0) currentOutput->print(',');
-          uint16_t addr = base + i * esz;
-          if (addr + esz > DATA_POOL_SIZE) {
-            currentOutput->print("null");
+// 🔹 ЕДИНОЕ ЯДРО ЭКСПОРТА JSON
+// delta_mode = true  → только dirty-переменные (json>>)
+// recursive  = true  → рекурсивный обход дочерних контекстов (json*>)
+static void json_export_core(bool delta_mode, bool recursive) {
+    currentOutput->print('{');
+    bool first = true;
+
+    // === ШАГ 1: Печатаем переменные ТЕКУЩЕГО контекста ===
+    uint16_t p = 0;
+    while (p < dict_ptr) {
+        uint16_t next = dict_pool[p] | (dict_pool[p + 1] << 8);
+        uint8_t nlen  = dict_pool[p + 2];
+        uint8_t ctx   = dict_pool[p + 3 + nlen];
+        uint8_t flags = dict_pool[p + 4 + nlen];
+
+        // Фильтр: только наш контекст, только переменные
+        if (ctx != currentContext || (flags & 0x10)) {
+            if (next == 0) break;
+            p = next;
             continue;
-          }
-          if (el_tp == 15) {
-            uint8_t slen = data_pool[addr]; uint16_t d_addr = data_pool[addr + 1] | (data_pool[addr + 2] << 8);
-            if (slen == 0 || d_addr == 0 || d_addr + slen > DATA_POOL_SIZE) {
-              currentOutput->print("null");
-            } else {
-              currentOutput->print('"');
-              for (uint8_t j = 0; j < slen; j++) {
-                char c = data_pool[d_addr + j];
-                if (c == '"' || c == '\\') {
-                  currentOutput->print('\\');
-                  currentOutput->write(c);
-                } else if (c == '\n') currentOutput->print("\\n");
-                else if (c == '\r') currentOutput->print("\\r");
-                else if (c == '\t') currentOutput->print("\\t");
-                else currentOutput->write(c);
-              }
-              currentOutput->print('"');
+        }
+
+        bool is_var   = (flags & 0x02) != 0;
+        bool is_alias = (flags & 0x20) != 0;
+        bool is_chain = (flags & 0x40) != 0;
+        bool is_dirty = (flags & 0x80) != 0;
+        bool is_ctx   = (flags == 0x0C);  // ← это определение контекста, пропускаем
+
+        if (!is_var || is_alias || is_chain || is_ctx || (delta_mode && !is_dirty)) {
+            if (next == 0) break;
+            p = next;
+            continue;
+        }
+
+        uint16_t body_start = p + 5 + nlen;
+        uint16_t end = next ? next : dict_ptr;
+        uint16_t val_size = (end - 4) - body_start;
+        if (val_size == 0) {
+            if (next == 0) break;
+            p = next;
+            continue;
+        }
+
+        uint8_t tag = dict_pool[body_start];
+        uint16_t data_ptr_addr = body_start;
+
+        if (!first) currentOutput->print(',');
+        first = false;
+
+        // Имя переменной
+        currentOutput->print('"');
+        for (uint8_t i = 0; i < nlen; i++) currentOutput->write(dict_pool[p + 3 + i]);
+        currentOutput->print("\":");
+
+        // === ВЫВОД ЗНАЧЕНИЯ ===
+        if (tag == 17 || tag == 20) {
+            uint16_t base = dict_pool[data_ptr_addr + 1] | (dict_pool[data_ptr_addr + 2] << 8);
+            uint16_t len  = dict_pool[data_ptr_addr + 3] | (dict_pool[data_ptr_addr + 4] << 8);
+            uint8_t  el_tp = dict_pool[data_ptr_addr + 5];
+            uint8_t esz = type_registry[el_tp].size;
+            currentOutput->print('[');
+            for (uint16_t i = 0; i < len; i++) {
+                if (i > 0) currentOutput->print(',');
+                uint16_t addr = base + i * esz;
+                if (addr + esz > DATA_POOL_SIZE) { currentOutput->print("null"); continue; }
+                if (el_tp == 15) {
+                    uint8_t slen = data_pool[addr];
+                    uint16_t d_addr = data_pool[addr + 1] | (data_pool[addr + 2] << 8);
+                    if (slen == 0 || d_addr + slen > DATA_POOL_SIZE) {
+                        currentOutput->print("null");
+                    } else {
+                        currentOutput->print('"');
+                        for (uint8_t j = 0; j < slen; j++) {
+                            char c = data_pool[d_addr + j];
+                            if (c == '"' || c == '\\') currentOutput->print('\\');
+                            currentOutput->write(c);
+                        }
+                        currentOutput->print('"');
+                    }
+                } else if (el_tp == 11) {
+                    float f; memcpy(&f, &data_pool[addr], 4);
+                    currentOutput->printf("%.4g", f);
+                } else {
+                    int32_t val = decode_int_le(&data_pool[addr], esz, el_tp);
+                    if (is_signed_tag(el_tp)) currentOutput->printf("%ld", (long)val);
+                    else currentOutput->printf("%lu", (unsigned long)(uint32_t)val);
+                }
             }
-            continue;
-          }
-          if (el_tp == 11) {
-            float f; memcpy(&f, &data_pool[addr], 4);
-            currentOutput->printf("%.4g", f);
-          } else {
-            // ✅ ИСПОЛЬЗУЕМ ХЕЛПЕР decode_int_le
-            int32_t val = decode_int_le(&data_pool[addr], esz, el_tp);
-            if (is_signed_tag(el_tp)) currentOutput->printf("%ld", (long)val);
-            else currentOutput->printf("%lu", (unsigned long)(uint32_t)val);
-          }
+            currentOutput->print(']');
         }
-        currentOutput->print(']');
-      }
+        else if (tag == 0 || tag == 1) {
+            currentOutput->print(tag == 1 ? "true" : "false");
+        }
+        else if (tag >= 4 && tag <= 11) {
+            if (tag == 11) {
+                float f; memcpy(&f, &dict_pool[data_ptr_addr + 1], 4);
+                currentOutput->printf("%.4g", f);
+            } else {
+                int32_t val = decode_int_le(&dict_pool[data_ptr_addr + 1], val_size - 1, tag);
+                if (is_signed_tag(tag)) currentOutput->printf("%ld", (long)val);
+                else currentOutput->printf("%lu", (unsigned long)(uint32_t)val);
+            }
+        }
+        else if (tag == 0x0E || tag == 15) {
+            uint16_t slen; const uint8_t* src;
+            if (tag == 0x0E) {
+                slen = dict_pool[data_ptr_addr + 1];
+                src = &dict_pool[data_ptr_addr + 2];
+            } else {
+                slen = dict_pool[data_ptr_addr + 1];
+                uint16_t a = dict_pool[data_ptr_addr + 2] | (dict_pool[data_ptr_addr + 3] << 8);
+                src = &data_pool[a];
+            }
+            currentOutput->print('"');
+            for (uint16_t i = 0; i < slen; i++) {
+                char c = src[i];
+                if (c == '"' || c == '\\') currentOutput->print('\\');
+                currentOutput->write(c);
+            }
+            currentOutput->print('"');
+        }
+        else {
+            currentOutput->print("null");
+        }
+
+        // В delta-режиме сбрасываем флаг dirty
+        if (delta_mode) dict_pool[p + 4 + nlen] &= ~0x80;
+
+        if (next == 0) break;
+        p = next;
     }
-    else if (tag == 0 || tag == 1) {
-      currentOutput->print(tag == 1 ? "true" : "false");
+
+    // === ШАГ 2: РЕКУРСИВНЫЙ ОБХОД ДОЧЕРНИХ КОНТЕКСТОВ ===
+    if (recursive) {
+        p = 0;
+        while (p < dict_ptr) {
+            uint16_t next = dict_pool[p] | (dict_pool[p + 1] << 8);
+            uint8_t nlen  = dict_pool[p + 2];
+            uint8_t ctx   = dict_pool[p + 3 + nlen];   // ← ПОЛЕ РОДИТЕЛЯ
+            uint8_t flags = dict_pool[p + 4 + nlen];
+
+            // Нашли определение контекста, чей родитель = текущий контекст
+            if (flags == 0x0C && ctx == currentContext) {
+                uint16_t body_start = p + 5 + nlen;
+                if (body_start + 2 <= dict_ptr && dict_pool[body_start] == 0x03) {
+                    uint8_t child_ctx_id = dict_pool[body_start + 1];
+
+                    if (!first) currentOutput->print(',');
+                    first = false;
+
+                    // Имя дочернего контекста как ключ JSON
+                    currentOutput->print('"');
+                    for (uint8_t i = 0; i < nlen; i++) currentOutput->write(dict_pool[p + 3 + i]);
+                    currentOutput->print("\":");
+
+                    // 🔑 РЕКУРСИВНЫЙ ВЫЗОВ с временным переключением контекста
+                    uint8_t saved_ctx = currentContext;
+                    currentContext = child_ctx_id;
+                    json_export_core(delta_mode, true);
+                    currentContext = saved_ctx;
+                }
+            }
+
+            if (next == 0) break;
+            p = next;
+        }
     }
-    else if (tag >= 4 && tag <= 11) {
-      if (tag == 11) {
-        float f;
-        memcpy(&f, &dict_pool[data_ptr_addr + 1], 4);
-        currentOutput->printf("%.4g", f);
-      } else {
-        // ✅ ИСПОЛЬЗУЕМ ХЕЛПЕР decode_int_le
-        int32_t val = decode_int_le(&dict_pool[data_ptr_addr + 1], val_size - 1, tag);
-        if (is_signed_tag(tag)) currentOutput->printf("%ld", (long)val);
-        else currentOutput->printf("%lu", (unsigned long)(uint32_t)val);
-      }
-    }
-    else if (tag == 0x0E || tag == 15) {
-      uint16_t slen; const uint8_t* src;
-      if (tag == 0x0E) {
-        slen = dict_pool[data_ptr_addr + 1];
-        src = &dict_pool[data_ptr_addr + 2];
-      } else {
-        slen = dict_pool[data_ptr_addr + 1];
-        uint16_t a = dict_pool[data_ptr_addr + 2] | (dict_pool[data_ptr_addr + 3] << 8);
-        src = &data_pool[a];
-      }
-      currentOutput->print('"');
-      for (uint8_t i = 0; i < slen; i++) {
-        char c = src[i];
-        if (c == '"' || c == '\\') {
-          currentOutput->print('\\');
-          currentOutput->write(c);
-        } else if (c == '\n') currentOutput->print("\\n");
-        else if (c == '\r') currentOutput->print("\\r");
-        else if (c == '\t') currentOutput->print("\\t");
-        else currentOutput->write(c);
-      }
-      currentOutput->print('"');
-    }
-    else {
-      currentOutput->print("null");
-    }
-    
-    // 🔹 В DELTA-РЕЖИМЕ сбрасываем флаг после успешной отправки
-    if (delta_mode) dict_pool[p + 4 + nlen] &= ~0x80;
-    
-    if (next == 0) break; p = next;
-  }
-  currentOutput->print('}');
+
+    currentOutput->print('}');
 }
+
 // 🔹 ТОНКИЕ ОБЁРТКИ (интерфейсы намерения)
-void word_json_export() {
-  json_export_core(false);
-}
-void word_json_delta()  {
-  json_export_core(true);
-}
+void word_json_export()       { json_export_core(false, false); }  // json>
+void word_json_delta()        { json_export_core(true,  false); }  // json>>
+void word_json_star_export()  { json_export_core(false, true);  }  // json*>
 inline void mark_dirty(uint16_t var_addr) {
   if (var_addr < dict_ptr) {
     dict_pool[var_addr + 4 + dict_pool[var_addr + 2]] |= 0x80;
@@ -4432,37 +4683,41 @@ void word_body() {
 }
 static File g_outFile;
 void word_out_file() {
-  if (stack_is_empty()) {
-    currentOutput->println(getMsg("out>file: filename expected"));
-    return;
-  }
-  uint8_t* top = &stack_mem[stack_ptr];
-  uint8_t tag = top[0];
-  // 🔹 Принимаем и NAME (0x0D), и STRING (0x0E)
-  if (tag != 0x0D && tag != 0x0E) {
-    currentOutput->println(getMsg("out>file: NAME or STRING expected"));
-    return;
-  }
-  uint8_t len = top[1];
-  if (len > 255) len = 255;
-  char fname[257];
-  memcpy(fname, &top[2], len);
-  fname[len] = '\0';
-  stack_ptr += elem_size(top); // Снимаем со стека
-  if (g_outFile) g_outFile.close(); // Закрываем предыдущий файл
-  char full_path[256];
-  if (strlen(g_currentDir) > 1) snprintf(full_path, sizeof(full_path), "%s/%s", g_currentDir, fname);
-  else snprintf(full_path, sizeof(full_path), "/%s", fname);
-  g_outFile = FILESYSTEM.open(full_path, "w");
-  if (g_outFile) {
-    currentOutput = &g_outFile; // 🔀 Переключаем весь вывод в файл
-    currentOutput->print(getMsg("out>file: OK -> "));
-    currentOutput->println(full_path);
-  } else {
-    currentOutput = &Serial; // Фолбэк при ошибке открытия
-    Serial.print(getMsg("out>file: FAILED -> "));
-    Serial.println(full_path);
-  }
+    if (stack_is_empty()) {
+        currentOutput->println(getMsg("out>file: filename expected"));
+        return;
+    }
+    uint8_t* top = &stack_mem[stack_ptr];
+    uint8_t tag = top[0];
+    if (tag != 0x0D && tag != 0x0E) {
+        currentOutput->println(getMsg("out>file: NAME or STRING expected"));
+        return;
+    }
+    uint8_t len = top[1];
+    if (len > 255) len = 255;
+    char fname[257];
+    memcpy(fname, &top[2], len);
+    fname[len] = '\0';
+    stack_ptr += elem_size(top); // Снимаем со стека
+    
+    if (g_outFile) g_outFile.close(); // Закрываем предыдущий файл
+    
+    char full_path[256];
+    if (strlen(g_currentDir) > 1) {
+        snprintf(full_path, sizeof(full_path), "%s/%s", g_currentDir, fname); // ✅ БЕЗ пробела
+    } else {
+        snprintf(full_path, sizeof(full_path), "/%s", fname); // ✅ БЕЗ пробела
+    }
+    
+    g_outFile = FILESYSTEM.open(full_path, "w"); // ✅ БЕЗ пробела в "w"
+    
+    if (g_outFile) {
+        currentOutput = &g_outFile; // 🔀 Переключаем весь вывод в файл
+    } else {
+        currentOutput = &Serial; // Фолбэк при ошибке открытия
+        Serial.print(getMsg("out>file: FAILED -> "));
+        Serial.println(full_path);
+    }
 }
 void word_out_serial() {
     if (g_outFile) g_outFile.close();
@@ -5485,13 +5740,15 @@ blk_depth = 0;
 void word_help() {
     // 1. Захват имени слова (R2L)
     int idx = g_tok_idx - 1;
-    if (idx < 0) {
-        currentOutput->println("?: укажите слово для справки");
-        return;
-    }
+if (idx < 0) {
+    currentOutput->println(getMsg("?: word_name ? — shows help for a word"));
+    currentOutput->println(getMsg("?: It explains what the word does and how it works"));
+    currentOutput->println(getMsg("?: To see a list of available words, type: words"));
+    return;
+}
     uint8_t len = g_tok_len[idx];
     if (len == 0 || len > 63) {
-        currentOutput->println("?: недопустимое имя слова");
+        currentOutput->println(getMsg("?: invalid word name"));
         return;
     }
     char tname[64];
@@ -5502,10 +5759,11 @@ void word_help() {
     // 2. Поиск слова в словаре
     uint16_t addr = dict_find(tname);
     if (addr == 0xFFFF) {
-        currentOutput->print("?: слово '"); currentOutput->print(tname); currentOutput->println("' не найдено");
+        char msg[128];
+        snprintf(msg, sizeof(msg), getMsg("?: word '%s' not found"), tname);
+        currentOutput->println(msg);
         return;
     }
-
     if (addr + 4 >= dict_ptr) return;
     uint8_t nlen = dict_pool[addr + 2];
     if (nlen > 63 || addr + 3 + nlen >= dict_ptr) return;
@@ -5563,36 +5821,32 @@ void word_help() {
     char path[64];
     snprintf(path, sizeof(path), "/help/%s/%s.txt", lang_code, ctx_name);
     File f = FILESYSTEM.open(path, "r");
-    
     if (!f) {
         snprintf(path, sizeof(path), "/help/en/%s.txt", ctx_name);
         f = FILESYSTEM.open(path, "r");
         if (!f) {
-            currentOutput->print("?: нет справки для '"); currentOutput->print(tname);
-            currentOutput->print("' (контекст: "); currentOutput->print(ctx_name); currentOutput->println("). Обучи меня!");
+            char msg[128];
+            snprintf(msg, sizeof(msg), getMsg("?: no help for '%s' (context: %s). Teach me!"), tname, ctx_name);
+            currentOutput->println(msg);
             return;
         }
     }
 
-    // 6. 🔑 ИСПРАВЛЕННОЕ чтение с увеличенным буфером и защитой UTF-8
+    // 6. Чтение файла
     char marker[66];
     snprintf(marker, sizeof(marker), "## %s", tname);
     size_t marker_len = strlen(marker);
-
     bool found = false;
-    uint8_t buf[128]; // Увеличенный буфер чтения
+    uint8_t buf[128];
     size_t n;
-    
-    char line[512]; // Увеличенный буфер строки
+    char line[512];
     int line_idx = 0;
 
     while ((n = f.read(buf, sizeof(buf))) > 0) {
         for (size_t i = 0; i < n; i++) {
             char c = buf[i];
-            
             if (c == '\n' || line_idx >= 511) {
                 line[line_idx] = '\0';
-                
                 if (!found) {
                     if ((size_t)line_idx >= marker_len && strncmp(line, marker, marker_len) == 0) {
                         found = true;
@@ -5613,37 +5867,41 @@ void word_help() {
             }
         }
     }
-    
-    // Обработка последней строки без \n
-    if (line_idx > 0) {
+
+    if (line_idx > 0 && found) {
         line[line_idx] = '\0';
-        if (found) {
-            currentOutput->println(line);
-        }
+        currentOutput->println(line);
     }
-    
     f.close();
 
     if (!found) {
-        currentOutput->print("?: описание '"); currentOutput->print(tname); currentOutput->println("' не найдено в файле. Обучи меня!");
+        char msg[128];
+        snprintf(msg, sizeof(msg), getMsg("?: description for '%s' not found in file. Teach me!"), tname);
+        currentOutput->println(msg);
     }
 }
-
 // === ДВУХУРОВНЕВАЯ СИСТЕМА СООБЩЕНИЙ ===
 // Уровень 1: Файл /lang/{lang}.txt (пользователь редактирует)
-// Уровень 2: Английские строки в коде (fallback)
+// Уровень 2: Английские строки в коде (ключ = fallback)
+
+// === КОНФИГУРАЦИЯ СИСТЕМЫ СООБЩЕНИЙ ===
+#define MSG_CACHE_SIZE       16     // Максимум кэшированных сообщений
+#define MSG_VALUE_MAX        192    // Макс. длина перевода (96 кириллических символов в UTF-8)
+#define MSG_KEY_PREFIX_MAX   128    // Макс. длина ключа с "=" на конце
+#define MSG_LANG_CODE_MAX    8      // Макс. длина кода языка ("ru", "en", ...)
+#define MSG_PATH_MAX         32     // Макс. длина пути "/lang/XX.txt"
 
 struct MsgCacheEntry {
-  uint32_t key_hash;
-  char value[64];
+    uint32_t key_hash;
+    char value[MSG_VALUE_MAX];
 };
-static MsgCacheEntry g_msg_cache[16];
+static MsgCacheEntry g_msg_cache[MSG_CACHE_SIZE];
 static uint8_t g_msg_cache_count = 0;
 
 static uint32_t hash_key(const char* key) {
-  uint32_t h = 0;
-  while (*key) { h = (h * 31) + *key++; }
-  return h;
+    uint32_t h = 0;
+    while (*key) { h = (h * 31) + *key++; }
+    return h;
 }
 
 static const char* getMsg(const char* key) {
@@ -5657,16 +5915,16 @@ static const char* getMsg(const char* key) {
     }
     
     // 2. Читаем язык из переменной "lang"
-    char lang_code[8] = "ru";
+    char lang_code[MSG_LANG_CODE_MAX] = "ru";
     uint16_t lang_addr = dict_find("lang");
     if (lang_addr != 0xFFFF) {
         uint8_t ln_len = dict_pool[lang_addr + 2];
-        if (ln_len > 0 && ln_len < 8) {
+        if (ln_len > 0 && ln_len < MSG_LANG_CODE_MAX) {
             uint16_t body = lang_addr + 5 + ln_len;
             if (dict_pool[body] == 15) {  // $STRING
                 uint8_t slen = dict_pool[body + 1];
                 uint16_t d_addr = dict_pool[body + 2] | (dict_pool[body + 3] << 8);
-                if (slen < 8 && d_addr + slen <= DATA_POOL_SIZE) {
+                if (slen < MSG_LANG_CODE_MAX && d_addr + slen <= DATA_POOL_SIZE) {
                     memcpy(lang_code, &data_pool[d_addr], slen);
                     lang_code[slen] = '\0';
                 }
@@ -5675,15 +5933,16 @@ static const char* getMsg(const char* key) {
     }
     
     // 3. Открываем файл /lang/{lang}.txt
-    char path[32];
+    char path[MSG_PATH_MAX];
     snprintf(path, sizeof(path), "/lang/%s.txt", lang_code);
     File f = FILESYSTEM.open(path, "r");
     if (!f) return key;  // Файла нет → возвращаем сам ключ
     
     // 4. Ищем ключ в файле
-    char key_prefix[66];
+    char key_prefix[MSG_KEY_PREFIX_MAX];
     snprintf(key_prefix, sizeof(key_prefix), "%s=", key);
     size_t prefix_len = strlen(key_prefix);
+    
     while (f.available()) {
         String s = f.readStringUntil('\n');
         if (s.endsWith("\r")) s.remove(s.length() - 1);
@@ -5691,8 +5950,8 @@ static const char* getMsg(const char* key) {
         if (s.startsWith(key_prefix)) {
             const char* value = s.c_str() + prefix_len;
             size_t vlen = strlen(value);
-            if (vlen < 64) {
-                if (g_msg_cache_count < 16) {
+            if (vlen < MSG_VALUE_MAX) {
+                if (g_msg_cache_count < MSG_CACHE_SIZE) {
                     g_msg_cache[g_msg_cache_count].key_hash = h;
                     strcpy(g_msg_cache[g_msg_cache_count].value, value);
                     g_msg_cache_count++;
@@ -5705,8 +5964,6 @@ static const char* getMsg(const char* key) {
     f.close();
     return key;  // Ключ не найден → возвращаем сам ключ
 }
-
-
 
 void word_open() {
   // 🔑 СОХРАНЯЕМ состояние стека для отката при ошибке
@@ -6589,6 +6846,259 @@ void word_name() {
     // 4. Пропускаем токен имени в R2L-цикле
     g_tok_idx -= 1;
 }
+void caseConvertFunc() {
+  uint8_t direction;  // 0 = toLower, 1 = toUpper
+  if (!popUInt8(direction) || direction > 1) return;
+  
+  if (stack_is_empty()) return;
+  uint8_t* top = &stack_mem[stack_ptr];
+  uint8_t tag = top[0];
+  
+  uint8_t* data = nullptr;
+  uint16_t len = 0;
+  
+  // Определяем где лежат данные
+  if (tag == 0x0E || tag == 0x0D) {          // STRING / NAME
+    data = &top[2];
+    len = top[1];
+  } else if (tag == 15) {                    // $STRING
+    len = top[1];
+    uint16_t a = top[2] | (top[3] << 8);
+    if (a + len <= DATA_POOL_SIZE) data = &data_pool[a];
+  } else {
+    return;  // не текстовый тип
+  }
+  
+  if (!data || len == 0) return;
+  
+  // Модифицируем напрямую in-place
+  for (uint16_t i = 0; i < len; i++) {
+    if (direction == 1) {  // toUpper
+      if (data[i] >= 'a' && data[i] <= 'z') {
+        data[i] -= 32;
+      }
+      else if (i + 1 < len && data[i] == 0xD0 && data[i+1] >= 0xB0 && data[i+1] <= 0xBF) {
+        data[i+1] -= 0x20;
+        i++;
+      }
+      else if (i + 1 < len && data[i] == 0xD1 && data[i+1] >= 0x80 && data[i+1] <= 0x8F) {
+        data[i] = 0xD0;
+        data[i+1] += 0x20;
+        i++;
+      }
+      else if (i + 1 < len && data[i] == 0xD1 && data[i+1] == 0x91) {
+        data[i] = 0xD0;
+        data[i+1] = 0x81;
+        i++;
+      }
+    } else {  // toLower
+      if (data[i] >= 'A' && data[i] <= 'Z') {
+        data[i] += 32;
+      }
+      else if (i + 1 < len && data[i] == 0xD0 && data[i+1] >= 0x90 && data[i+1] <= 0x9F) {
+        data[i+1] += 0x20;
+        i++;
+      }
+      else if (i + 1 < len && data[i] == 0xD0 && data[i+1] >= 0xA0 && data[i+1] <= 0xAF) {
+        data[i] = 0xD1;
+        data[i+1] -= 0x20;
+        i++;
+      }
+      else if (i + 1 < len && data[i] == 0xD0 && data[i+1] == 0x81) {
+        data[i] = 0xD1;
+        data[i+1] = 0x91;
+        i++;
+      }
+    }
+  }
+}
+// В net.ino добавить:
+void word_out_save() {
+    uint32_t ptr = (uint32_t)(uintptr_t)currentOutput;
+    pushUInt32(ptr);
+}
+
+void word_out_restore() {
+    uint32_t ptr = 0;
+    if (!popUInt32(ptr)) return;
+
+    // 🔑 КРИТИЧЕСКИЙ ФИКС: Если вывод был в файл, его ОБЯЗАТЕЛЬНО нужно закрыть!
+    // Это гарантирует, что все данные из буфера запишутся на диск.
+    if (g_outFile) {
+        g_outFile.close();
+    }
+
+    // Также сбрасываем сетевые потоки на всякий случай
+    g_stream.detach();
+
+    currentOutput = (Print*)(uintptr_t)ptr;
+}
+void sha1Func() {
+    // R2L: приёмник данные sha1
+    // Стек (сверху вниз): приёмник (ARRAY u8 >= 20), данные
+    
+    // 1. Снимаем приёмник
+    if (stack_is_empty()) { pushBool(false); return; }
+    uint8_t* dst = &stack_mem[stack_ptr];
+    if ((dst[0] != 17 && dst[0] != 20) || elem_size(dst) != 6) {
+        stack_ptr += elem_size(dst); pushBool(false); return;
+    }
+    uint16_t dst_base = dst[1] | (dst[2] << 8);
+    uint16_t dst_len  = dst[3] | (dst[4] << 8);
+    uint8_t  dst_esz  = type_registry[dst[5]].size;
+    uint32_t dst_total = (uint32_t)dst_len * dst_esz;
+    stack_ptr += 6;
+    
+    if (dst_total < 20 || dst_base + 20 > DATA_POOL_SIZE) {
+        pushBool(false); return;
+    }
+    
+    // 2. Снимаем данные
+    if (stack_is_empty()) { pushBool(false); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    const uint8_t* data = nullptr;
+    uint16_t len = 0;
+    
+    if (top[0] == 0x0E || top[0] == 0x0D) {
+        data = &top[2]; len = top[1];
+    } else if (top[0] == 15) {
+        len = top[1];
+        uint16_t a = top[2] | (top[3] << 8);
+        if (a + len <= DATA_POOL_SIZE) data = &data_pool[a];
+    } else if (top[0] == 17 || top[0] == 20) {
+        uint16_t base = top[1] | (top[2] << 8);
+        uint16_t count = top[3] | (top[4] << 8);
+        uint8_t esz = type_registry[top[5]].size;
+        len = count * esz;
+        if (base + len <= DATA_POOL_SIZE) data = &data_pool[base];
+    }
+    stack_ptr += elem_size(top);
+    
+    if (!data || len == 0) { pushBool(false); return; }
+    
+    // 3. SHA-1 ПРЯМО В ПРИЁМНИК — data_ptr НЕ МЕНЯЕТСЯ!
+    mbedtls_sha1_context ctx;
+    mbedtls_sha1_init(&ctx);
+    mbedtls_sha1_starts(&ctx);
+    mbedtls_sha1_update(&ctx, data, len);
+    mbedtls_sha1_finish(&ctx, &data_pool[dst_base]);
+    mbedtls_sha1_free(&ctx);
+    
+    pushBool(true);
+}
+// ============================================================
+// === uuid5 : данные → STRING "xxxxxxxx-xxxx-5xxx-yxxx-..." ===
+// SHA-1 буфер — локальный на C-стеке, приёмник НЕ нужен.
+// На выходе: STRING (тег 0x0E) длиной 36 байт прямо на стеке HDL.
+// ============================================================
+void uuid5Func() {
+    if (stack_is_empty()) { pushStringRaw(""); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+
+    // 1. Извлекаем сырые байты из элемента на стеке
+    const uint8_t* data = nullptr;
+    uint16_t len = 0;
+
+    if (top[0] == 0x0E || top[0] == 0x0D) {          // STRING / NAME
+        data = &top[2];
+        len = top[1];
+    } else if (top[0] == 15) {                       // $STRING
+        len = top[1];
+        uint16_t a = top[2] | (top[3] << 8);
+        if (a + len <= DATA_POOL_SIZE) data = &data_pool[a];
+    } else if (top[0] == 17 || top[0] == 20) {       // ARRAY / REF_ARR
+        uint16_t base = top[1] | (top[2] << 8);
+        uint16_t count = top[3] | (top[4] << 8);
+        uint8_t esz = type_registry[top[5]].size;
+        len = count * esz;
+        if (base + len <= DATA_POOL_SIZE) data = &data_pool[base];
+    } else {
+        stack_ptr += elem_size(top);
+        pushStringRaw("");
+        return;
+    }
+    stack_ptr += elem_size(top);
+
+    if (!data || len == 0) { pushStringRaw(""); return; }
+
+    // 2. SHA-1 в ЛОКАЛЬНОМ буфере на C-стеке (не в data_pool!)
+    uint8_t hash[20];
+    mbedtls_sha1_context ctx;
+    mbedtls_sha1_init(&ctx);
+    mbedtls_sha1_starts(&ctx);
+    mbedtls_sha1_update(&ctx, data, len);
+    mbedtls_sha1_finish(&ctx, hash);
+    mbedtls_sha1_free(&ctx);
+
+    // 3. Версия 5 (старшие 4 бита байта 6) и вариант 10xx (байт 8)
+    hash[6] = (hash[6] & 0x0F) | 0x50;
+    hash[8] = (hash[8] & 0x3F) | 0x80;
+
+    // 4. Форматируем UUID 8-4-4-4-12 в локальный буфер
+    char buf[37];
+    snprintf(buf, sizeof(buf),
+        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        hash[0], hash[1], hash[2], hash[3],
+        hash[4], hash[5],
+        hash[6], hash[7],
+        hash[8], hash[9],
+        hash[10], hash[11], hash[12], hash[13], hash[14], hash[15]);
+
+    // 5. Кладём как STRING (тег 0x0E) прямо на стек HDL
+    pushStringRaw(buf);
+}
+void word_exec() {
+    if (stack_is_empty()) {
+        currentOutput->println("exec: stack empty");
+        return;
+    }
+    uint8_t* top = &stack_mem[stack_ptr];
+    uint8_t tag = top[0];
+    char name[65];
+    uint8_t len = 0;
+    
+    // STRING (0x0E) / NAME (0x0D)
+    if (tag == 0x0E || tag == 0x0D) {
+        len = top[1];
+        if (len > 64) len = 64;
+        memcpy(name, &top[2], len);
+        name[len] = '\0';
+        stack_ptr += elem_size(top);
+    }
+    // $STRING (15)
+    else if (tag == 15) {
+        len = top[1];
+        uint16_t addr = top[2] | (top[3] << 8);
+        if (addr + len <= DATA_POOL_SIZE) {
+            if (len > 64) len = 64;
+            memcpy(name, &data_pool[addr], len);
+            name[len] = '\0';
+        } else {
+            name[0] = '\0';
+        }
+        stack_ptr += elem_size(top);
+    }
+    else {
+        currentOutput->println("exec: expected STRING/NAME/$STRING");
+        return;
+    }
+    
+    if (len == 0) {
+        currentOutput->println("exec: empty name");
+        return;
+    }
+    
+    // 🔑 Ищем слово в словаре
+    uint16_t addr = dict_find(name);
+    if (addr == 0xFFFF) {
+        currentOutput->print("exec: word not found: ");
+        currentOutput->println(name);
+        return;
+    }
+    
+    // 🔑 Прямой вызов — быстрее и чище
+    exec_word(addr);
+}
 void setup() {
   Serial.begin(115200);
   Serial.println(); delay(500);
@@ -6630,7 +7140,12 @@ void setup() {
         create_internal_word(lang_name, lang_body, sizeof(lang_body), 0x06, choiceFunc);
   addInternalWord("abort", word_abort);          // Аварийная кнопка: мгновенно очищает стеки, останавливает задачи и возвращает вывод в Serial.
   addInternalWord("nop",  wordNop);              // Пустая операция. Используется как маркер конца цепочки (cord) или для выравнивания.
+    addInternalWord("?", word_help);
   addInternalWord("words", word_words);          // Выводит список всех доступных слов в текущем контексте (фокусе внимания).
+  addInternalWord("all", word_words_all);   // ← ДОБАВИТЬ
+  addInternalWord("exec", word_exec);
+  addInternalWord("sha1",  sha1Func);
+  addInternalWord("uuid5", uuid5Func);
   addInternalWord("<--", word_checkpoint);
   addInternalWord("xxx", word_forget);
   addInternalWord("main", word_main);            // Переключает фокус внимания в корневой (глобальный) контекст.
@@ -6641,6 +7156,7 @@ void setup() {
   executeLine("nop as var");                     // Трюк: делаем 'nop' доступным как псевдо-переменная для инициализации пустых цепочек.
   executeLine("focus as cont");  
   addInternalWord("const", word_const);          // Помечает последнее созданное слово как константу (запрет на изменение).
+  executeLine("? as help"); 
   addInternalWord("print", word_print);
   // === УПРАВЛЕНИЕ ПОТОКОМ ИСПОЛНЕНИЯ ===
   addInternalWord("if", word_if);                // Ветвление: если верх стека истинен, исполняет тело, иначе перепрыгивает на адрес после '}'.
@@ -6673,20 +7189,33 @@ void setup() {
   addInternalWord("view", word_view);            // Создаёт новое "представление" (view) существующего массива с другим типом данных, не копируя память.
   addInternalWord("meta", word_meta);
   create_internal_word_str("chip", getChipName(), 0x06, choiceFunc); // Создаёт константу 'chip', возвращающую название чипа (esp32, esp32s3 и т.д.).
+  focusTo("main");
+  // === КОНТЕКСТ: STREAMS (Перенаправление вывода) ===
+  focusTo("streams");
+  addInternalWord("out>file", word_out_file);    // Перенаправляет весь последующий вывод (print, stack и т.д.) в указанный файл.
+  addInternalWord("out>serial",  word_out_serial);
+  addInternalWord("out>save",    word_out_save);
+  addInternalWord("out>restore", word_out_restore);
+  focusTo("main");
   focusTo( "strings");
+  addInternalWord("toUpper", []() { pushUInt8(1); caseConvertFunc(); });
+  addInternalWord("toLower", []() { pushUInt8(0); caseConvertFunc(); });
+  addInternalWord("find", word_find); 
   addMarkerWord("(-");
   addMarkerWord("-)");
-  addInternalWord("find", word_find);
   addInternalWord("between", word_between);
   addInternalWord("name", word_name);
+  focusTo("main");
     // === КОНТЕКСТ: JSON (Экспорт/Импорт структур) ===
   focusTo("jsons");                     // Переключаем фокус внимания на контекст работы с JSON.
   addInternalWord("json>", word_json_export);    // Экспортирует все переменные текущего контекста в формат JSON.
+  addInternalWord("json*>",     word_json_star_export);   // ← ДОБАВИТЬ
   addInternalWord("json>>", word_json_delta);    // Экспортирует только изменённые (dirty) переменные в JSON (оптимизация трафика).
   addInternalWord("json>serial", word_json_export_serial); // Принудительно выводит JSON-дампа контекста в Serial (игнорируя перенаправление).
   addInternalWord("json>file", word_json_export_file);     // Сохраняет JSON-дампа контекста в указанный файл.
   addInternalWord("json-set", jsonSetWord);      // Добавляет пару "ключ:значение" во внутренний буфер сборки JSON.
   addInternalWord("json>var", jsonToVarWord);    // Парсит накопленный JSON-буфер и создаёт из него переменные в текущем контексте.
+  focusTo("main");
 
   // === КОНТЕКСТ: TIMES (Время и планирование) ===
   focusTo("times");                     // Переключаем фокус внимания на контекст времени и планирования.
@@ -6699,6 +7228,7 @@ void setup() {
   addInternalWord("__schedule_task__", word_schedule_task_runtime); // Внутренний механизм: регистрация задачи из скомпилированного байт-кода.
   addInternalWord("__remove_task__", word_remove_task_runtime);     // Внутренний механизм: удаление задачи из скомпилированного байт-кода.
   addInternalWord("__local__", word_local_stub); // Внутренний резолвер: создаёт или извлекает локальную переменную внутри слова.
+  focusTo("main");
 
   // === УТИЛИТЫ ДАННЫХ ===
   addInternalWord("len", lenWord);               // Измеряет длину строки или массива на вершине стека и удаляет исходный элемент.
@@ -6708,6 +7238,7 @@ void setup() {
   addInternalWord("rgb2wrgb", word_rgb2wrgb);    // Преобразует RGB в WRGB (SK6812), вычисляя белый канал как min(R, G, B).
   addInternalWord("part", word_part);            // Создаёт срез (представление) массива: part массив смещение длина. Возвращает ссылку на фрагмент без копирования памяти.
   addInternalWord("part$", word_part_str);       // Извлекает часть байтового массива как строку: part$ массив смещение длина. Возвращает строку ($STRING) из указанного диапазона и признак длинна больше 255.
+  focusTo("main");
 
   // === КОНТЕКСТ: TYPES (Преобразование типов) ===
   executeLine("types cont");                     // Переключаем фокус внимания на контекст преобразования типов данных.
@@ -6722,6 +7253,7 @@ void setup() {
   addInternalWord("toInt", word_toInt);          // ПРЕОБРАЗОВАТЕЛЬ: парсит текстовую строку (напр. "42") и кладёт на стек как число (INT32).
   addInternalWord("toStr", word_toStr);          // Преобразует числовое значение (целое или float) в текстовую строку (STRING).
   addMarkerWord("word");                         // Маркер типа «word» (ссылка на слово). Используется для объявления массивов, хранящих адреса других слов.
+  focusTo("main");
 
 
 
@@ -6735,11 +7267,13 @@ void setup() {
   addMarkerWord("&"); addMarkerWord("|");                                                           // Битовые И и ИЛИ.
   addMarkerWord(")");                            // Закрывающая скобка для группировки операций.
   addInternalWord("(", word_open_paren);         // Открывающая скобка: инициирует свёртку выражения внутри скобок до получения результата.
+  focusTo("main");
 
   // === КОНТЕКСТ: LOGICS (Сравнение) ===
   focusTo("logics");                    // Переключаем фокус внимания на логические операции сравнения.
   addMarkerWord("=="); addMarkerWord("!="); addMarkerWord("<"); addMarkerWord(">");         // Операторы сравнения (возвращают 1 или 0).
   addMarkerWord("<="); addMarkerWord(">=");                                                   // Операторы нестрогого сравнения.
+  focusTo("main");
 
   // === КОНТЕКСТ: FS / IO (Файловая система и вывод) ===
   focusTo("fs");                        // (Примечание: здесь логичнее было бы "fs" или "io", но сохраняем структуру исходника).
@@ -6751,10 +7285,9 @@ void setup() {
   addInternalWord("exists", word_exists);
   addInternalWord("fs.size", word_fs_size);
   addInternalWord("load", word_load);            // Загружает и исполняет команды из указанного .wrd файла построчно (обучение).
-  addInternalWord("save", word_save);            // Сохраняет полный снимок состояния (словарь, стеки, данные) в файл (фиксация навыка).
-  addInternalWord("restore", word_restore);      // Восстанавливает состояние системы из ранее сохранённого файла снимка.
-  addInternalWord("out>file", word_out_file);    // Перенаправляет весь последующий вывод (print, stack и т.д.) в указанный файл.
-  addInternalWord("out>serial", word_out_serial);// Возвращает канал вывода обратно в последовательный порт (Serial).
+  addInternalWord("load?", word_load_query);
+  addInternalWord( "save.core", word_save);      // Сохраняет полный снимок состояния (словарь, стеки, данные) в файл (фиксация навыка).
+  addInternalWord("restore.core", word_restore);      // Восстанавливает состояние системы из ранее сохранённого файла снимка.
   // addInternalWord("serial",     word_serial);      // Создаёт/открывает: serial uart 1 115200
   // addInternalWord("serialset",  word_serialset);   // Перенастраивает: serialset uart 1 115200 16 17
   // addInternalWord("serialstop", word_serialstop);  // Останавливает: serialstop uart
@@ -6764,8 +7297,7 @@ void setup() {
 
 
 
-  focusTo("main"); // Возврат в корень
-  addInternalWord("?", word_help);
+
   gpioInit();
   ethInit(); 
   wifiInit();
@@ -6807,9 +7339,10 @@ if (FILESYSTEM.exists("/startup.wrd")) {
 }
 
 void loop() {
-  // Кооперативное исполнение задач (без блокировки ввода)
-process_tasks(false);
-  // Ваш оригинальный обработчик Serial
+  // 1. Кооперативное исполнение фоновых задач
+  process_tasks(false);
+
+  // 2. Обработка Serial (ваш оригинальный код)
   while (Serial.available()) {
     char c = Serial.read();
 #if ENABLE_TERM_LAYER
@@ -6826,7 +7359,7 @@ process_tasks(false);
         executeLine(line_buf);
         Serial.println();
         printStack();
-        printActiveTasks(); // ← СПИСОК ЗАДАЧ
+        printActiveTasks();
         word_prompt();
       }
       idx = 0;
@@ -6834,4 +7367,27 @@ process_tasks(false);
       line_buf[idx++] = c;
     }
   }
+
+  // 3. ✅ ДЕТЕРМИНИРОВАННАЯ обработка WebSocket
+  if (ws_cmd_ready) {
+      ws_cmd_ready = false; // Сбрасываем флаг, чтобы не исполнять дважды
+      
+      // Эхо и исполнение (currentOutput уже направлен в &g_stream)
+      currentOutput->println();
+      currentOutput->print(ws_cmd); 
+      currentOutput->println();
+      
+      executeLine(ws_cmd);
+      
+      // Штатное завершение, идентичное Serial
+      currentOutput->println();
+      printStack();
+      printActiveTasks();
+      word_prompt();
+      g_stream.flush();
+  }
+
+  // 4. Обслуживание библиотеки WebSocket (пинг/понг, разрывы)
+  // ⚠️ ВАЖНО: Это должно вызываться здесь, а не через +loop в startup.wrd
+  wsServer.loop();
 }

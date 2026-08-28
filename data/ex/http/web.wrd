@@ -1,5 +1,5 @@
-// load ex/net/web.wrd <-- xxx
-load ex/http/webconst.wrd
+// load ex/http/web.wrd <-- xxx
+webconst load? ex/http/webconst.wrd
 
 web focus
 mime = array $S 28
@@ -67,7 +67,7 @@ client =
 
 
 
-/*
+
 srv = tcp.Listen 8080
 req = array u8 1024 // массив для приема строки с сервера
 
@@ -106,4 +106,4 @@ HTTP8080 :                                 // начало компиляции 
     http.response cli
   }
 ;  
-*/
+// HTTP8080 100 +task
