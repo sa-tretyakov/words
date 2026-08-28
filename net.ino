@@ -634,8 +634,41 @@ struct UdpSocket {
     IPAddress multicast_ip;
     bool is_multicast;
     int pending_size;
+    
+    // 🔑 НОВОЕ: Поддержка потоковой записи в один большой пакет (для SSDP и т.д.)
+    bool is_streaming;
+    char stream_buf[512]; // 512 байт с запасом хватает на любой SSDP-ответ
+    uint16_t stream_len;
+    IPAddress stream_ip;
+    uint16_t stream_port;
 };
 static UdpSocket* g_udp_sockets[8] = {nullptr};
+
+
+
+
+// Класс-накопитель для UDP-стриминга (объявить перед word_out_udp)
+class UdpStreamPrinter : public Print {
+public:
+    UdpSocket* sock;
+    UdpStreamPrinter(UdpSocket* s) : sock(s) {}
+    size_t write(uint8_t c) override {
+        if (!sock || !sock->is_streaming) return 0;
+        if (sock->stream_len < 511) sock->stream_buf[sock->stream_len++] = (char)c;
+        return 1;
+    }
+    size_t write(const uint8_t* buffer, size_t size) override {
+        if (!sock || !sock->is_streaming) return 0;
+        size_t to_copy = (size < (512 - sock->stream_len)) ? size : (512 - sock->stream_len);
+        if (to_copy > 0) {
+            memcpy(&sock->stream_buf[sock->stream_len], buffer, to_copy);
+            sock->stream_len += to_copy;
+        }
+        return to_copy;
+    }
+};
+
+static UdpStreamPrinter* g_udp_stream_printer = nullptr;
 
 void word_out_udp() {
     uint32_t v = 0;
@@ -646,10 +679,23 @@ void word_out_udp() {
     if (!popUInt32(port32)) return;
     IPAddress ip;
     if (!ip.fromString(ip_str.c_str())) return;
-    g_stream.attachUdp(&g_udp_sockets[v]->udp, ip, (uint16_t)port32);
-    currentOutput = &g_stream;
-}
 
+    UdpSocket* s = g_udp_sockets[v];
+    
+    // 🔑 ВКЛЮЧАЕМ РЕЖИМ НАКОПЛЕНИЯ
+    s->is_streaming = true;
+    s->stream_len = 0;
+    s->stream_ip = ip;
+    s->stream_port = (uint16_t)port32;
+    
+    if (!g_udp_stream_printer) {
+        g_udp_stream_printer = new UdpStreamPrinter(s);
+    } else {
+        g_udp_stream_printer->sock = s;
+    }
+    
+    currentOutput = g_udp_stream_printer;
+}
 void udpOpenFunc() {
     uint32_t port32 = 0;
     if (!popUInt32(port32)) { pushUInt8(0xFF); return; }
@@ -755,7 +801,22 @@ void udpTimeoutFunc() {
     g_udp_sockets[v]->udp.setTimeout(ms);
     pushBool(true);
 }
-
+// === ФИНАЛИЗАЦИЯ UDP-СТРИМИНГА ===
+// Вызывается из word_out_restore() в words.ino перед восстановлением currentOutput.
+// Проходит по всем UDP-сокетам и отправляет накопленные буферы одним пакетом.
+void udp_finalize_streaming() {
+    for (int i = 0; i < 8; i++) {
+        if (!g_udp_sockets[i] || !g_udp_sockets[i]->active) continue;
+        UdpSocket* s = g_udp_sockets[i];
+        if (s->is_streaming && s->stream_len > 0) {
+            s->udp.beginPacket(s->stream_ip, s->stream_port);
+            s->udp.write((uint8_t*)s->stream_buf, s->stream_len);
+            s->udp.endPacket();
+            s->is_streaming = false;
+            s->stream_len = 0;
+        }
+    }
+}
 void udpInit() {
     focusTo("udp");
     addInternalWord("udp.Open",      udpOpenFunc);

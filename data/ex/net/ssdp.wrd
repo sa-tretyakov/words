@@ -1,0 +1,172 @@
+/* 
+  SSDP / UPnP Discovery (Обнаружение устройств в сети) — автоматическая регистрация и ответы на запросы.
+  
+   Образ диалога с устройством
+   Этот файл является образом диалога, который обучает систему протоколу SSDP. 
+   Устройство учится самостоятельно анонсировать своё присутствие в локальной сети 
+   (multicast NOTIFY) и грамотно отвечать на поисковые запросы контроллеров (M-SEARCH).
+   Также здесь демонстрируется динамическая генерация файла описания description.xml 
+   через универсальный HTTP-роутер HDL, без использования статических файлов или перекомпиляции C++ кода.
+   
+   Обучить модуль можно введя этот диалог: load ex/net/ssdp.wrd <--
+*/
+webconst load? ex/http/webconst.wrd
+upnp focus
+ssdp device
+ssdp.SchemaURL      = "description.xml"
+ssdp.HTTPPort       = 80
+// ssdp.ServerName     = "SSDPServer/1.0"
+ssdp.ServerName     = "Arduino/1.0"
+ip.esp = ipSta
+URLBase = http: + ip.esp  + ":" + toStr ssdp.HTTPPort
+deviceType          = "urn:schemas-upnp-org:device:" +  "rootdevice" + ":1"
+friendlyName        = "Philips hue clone"
+presentationURL     = "index.htm"
+serialNumber        = "929000226503"
+modelName           = "Philips hue bridge 2012"
+modelDescription    = "This device can be controled by WiFi"
+modelNumber         = "001788102201"
+modelURL            = "http://www.meethue.com"
+manufacturer        = "Royal Philips Electronics"
+manufacturerURL     = "http://www.philips.com"
+uuid                =  uuid5 "urn:hdls:device" + chip.id
+UDN                 = "uuid:" + uuid
+
+XML.element : // Имя элемента
+xml.name = 
+partl = "<" + xml.name + ">" + exec xml.name
+partl + "</" + xml.name + ">"
+;
+
+description.xml :
+println "<?xml version="1.0" encoding="UTF-8"?>"
+print "<root xmlns="
+print """
+print deviceType
+println "">"
+
+println "<specVersion>"
+println "<major>1</major>"
+println "<minor>0</minor>"
+println "</specVersion>"
+println XML.element URLBase name
+println "<device>"
+println XML.element "deviceType"
+println XML.element "friendlyName"
+println XML.element "presentationURL"
+println XML.element "serialNumber"
+println XML.element "modelName"
+println XML.element "modelDescription"
+println XML.element "modelNumber"
+println XML.element "modelURL"
+println XML.element "manufacturer"
+println XML.element "manufacturerURL"
+println XML.element "UDN"
+println "</device>"
+println "</root>"
+;
+
+ssdp.buf = array u8 256 
+ssdp.soket = 255u8
+SSDP/UPnP = "239.255.255.250"
+ssdp.port = 1900
+ssdp.ip.zapros = "255.255.255.255"
+ssdp.port.zapros = 0u32
+
+ssdp.init :
+ssdp.soket = udp.Multicast SSDP/UPnP ssdp.port
+if 255 == ssdp.soket {
+print "ssdp not init"
+exit
+}
+;
+
+NOTIFY = "NOTIFY * HTTP/1.1"
+http.ok as HTTP200
+http.version as ssdp.200Ok
+ssdp.HOST = "HOST: 239.255.255.250:1900"
+CACHE-CONTROL: = "CACHE-CONTROL: max-age=1800"
+
+LOCATION: :
+loc = toUpper h.location 
+loc + http: + ip.esp + "/" + ssdp.SchemaURL
+;
+NT: = "NT: " + deviceType
+SERVER: = "SERVER: Arduino/1.0 UPnP/1.1"
+NTS: = "NTS: ssdp:alive"
+ST: = "ST: " + deviceType
+USN: = "USN: uuid:" + uuid + "::" + deviceType
+EXT: = "EXT:"
+
+ssdp.NOTIFY :
+println NOTIFY
+println ssdp.HOST
+println CACHE-CONTROL:
+println LOCATION:
+println NT:
+println NTS:
+println SERVER:
+println USN:
+Empty.Line
+;
+ssdp.Response :
+print HTTP200
+println CACHE-CONTROL:
+println LOCATION:
+println SERVER:
+println "ST: upnp:rootdevice"
+println USN:
+println EXT:
+Empty.Line
+;
+ssdp.NOTIFY.send :
+out>save
+out>udp ssdp.soket SSDP/UPnP ssdp.port
+ssdp.NOTIFY
+out>restore
+;
+
+ssdp.HTTP200.send :
+// ssdp.Response
+out>save
+out>udp ssdp.soket ssdp.ip.zapros ssdp.port.zapros
+ssdp.Response
+out>restore
+;
+
+
+ssdp?response :
+find ssdp.buf "M-SEARCH" -) 0
+dup
+if -1 == {
+exit
+}
+->
+find ssdp.buf "ST: upnp:rootdevice" -) 0
+;
+
+
+ssdpRead :
+    n = udp.Available ssdp.soket
+    if n > 0 {
+        // Вычёрпываем пакет из сокета в буфер, чтобы освободить сетевую очередь
+        udp.Recv ssdp.soket ssdp.buf
+        // Разбираем стек (сверху вниз лежат: порт, IP, размер)
+        ssdp.port.zapros =
+        ssdp.ip.zapros = 
+        np = 
+        // print "Получили "
+        // println ssdp.ip.zapros
+        if -1 != ssdp?response {
+        ssdp.HTTP200.send 
+        println "Ответ отправлен"
+        }
+        // flush
+        
+    }
+;
+ssdp.init
+ssdp.NOTIFY.send
+ssdp.NOTIFY.send 600000 +task
+ssdpRead 100 +task
+main

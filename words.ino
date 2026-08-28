@@ -121,57 +121,144 @@ RTC_NOINIT_ATTR uint8_t crashCounter;
 #else
 
 #endif
+
+
 class HDLStream : public Print {
 public:
+    // === ТИПЫ КАНАЛОВ ===
     enum Target : uint8_t {
-        T_NONE, T_WS, T_TCP, T_UDP, T_I2C, T_I2S, T_HTTP   // ← добавлен T_HTTP
+        T_NONE,   // не активен
+        T_WS,     // WebSocket
+        T_TCP,    // TCP-сокет
+        T_UDP,    // UDP-сокет
+        T_I2C,    // I²C
+        T_I2S,    // I²S аудио
+        T_HTTP    // HTTP-ответ
     };
 
+    // === КОНСТРУКТОР ===
     HDLStream() : target(T_NONE), ws(nullptr), tcp(nullptr),
-                   udp(nullptr), i2c_dev(0), i2s_port(0),
-                   http_srv(nullptr), buf_len(0) {}          // ← добавлена инициализация http_srv
+                  udp(nullptr), i2c_dev(0), i2s_port(0),
+                  http_srv(nullptr), buf_len(0) {}
 
+    // ============================================================
+    // === ПОДКЛЮЧЕНИЕ КАНАЛОВ (ATTACH) ===
+    // ============================================================
+    
     void attachWs(WebSocketsServer* srv) {
-        flush(); target = T_WS; ws = srv;
-        tcp = nullptr; udp = nullptr; http_srv = nullptr;
+        flush(); 
+        target = T_WS; 
+        ws = srv;
+        tcp = nullptr; 
+        udp = nullptr; 
+        http_srv = nullptr;
     }
 
     void attachTcp(WiFiClient* c) {
-        flush(); target = T_TCP; tcp = c;
-        ws = nullptr; udp = nullptr; http_srv = nullptr;
+        flush(); 
+        target = T_TCP; 
+        tcp = c;
+        ws = nullptr; 
+        udp = nullptr; 
+        http_srv = nullptr;
     }
 
     void attachUdp(WiFiUDP* u, IPAddress ip, uint16_t port) {
-        flush(); target = T_UDP; udp = u; dest_ip = ip; dest_port = port;
-        ws = nullptr; tcp = nullptr; http_srv = nullptr;
+        flush(); 
+        target = T_UDP; 
+        udp = u; 
+        dest_ip = ip; 
+        dest_port = port;
+        ws = nullptr; 
+        tcp = nullptr; 
+        http_srv = nullptr;
     }
 
     void attachI2c(uint8_t dev) {
-        flush(); target = T_I2C; i2c_dev = dev;
-        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
+        flush(); 
+        target = T_I2C; 
+        i2c_dev = dev;
+        ws = nullptr; 
+        tcp = nullptr; 
+        udp = nullptr; 
+        http_srv = nullptr;
     }
 
     void attachI2s(uint8_t port) {
-        flush(); target = T_I2S; i2s_port = port;
-        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
+        flush(); 
+        target = T_I2S; 
+        i2s_port = port;
+        ws = nullptr; 
+        tcp = nullptr; 
+        udp = nullptr; 
+        http_srv = nullptr;
     }
 
-    // ▼▼▼ НОВЫЙ МЕТОД: подключение к HTTP-серверу ▼▼▼
-    void attachHttp(WebServer* srv) {
-        flush();
-        target = T_HTTP;
-        http_srv = srv;
+void attachHttp(WebServer* srv) {
+    flush();
+    target = T_HTTP;
+    http_srv = srv;
+    
+    // 🔑 КРИТИЧНО: не обнуляем ws, если WebSocket клиенты всё ещё подключены!
+    // Это позволяет восстановить WS-канал после завершения HTTP-запроса.
+    if (!isWsConnected()) {
+        ws = nullptr;
+    }
+    tcp = nullptr; 
+    udp = nullptr;
+}
+
+    // ============================================================
+    // === ОТКЛЮЧЕНИЕ (DETACH) ===
+    // ============================================================
+    
+// 🔴 ЖЁСТКИЙ DETACH — всегда сбрасывает в T_NONE (если force=true)
+// Или восстанавливает WS, если клиенты подключены (если force=false)
+void detach(bool force = false) {
+    flush();
+    
+    // 🔑 КРИТИЧНО: если WebSocket клиенты всё ещё подключены и нет принудительного сброса,
+    // восстанавливаем WS как активный канал вместо полного обнуления.
+    if (!force && isWsConnected()) {
+        target = T_WS;
+        http_srv = nullptr; // HTTP-запрос завершён, обнуляем только его
+    } else {
+        target = T_NONE;
         ws = nullptr;
         tcp = nullptr;
         udp = nullptr;
+        http_srv = nullptr;
     }
-    // ▲▲▲ КОНЕЦ НОВОГО МЕТОДА ▲▲▲
+}
 
-    void detach() {
-        flush(); target = T_NONE;
-        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
+    // ============================================================
+    // === ДИАГНОСТИКА ===
+    // ============================================================
+    
+    // Возвращает имя активного канала (для слова out?)
+    const char* targetName() const {
+        switch (target) {
+            case T_WS:   return "ws";
+            case T_TCP:  return "tcp";
+            case T_UDP:  return "udp";
+            case T_I2C:  return "i2c";
+            case T_I2S:  return "i2s";
+            case T_HTTP: return "http";
+            default:     return "none";
+        }
     }
 
+    // 🔧 НОВЫЙ МЕТОД: получение текущего таргета
+    // Возвращает текущий Target, чтобы внешний код мог проверить состояние
+    // без прямого доступа к приватному полю.
+    Target getTarget() const { 
+        return target; 
+    }
+
+    // ============================================================
+    // === ЗАПИСЬ ДАННЫХ ===
+    // ============================================================
+    
     size_t write(uint8_t c) override {
         if (target == T_NONE) return 0;
         if (buf_len >= 254) flush();
@@ -193,16 +280,23 @@ public:
         return i;
     }
 
+    // ============================================================
+    // === СБРОС БУФЕРА ===
+    // ============================================================
+    
     void flush() override {
         if (buf_len == 0 || target == T_NONE) return;
+        
         switch (target) {
             case T_WS:
                 if (ws) ws->broadcastTXT((uint8_t*)buf, buf_len);
                 break;
+                
             case T_TCP:
                 if (tcp && tcp->connected())
                     tcp->write((uint8_t*)buf, buf_len);
                 break;
+                
             case T_UDP:
                 if (udp) {
                     udp->beginPacket(dest_ip, dest_port);
@@ -210,26 +304,42 @@ public:
                     udp->endPacket();
                 }
                 break;
+                
             case T_I2C:
                 Wire.beginTransmission(i2c_dev);
                 Wire.write((uint8_t*)buf, buf_len);
                 Wire.endTransmission();
                 break;
+                
             case T_I2S: {
                 size_t w;
                 i2s_write((i2s_port_t)i2s_port, buf, buf_len, &w, 0);
                 break;
             }
-            // ▼▼▼ НОВЫЙ CASE: отправка в HTTP-клиент ▼▼▼
+                
             case T_HTTP:
-                if (http_srv) http_srv->sendContent(String((char*)buf, buf_len));
+                if (http_srv) 
+                    http_srv->sendContent(String((char*)buf, buf_len));
                 break;
-            // ▲▲▲ КОНЕЦ НОВОГО CASE ▲▲▲
-            default: break;
+                
+            default: 
+                break;
         }
+        
         buf_len = 0;
     }
-
+     // 🔧 НОВЫЕ МЕТОДЫ: управление счетчиком WS-клиентов
+    void wsClientConnected() { 
+        ws_client_count++; 
+    }
+    
+    void wsClientDisconnected() { 
+        if (ws_client_count > 0) ws_client_count--; 
+    }
+    
+    bool isWsConnected() const { 
+        return ws_client_count > 0; 
+    }
 private:
     Target target;
     WebSocketsServer* ws;
@@ -237,13 +347,19 @@ private:
     WiFiUDP* udp;
     uint8_t i2c_dev;
     uint8_t i2s_port;
-    WebServer* http_srv;           // ← добавлено поле
+    WebServer* http_srv;
     IPAddress dest_ip;
     uint16_t dest_port;
     char buf[256];
     uint8_t buf_len;
+    uint8_t ws_client_count = 0;
+ 
 };
+
+// Глобальный экземпляр мультиплексора
 static HDLStream g_stream;
+
+
 // Глобальные переменные для асинхронного приёма (в начале web.ino)
 char ws_cmd[256];
 volatile bool ws_cmd_ready = false;
@@ -287,7 +403,25 @@ uint8_t  currentContext = 0;
 uint8_t  g_next_ctx  = 1;
 uint16_t ip = 0;
 static uint16_t g_device_counter = 0;
-
+// Гард: автоматически восстанавливает currentOutput при выходе из области видимости {}
+struct OutputGuard {
+    Print* saved;
+    bool   owns_stream;
+    
+    OutputGuard() : saved(currentOutput), owns_stream(false) {}
+    
+    ~OutputGuard() {
+        // 🔑 КРИТИЧЕСКАЯ ПРОВЕРКА:
+        // Мы трогаем g_stream ТОЛЬКО если он всё ещё является текущим каналом вывода.
+        // Если внутри executeLine() был вызван abort(), currentOutput уже стал &Serial,
+        // и это условие НЕ сработает, что предотвратит ложный detach().
+        if (owns_stream && currentOutput == &g_stream) {
+            g_stream.detach(); // Используем публичный метод вместо g_stream.target = ...
+        }
+        // Восстанавливаем предыдущий канал вывода
+        currentOutput = saved;
+    }
+};
 // === ИНИЦИАЛИЗАЦИЯ ПУЛОВ В HEAP ===
 // Выделяет память динамически → не занимает .bss → нет dram0_0_seg overflow.
 // Возвращает false при ошибке (не хватает heap).
@@ -3256,26 +3390,37 @@ static bool execute_file(const char* full_path) {
     return true;
 }
 void word_load() {
-    if (stack_is_empty()) {
-        currentOutput->println(getMsg("load error: stack empty"));
-        return;
-    }
-    uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] != 0x0D && top[0] != 0x0E) {
-        currentOutput->println(getMsg("load error: expected filename"));
-        return;
-    }
-    uint16_t sz = elem_size(top);
-    uint8_t len = top[1];
-    if (len > 255) len = 255;
-    char fname[257];
-    memcpy(fname, &top[2], len);
-    fname[len] = '\0';
-    stack_ptr += sz;
-    
-    char full_path[256];
-    build_full_path(full_path, sizeof(full_path), fname);
-    execute_file(full_path);
+if (stack_is_empty()) {
+currentOutput->println(getMsg("load error: stack empty"));
+return;
+}
+uint8_t* top = &stack_mem[stack_ptr];
+if (top[0] != 0x0D && top[0] != 0x0E) {
+currentOutput->println(getMsg("load error: expected filename"));
+return;
+}
+uint16_t sz = elem_size(top);
+uint8_t len = top[1];
+if (len > 255) len = 255;
+char fname[257];
+memcpy(fname, &top[2], len);
+fname[len] = '\0';
+stack_ptr += sz;
+char full_path[256];
+build_full_path(full_path, sizeof(full_path), fname);
+
+// 🔑 Сохраняем состояние памяти ДО загрузки
+uint16_t dict_before = dict_ptr;
+uint16_t data_before = data_ptr;
+
+execute_file(full_path);
+
+// 🔑 Выводим статистику использованной памяти
+uint16_t dict_used = dict_ptr - dict_before;
+uint16_t data_used = data_ptr - data_before;
+
+currentOutput->printf("load: dict +%u (free: %u/%u)\n", dict_used, DICT_POOL_SIZE - dict_ptr, DICT_POOL_SIZE);
+currentOutput->printf("load: data +%u (free: %u/%u)\n", data_used, DATA_POOL_SIZE - data_ptr, DATA_POOL_SIZE);
 }
 void word_load_query() {
     // 1. БЕРЕМ ИМЯ ФАЙЛА СО СТЕКА (оно там, так как в R2L строка читается первой)
@@ -4682,46 +4827,92 @@ void word_body() {
     g_tok_idx -= 1;
 }
 static File g_outFile;
+// === ПЕРЕНАПРАВЛЕНИЕ ВЫВОДА В ФАЙЛ ===
+// HDL-запись:  out>file "filename"
+// Переключает весь последующий вывод (print, stack, json> и т.д.) в указанный файл.
+//
+// 🔑 КЛЮЧЕВЫЕ ПРАВИЛА:
+//   1. Закрываем предыдущий файл (если был открыт) ПЕРЕД открытием нового.
+//   2. При ошибке открытия НЕ сбрасываем currentOutput на Serial —
+//      это ломает WS/HTTP/TCP-каналы. Сообщаем об ошибке в ТЕКУЩИЙ канал.
+//   3. Используем build_full_path — единая логика путей (абсолютные/относительные).
+//   4. Используем getMsg — поддержка локализации.
+//
 void word_out_file() {
+    // === 1. ПРОВЕРКА СТЕКА ===
     if (stack_is_empty()) {
         currentOutput->println(getMsg("out>file: filename expected"));
         return;
     }
+
     uint8_t* top = &stack_mem[stack_ptr];
     uint8_t tag = top[0];
-    if (tag != 0x0D && tag != 0x0E) {
-        currentOutput->println(getMsg("out>file: NAME or STRING expected"));
+
+    // Поддерживаем STRING (0x0E), NAME (0x0D) и $STRING (15)
+    char fname[257];
+    uint8_t len = 0;
+
+    if (tag == 0x0E || tag == 0x0D) {
+        len = top[1];
+        if (len > 255) len = 255;
+        memcpy(fname, &top[2], len);
+        fname[len] = '\0';
+    }
+    else if (tag == 15) {
+        len = top[1];
+        uint16_t addr = top[2] | (top[3] << 8);
+        if (addr + len <= DATA_POOL_SIZE) {
+            if (len > 255) len = 255;
+            memcpy(fname, &data_pool[addr], len);
+            fname[len] = '\0';
+        } else {
+            currentOutput->println(getMsg("out>file: $STRING out of data_pool"));
+            return;
+        }
+    }
+    else {
+        currentOutput->println(getMsg("out>file: NAME/STRING/$STRING expected"));
         return;
     }
-    uint8_t len = top[1];
-    if (len > 255) len = 255;
-    char fname[257];
-    memcpy(fname, &top[2], len);
-    fname[len] = '\0';
-    stack_ptr += elem_size(top); // Снимаем со стека
-    
-    if (g_outFile) g_outFile.close(); // Закрываем предыдущий файл
-    
+
+    // Снимаем имя со стека
+    stack_ptr += elem_size(top);
+
+    // === 2. СБОРКА ПОЛНОГО ПУТИ ===
     char full_path[256];
-    if (strlen(g_currentDir) > 1) {
-        snprintf(full_path, sizeof(full_path), "%s/%s", g_currentDir, fname); // ✅ БЕЗ пробела
-    } else {
-        snprintf(full_path, sizeof(full_path), "/%s", fname); // ✅ БЕЗ пробела
-    }
-    
-    g_outFile = FILESYSTEM.open(full_path, "w"); // ✅ БЕЗ пробела в "w"
-    
+    build_full_path(full_path, sizeof(full_path), fname);
+
+    // === 3. ЗАКРЫТИЕ ПРЕДЫДУЩЕГО ФАЙЛА (если был открыт) ===
     if (g_outFile) {
-        currentOutput = &g_outFile; // 🔀 Переключаем весь вывод в файл
-    } else {
-        currentOutput = &Serial; // Фолбэк при ошибке открытия
-        Serial.print(getMsg("out>file: FAILED -> "));
-        Serial.println(full_path);
+        g_outFile.flush();   // гарантируем запись буфера на диск
+        g_outFile.close();
+    }
+
+    // === 4. ОТКРЫТИЕ НОВОГО ФАЙЛА ===
+    g_outFile = FILESYSTEM.open(full_path, "w");
+
+    if (g_outFile) {
+        // ✅ Успех — переключаем вывод в файл
+        currentOutput = &g_outFile;
+        // Сообщение об успехе уже пойдёт в файл (это нормально — пользователь сам открыл файл)
+    }
+    else {
+        // 🔑 КРИТИЧНО: НЕ сбрасываем currentOutput на Serial!
+        // Если сейчас активен WS/HTTP/TCP — они должны остаться активными.
+        // Сообщаем об ошибке в ТЕКУЩИЙ канал.
+        currentOutput->print(getMsg("out>file: FAILED -> "));
+        currentOutput->println(full_path);
     }
 }
 void word_out_serial() {
-    if (g_outFile) g_outFile.close();
-    g_stream.detach();          // ← ДОБАВИТЬ ЭТУ СТРОКУ
+    if (g_outFile) {
+        g_outFile.flush();
+        g_outFile.close();
+    }
+    if (currentOutput == &g_stream) {
+        g_stream.flush();
+        g_stream.detach(true); // ← ДОБАВИТЬ true: пользователь явно хочет Serial
+    }
     currentOutput = &Serial;
 }
 void word_add_loop() { // === +loop / -loop (фоновое исполнение без задержки) ===
@@ -6918,21 +7109,7 @@ void word_out_save() {
     pushUInt32(ptr);
 }
 
-void word_out_restore() {
-    uint32_t ptr = 0;
-    if (!popUInt32(ptr)) return;
 
-    // 🔑 КРИТИЧЕСКИЙ ФИКС: Если вывод был в файл, его ОБЯЗАТЕЛЬНО нужно закрыть!
-    // Это гарантирует, что все данные из буфера запишутся на диск.
-    if (g_outFile) {
-        g_outFile.close();
-    }
-
-    // Также сбрасываем сетевые потоки на всякий случай
-    g_stream.detach();
-
-    currentOutput = (Print*)(uintptr_t)ptr;
-}
 void sha1Func() {
     // R2L: приёмник данные sha1
     // Стек (сверху вниз): приёмник (ARRAY u8 >= 20), данные
@@ -7099,6 +7276,57 @@ void word_exec() {
     // 🔑 Прямой вызов — быстрее и чище
     exec_word(addr);
 }
+// === ДИАГНОСТИКА ПОТОКА ВЫВОДА ===
+// 🔑 КРИТИЧНО: всегда выводит в Serial, независимо от currentOutput!
+// Это аварийный канал — когда основной вывод «улетел», Serial остаётся
+// единственным надёжным способом увидеть, что происходит.
+void word_out_query() {
+    Serial.println();
+    Serial.println("=== out? DIAGNOSTIC ===");
+    
+    if (currentOutput == &Serial) {
+        Serial.println("out: Serial");
+    }
+    else if (currentOutput == &g_outFile) {
+        Serial.println("out: FILE (g_outFile)");
+    }
+    else if (currentOutput == &g_stream) {
+        Serial.print("out: g_stream -> ");
+        Serial.println(g_stream.targetName());
+    }
+    else {
+        Serial.print("out: UNKNOWN @ 0x");
+        Serial.println((uint32_t)(uintptr_t)currentOutput, HEX);
+    }
+    
+    // Дополнительно: состояние g_stream
+    Serial.print("g_stream.target = ");
+    Serial.println(g_stream.targetName());
+    
+    // Состояние файла
+    Serial.print("g_outFile open: ");
+    Serial.println(g_outFile ? "YES" : "NO");
+    
+    Serial.println("=======================");
+    Serial.println();
+}
+// Объявляем функцию из net.ino
+extern void udp_finalize_streaming();
+
+void word_out_restore() {
+    uint32_t ptr = 0;
+    if (!popUInt32(ptr)) return;
+    
+    // 🔑 КЛЮЧЕВОЕ: перед восстановлением канала — финализируем UDP-стриминг
+    udp_finalize_streaming();
+    
+    // Закрываем файл ТОЛЬКО если он был активным каналом
+    if (g_outFile && currentOutput == &g_outFile) {
+        g_outFile.close();
+    }
+    
+    currentOutput = (Print*)(uintptr_t)ptr;
+}
 void setup() {
   Serial.begin(115200);
   Serial.println(); delay(500);
@@ -7196,6 +7424,7 @@ void setup() {
   addInternalWord("out>serial",  word_out_serial);
   addInternalWord("out>save",    word_out_save);
   addInternalWord("out>restore", word_out_restore);
+  addInternalWord("out?",        word_out_query); //
   focusTo("main");
   focusTo( "strings");
   addInternalWord("toUpper", []() { pushUInt8(1); caseConvertFunc(); });
@@ -7368,25 +7597,31 @@ void loop() {
     }
   }
 
-  // 3. ✅ ДЕТЕРМИНИРОВАННАЯ обработка WebSocket
-  if (ws_cmd_ready) {
-      ws_cmd_ready = false; // Сбрасываем флаг, чтобы не исполнять дважды
-      
-      // Эхо и исполнение (currentOutput уже направлен в &g_stream)
-      currentOutput->println();
-      currentOutput->print(ws_cmd); 
-      currentOutput->println();
-      
-      executeLine(ws_cmd);
-      
-      // Штатное завершение, идентичное Serial
-      currentOutput->println();
-      printStack();
-      printActiveTasks();
-      word_prompt();
-      g_stream.flush();
-  }
 
+
+// 3. ✅ ДЕТЕРМИНИРОВАННАЯ обработка WebSocket
+if (ws_cmd_ready) {
+    ws_cmd_ready = false;
+    
+    // 🔑 Временно переключаем currentOutput на g_stream
+    Print* saved = currentOutput;
+    currentOutput = &g_stream;
+    
+    currentOutput->println();
+    currentOutput->print(ws_cmd); 
+    currentOutput->println();
+    executeLine(ws_cmd);
+    currentOutput->println();
+    printStack();
+    printActiveTasks();
+    word_prompt();
+    g_stream.flush();
+    
+    // 🔑 Восстанавливаем currentOutput (обычно обратно в Serial)
+    currentOutput = saved;
+    
+    // ❌ НЕ вызываем g_stream.detach() — WS клиент всё ещё подключен!
+}
   // 4. Обслуживание библиотеки WebSocket (пинг/понг, разрывы)
   // ⚠️ ВАЖНО: Это должно вызываться здесь, а не через +loop в startup.wrd
   wsServer.loop();

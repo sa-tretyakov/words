@@ -74,47 +74,37 @@ void initFS() {
     httpOkText("");
   }, handleFileUpload);
 // === УНИВЕРСАЛЬНЫЙ HDL-РОУТЕР ===
-  HTTP.onNotFound([]() {
+HTTP.onNotFound([]() {
     String uri = HTTP.uri();
-    Serial.print("[HTTP] "); Serial.println(uri);  // ← отладка
-
-    // 1. Сначала пытаемся отдать статический файл
-    if (handleFileRead(uri)) {
-      Serial.println("[HTTP] → static file");
-      return;  // ← ВАЖНО: фигурные скобки не нужны, return выходит из лямбды
-    }
-
-    // 2. Убираем начальный '/' для поиска в словаре
+    
+    // 1. Статический файл
+    if (handleFileRead(uri)) return;
+    
+    // 2. Поиск слова HDL
     String name = uri;
     if (name.startsWith("/")) name.remove(0, 1);
-
-    // 3. Ищем слово HDL с таким именем
+    
     uint16_t addr = dict_find(name.c_str());
-    if (addr != 0xFFFF) {
-      Serial.print("[HTTP] → HDL word at 0x"); Serial.println(addr, HEX);
-      
-      String contentType = getContentType("/" + name);
-      Print* savedOutput = currentOutput;
-
-      // 🔑 Chunked transfer — чтобы sendContent реально работал
-      HTTP.setContentLength(CONTENT_LENGTH_UNKNOWN);
-      HTTP.send(200, contentType, "");
-
-      g_stream.attachHttp(&HTTP);
-      currentOutput = &g_stream;
-
-      executeLine(name.c_str());
-
-      g_stream.flush();
-      g_stream.detach();
-      currentOutput = savedOutput;
-      return;
+    if (addr == 0xFFFF) {
+        http404send();
+        return;
     }
-
-    // 4. Ни файла, ни слова — честная 404
-    Serial.println("[HTTP] → 404");
-    http404send();
-  });
+    
+    // 3. Исполнение с RAII-гардом
+    String contentType = getContentType("/" + name);
+    HTTP.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    HTTP.send(200, contentType, "");
+    
+    {
+        OutputGuard guard;
+        g_stream.attachHttp(&HTTP);
+        currentOutput = &g_stream;
+        guard.owns_stream = true;
+        
+        executeLine(name.c_str());
+        // ← даже если executeLine упадёт/сделает abort, гард восстановит currentOutput
+    }
+});
 }
 
 // Здесь функции для работы с файловой системой
@@ -408,42 +398,44 @@ void http404send() {
 
 // ✅ Точная сигнатура, ожидаемая библиотекой
 void wsServerEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-  switch (type) {
-    case WStype_DISCONNECTED:
-      if (currentOutput == &g_stream) { 
-          g_stream.detach(); 
-          currentOutput = &Serial; 
-      }
-      break;
-      
-    case WStype_CONNECTED: {
-        // Переключаем вывод на WebSocket
-        g_stream.attachWs(&wsServer);
-        currentOutput = &g_stream;
-        
-
-      printStack();
-      printActiveTasks();
-      word_prompt();
-        g_stream.flush();
-        break;
-       }
-       
-    case WStype_TEXT: {
-        // 🔀 ТОЛЬКО приём данных. Никакого executeLine, printStack или flush здесь!
-        if (length > 0 && length < 255) {
-            memcpy(ws_cmd, payload, length);
-            ws_cmd[length] = '\0';
-            ws_cmd_ready = true; // Сигнализируем главному циклу, что есть команда
+    switch (type) {
+case WStype_DISCONNECTED:
+    g_stream.wsClientDisconnected();
+    if (!g_stream.isWsConnected()) {
+        g_stream.detach(true); // ← ДОБАВИТЬ true: клиентов больше нет, чистим состояние
+    }
+    break;
+            
+        case WStype_CONNECTED: {
+            // 🔑 Увеличиваем счетчик клиентов
+            g_stream.wsClientConnected();
+            
+            g_stream.attachWs(&wsServer);
+            
+            // Отправляем промпт WS-клиенту
+            Print* saved = currentOutput;
+            currentOutput = &g_stream;
+            printStack();
+            printActiveTasks();
+            word_prompt();
+            g_stream.flush();
+            currentOutput = saved;
+            break;
         }
-        break;
-      }
-      
-    default: 
-      break;
-  }
+           
+        case WStype_TEXT: {
+            if (length > 0 && length < 255) {
+                memcpy(ws_cmd, payload, length);
+                ws_cmd[length] = '\0';
+                ws_cmd_ready = true;
+            }
+            break;
+        }
+          
+        default:
+            break;
+    }
 }
-
 void word_onSoket() {
   wsServer.begin();
   wsServer.onEvent(wsServerEvent);
