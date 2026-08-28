@@ -3390,37 +3390,39 @@ static bool execute_file(const char* full_path) {
     return true;
 }
 void word_load() {
-if (stack_is_empty()) {
-currentOutput->println(getMsg("load error: stack empty"));
-return;
-}
-uint8_t* top = &stack_mem[stack_ptr];
-if (top[0] != 0x0D && top[0] != 0x0E) {
-currentOutput->println(getMsg("load error: expected filename"));
-return;
-}
-uint16_t sz = elem_size(top);
-uint8_t len = top[1];
-if (len > 255) len = 255;
-char fname[257];
-memcpy(fname, &top[2], len);
-fname[len] = '\0';
-stack_ptr += sz;
-char full_path[256];
-build_full_path(full_path, sizeof(full_path), fname);
+    if (stack_is_empty()) {
+        currentOutput->println(getMsg("load error: stack empty"));
+        return;
+    }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0D && top[0] != 0x0E) {
+        currentOutput->println(getMsg("load error: expected filename"));
+        return;
+    }
+    uint16_t sz = elem_size(top);
+    uint8_t len = top[1];
+    if (len > 255) len = 255;
+    
+    char fname[257];
+    memcpy(fname, &top[2], len);
+    fname[len] = '\0';
+    stack_ptr += sz;
+    
+    char full_path[256];
+    build_full_path(full_path, sizeof(full_path), fname);
 
-// 🔑 Сохраняем состояние памяти ДО загрузки
-uint16_t dict_before = dict_ptr;
-uint16_t data_before = data_ptr;
+    // 🔑 Сохраняем состояние памяти ДО загрузки
+    uint16_t dict_before = dict_ptr;
+    uint16_t data_before = data_ptr;
 
-execute_file(full_path);
+    execute_file(full_path);
 
-// 🔑 Выводим статистику использованной памяти
-uint16_t dict_used = dict_ptr - dict_before;
-uint16_t data_used = data_ptr - data_before;
+    // 🔑 Выводим статистику использованной памяти С ИМЕНЕМ ФАЙЛА
+    uint16_t dict_used = dict_ptr - dict_before;
+    uint16_t data_used = data_ptr - data_before;
 
-currentOutput->printf("load: dict +%u (free: %u/%u)\n", dict_used, DICT_POOL_SIZE - dict_ptr, DICT_POOL_SIZE);
-currentOutput->printf("load: data +%u (free: %u/%u)\n", data_used, DATA_POOL_SIZE - data_ptr, DATA_POOL_SIZE);
+    currentOutput->printf("load %s: dict +%u (free: %u/%u)\n", fname, dict_used, DICT_POOL_SIZE - dict_ptr, DICT_POOL_SIZE);
+    currentOutput->printf("load %s: data +%u (free: %u/%u)\n", fname, data_used, DATA_POOL_SIZE - data_ptr, DATA_POOL_SIZE);
 }
 void word_load_query() {
     // 1. БЕРЕМ ИМЯ ФАЙЛА СО СТЕКА (оно там, так как в R2L строка читается первой)

@@ -170,3 +170,9 @@ ssdp.NOTIFY.send
 ssdp.NOTIFY.send 600000 +task
 ssdpRead 100 +task
 main
+/*
+Фильтр WIRESHARK
+(udp.port == 1900) || 
+(ip.addr == 192.168.2.200 && tcp.port == 80) ||
+(ip.dst == 239.255.255.250)
+*/
