@@ -10,7 +10,12 @@
    
    Обучить модуль можно введя этот диалог: load ex/net/ssdp.wrd <--
 */
-webconst load? ex/http/webconst.wrd
+webconst word?
+load? ex/http/webconst.wrd
+
+
+
+
 upnp focus
 ssdp device
 ssdp.SchemaURL      = "description.xml"
@@ -20,15 +25,17 @@ ssdp.ServerName     = "Arduino/1.0"
 ip.esp = ipSta
 URLBase = http: + ip.esp  + ":" + toStr ssdp.HTTPPort
 deviceType          = "urn:schemas-upnp-org:device:" +  "rootdevice" + ":1"
-friendlyName        = "Philips hue clone"
+// SSDP = "Words HDL"
+// === Настройка метаданных устройства Words HDL ===
+friendlyName        = SSDP
 presentationURL     = "index.htm"
-serialNumber        = "929000226503"
-modelName           = "Philips hue bridge 2012"
-modelDescription    = "This device can be controled by WiFi"
-modelNumber         = "001788102201"
-modelURL            = "http://www.meethue.com"
-manufacturer        = "Royal Philips Electronics"
-manufacturerURL     = "http://www.philips.com"
+serialNumber        = chip.id               // 🔑 Лучшее решение: уникальный ID чипа вместо жестко заданного числа
+modelName           = "Words HDL Device"
+modelDescription    = "Smart device powered by Words Human-Device Language"
+modelNumber         = "HDL-1.0"
+modelURL            = "https://github.com/sa-tretyakov/words"  // Можно заменить на ссылку на твой GitHub или сайт
+manufacturer        = "Words HDL Project"
+manufacturerURL     = "https://esp-arduinoide.ru"     // Или твой личный домен/страниц
 uuid                =  uuid5 "urn:hdls:device" + chip.id
 UDN                 = "uuid:" + uuid
 
@@ -159,7 +166,7 @@ ssdpRead :
         // println ssdp.ip.zapros
         if -1 != ssdp?response {
         ssdp.HTTP200.send 
-        println "Ответ отправлен"
+        // println "Ответ отправлен"
         }
         // flush
         
@@ -170,9 +177,3 @@ ssdp.NOTIFY.send
 ssdp.NOTIFY.send 600000 +task
 ssdpRead 100 +task
 main
-/*
-Фильтр WIRESHARK
-(udp.port == 1900) || 
-(ip.addr == 192.168.2.200 && tcp.port == 80) ||
-(ip.dst == 239.255.255.250)
-*/

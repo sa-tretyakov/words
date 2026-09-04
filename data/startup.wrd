@@ -1,33 +1,21 @@
 ln :
 print CRLF
 ;
-load cords.wrd
-load ex/net/net.words
-// загружаем массив соответствия pin плата name
-print "Ваша плата "
-ln print chip
-
-testconfig :
-if chip == "esp32-s3" {
-load chip + "/uno.wrd"
-oops
-load "slavechko.wrd"
-exit
-}
-if chip == "esp32" {
-load chip + "/evo.wrd"
-oops
-load "evonic.wrd"
-exit
-}
-if chip == "esp32-с5" {
-load chip + "/evo.wrd"
-oops
-load "evonic.wrd"
-exit
-}
+println :
+print
+ln
 ;
 
-// testconfig
+configs focus
+print "Ваша плата "
+ln print chip
+SSDP = "Words-" + chip
+main
+load cords.wrd
+load ex/net/net.words
+// load ex/net/ssdp.wrd
+
+
+
 
 

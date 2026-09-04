@@ -1,0 +1,43 @@
+// load test.wrd <-- xxx
+// load ex/basic/ga-271.wrd <-- xxx
+compas focus
+compas.buf = array u8 6
+compas.buf view compas.xyz i16
+HMC5883L device
+sda = 25
+scl = 24
+compas.adr = 0x1E
+i2c.Init sda scl
+->
+
+compas.init :
+compas.buf [ ] = 0x00 0x70 0x01 0x20 0x02 0x00
+i2c.Write compas.adr part compas.buf 0 1
+i2c.Write compas.adr part compas.buf 2 3
+i2c.Write compas.adr part compas.buf 4 6
+oops
+;
+compas.init
+res = -1i16
+to16int : // u8 u8
+h = 
+l = 
+u = 0u16
+u = h << 8
+u += l
+res = u
+res
+locals
+;
+
+compas.read :
+i2c.ReadReg compas.buf 0x03 compas.adr
+->
+to16int compas.buf [ 0 ] compas.buf [ 1 ]
+println 
+;
+
+
+// to16int compas.buf [ 0 ] compas.buf [ 1 ]
+compas.read 1000 +task
+

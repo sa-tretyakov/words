@@ -1,36 +1,53 @@
 // === net.ino — WiFi + Ethernet + UDP + TCP ===
-// Единый модуль сети. Файл eth.ino должен быть пустым.
-#include <WiFi.h>
+// Единый модуль сети.
+// 🔒 Условная компиляция: ESP8266 получает только WiFi (без Ethernet и событий)
+
+// === ОПРЕДЕЛЕНИЕ ВОЗМОЖНОСТЕЙ ===
+// Ethernet (ENC28J60) работает только на ESP32
+#if defined(ESP32)
+    #define HDL_HAS_ETHERNET 1
+#else
+    #define HDL_HAS_ETHERNET 0
+#endif
+
+// === УСЛОВНЫЕ INCLUDE ===
+#if defined(ESP8266)
+    #include <ESP8266WiFi.h>
+#else
+    #include <WiFi.h>
+#endif
 #include <WiFiUdp.h>
-#include <esp_log.h>
-#include <esp_event.h>
+
+#if HDL_HAS_ETHERNET
+    #include <esp_log.h>
+    #include <esp_event.h>
+    #ifndef ETH_ENC28J60_ENABLED
+        #define ETH_ENC28J60_ENABLED 1
+    #endif
+    #if ETH_ENC28J60_ENABLED
+        #include <EthernetESP32.h>
+        #include <SPI.h>
+    #endif
+#endif
+#if defined(ESP32)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
-
-#ifndef ETH_ENC28J60_ENABLED
-#define ETH_ENC28J60_ENABLED 1
 #endif
-
-#if ETH_ENC28J60_ENABLED
-#include <EthernetESP32.h>
-#include <SPI.h>
-#endif
-
 // ============================================================
 // === ГЛОБАЛЬНОЕ СОСТОЯНИЕ ===
 // ============================================================
 static int32_t g_wifi_channel = 0;
 
-#if ETH_ENC28J60_ENABLED
-bool ethInstalled = false;
-static uint8_t ethMac[6] = {0x02, 0x00, 0x00, 0x12, 0x34, 0x56};
-static ENC28J60Driver* ethDriver = nullptr;
+#if HDL_HAS_ETHERNET && ETH_ENC28J60_ENABLED
+    bool ethInstalled = false;
+    static uint8_t ethMac[6];
+    static ENC28J60Driver* ethDriver = nullptr;
 #else
-bool ethInstalled = false;
+    bool ethInstalled = false;
 #endif
 
 // ============================================================
@@ -42,15 +59,12 @@ static uint16_t addr_e_start = 0, addr_e_conn = 0, addr_e_disc = 0, addr_e_ip = 
 // ============================================================
 // === ХЕЛПЕРЫ ===
 // ============================================================
-
-// Инкремент HDL-переменной UINT32 через штатные хелперы ядра
 static inline void inc_hdl_var(uint16_t body_addr) {
     if (body_addr == 0) return;
     uint32_t v = decode_uint_le(&dict_pool[body_addr + 1], 4);
     encode_uint_le(&dict_pool[body_addr + 1], v + 1, 4);
 }
 
-// Найти адрес тела переменной по имени
 static uint16_t _find_body(const char* name) {
     uint16_t addr = dict_find(name);
     if (addr == 0xFFFF) return 0;
@@ -58,7 +72,6 @@ static uint16_t _find_body(const char* name) {
     return addr + 5 + nlen;
 }
 
-// Создать u32-переменную штатным механизмом ядра
 static uint16_t create_u32(const char* name) {
     char cmd[80];
     snprintf(cmd, sizeof(cmd), "%s = 0u32", name);
@@ -66,26 +79,44 @@ static uint16_t create_u32(const char* name) {
     return _find_body(name);
 }
 
+// === БЕЗОПАСНЫЕ WiFi-РЕЖИМЫ (кросс-платформенные) ===
+#if defined(ESP8266)
+    #define HDL_WIFI_OFF     WIFI_OFF
+    #define HDL_WIFI_STA     WIFI_STA
+    #define HDL_WIFI_AP      WIFI_AP
+    #define HDL_WIFI_APSTA   WIFI_AP_STA
+#else
+    #define HDL_WIFI_OFF     WIFI_MODE_NULL
+    #define HDL_WIFI_STA     WIFI_STA
+    #define HDL_WIFI_AP      WIFI_MODE_AP
+    #define HDL_WIFI_APSTA   WIFI_MODE_APSTA
+#endif
+
 // Безопасное сканирование — сохраняет текущий режим WiFi
 static int safeScanNetworks() {
-    wifi_mode_t saved_mode = WiFi.getMode();
-    if (saved_mode == WIFI_MODE_NULL || saved_mode == WIFI_MODE_MAX) {
-        WiFi.mode(WIFI_STA);
+    uint8_t saved_mode = WiFi.getMode();
+    if (saved_mode == HDL_WIFI_OFF) {
+        WiFi.mode(HDL_WIFI_STA);
         delay(50);
         int n = WiFi.scanNetworks();
-        WiFi.mode(WIFI_MODE_NULL);
+        WiFi.mode(HDL_WIFI_OFF);
         return n;
     }
-    if (saved_mode == WIFI_MODE_AP) {
+    if (saved_mode == HDL_WIFI_AP) {
+#if defined(ESP8266)
+        WiFi.mode(WIFI_AP_STA);
+#else
         WiFi.mode(WIFI_MODE_APSTA);
+#endif
         delay(50);
         int n = WiFi.scanNetworks();
-        WiFi.mode(WIFI_MODE_AP);
+        WiFi.mode(HDL_WIFI_AP);
         return n;
     }
     return WiFi.scanNetworks();
 }
-// WiFi STA MAC с двоеточиями: "A1:B2:C3:D4:E5:F6"
+
+// WiFi STA MAC с двоеточиями
 void macFunc() {
     uint8_t mac[6];
     WiFi.macAddress(mac);
@@ -95,7 +126,7 @@ void macFunc() {
     pushStringRaw(buf);
 }
 
-// WiFi STA MAC без двоеточий: "A1B2C3D4E5F6"
+// WiFi STA MAC без двоеточий
 void macRawFunc() {
     uint8_t mac[6];
     WiFi.macAddress(mac);
@@ -115,9 +146,9 @@ void macApFunc() {
     pushStringRaw(buf);
 }
 
-// Ethernet MAC с двоеточиями
+// Ethernet MAC
 void macEthFunc() {
-#if ETH_ENC28J60_ENABLED
+#if HDL_HAS_ETHERNET && ETH_ENC28J60_ENABLED
     if (!ethInstalled) { pushStringRaw("00:00:00:00:00:00"); return; }
     char buf[18];
     snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -128,41 +159,68 @@ void macEthFunc() {
 #endif
 }
 
-// chip.id — уникальный ID чипа из eFuse (для USN)
+// chip.id — уникальный ID чипа
 void chipIdFunc() {
+#if defined(ESP8266)
+    uint32_t id = ESP.getChipId();
+    char buf[9];
+    snprintf(buf, sizeof(buf), "%08X", id);
+#else
     uint64_t id = ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL;
     char buf[13];
     snprintf(buf, sizeof(buf), "%012llX", (unsigned long long)id);
+#endif
     pushStringRaw(buf);
 }
+// === АВТО-ГЕНЕРАЦИЯ MAC ДЛЯ ENC28J60 ===
+// Использует уникальный MAC чипа ESP32 с префиксом 0x02 (Locally Administered)
+#if ETH_ENC28J60_ENABLED
+static void generateEthMac() {
+#if defined(ESP32)
+    uint64_t chipMac = ESP.getEfuseMac();
+    ethMac[0] = 0x02; // Locally Administered Address
+    ethMac[1] = (chipMac >> 40) & 0xFF;
+    ethMac[2] = (chipMac >> 32) & 0xFF;
+    ethMac[3] = (chipMac >> 24) & 0xFF;
+    ethMac[4] = (chipMac >> 16) & 0xFF;
+    ethMac[5] = (chipMac >> 8)  & 0xFF;
+#else
+    // ESP8266 fallback — используем фиксированный адрес
+    ethMac[0] = 0x02;
+    ethMac[1] = 0x00;
+    ethMac[2] = 0x00;
+    ethMac[3] = 0x12;
+    ethMac[4] = 0x34;
+    ethMac[5] = 0x56;
+#endif
+}
+#endif // ETH_ENC28J60_ENABLED
+
 // ============================================================
 // === DNS: Разрешение имён ===
 // ============================================================
 void dnsResolveFunc() {
     if (stack_is_empty()) { pushStringRaw("0.0.0.0"); return; }
     uint8_t* top = &stack_mem[stack_ptr];
-    // Ожидаем STRING (0x0E) или NAME (0x0D)
     if (top[0] != 0x0E && top[0] != 0x0D) { pushStringRaw("0.0.0.0"); return; }
-    
     uint8_t len = top[1];
     if (len == 0 || len > 63) { pushStringRaw("0.0.0.0"); return; }
-    
     char host[65];
     memcpy(host, &top[2], len);
     host[len] = '\0';
-    stack_ptr += elem_size(top); // Снимаем имя со стека
-
+    stack_ptr += elem_size(top);
     IPAddress ip;
-    // Используем штатный резолвер ESP32
     if (WiFi.hostByName(host, ip)) {
         pushStringRaw(ip.toString().c_str());
     } else {
         pushStringRaw("0.0.0.0");
     }
 }
+
 // ============================================================
 // === ОБРАБОТЧИК СОБЫТИЙ WiFi + Ethernet ===
 // ============================================================
+#if defined(ESP32)
 static void onWiFiEvent(arduino_event_id_t event, arduino_event_info_t info) {
     switch (event) {
         case ARDUINO_EVENT_WIFI_STA_START:        inc_hdl_var(addr_w_start); break;
@@ -176,21 +234,27 @@ static void onWiFiEvent(arduino_event_id_t event, arduino_event_info_t info) {
         default: break;
     }
 }
+#elif defined(ESP8266)
+// ESP8266 использует отдельные callback-и для каждого события
+static void onEsp8266StaConnected(const WiFiEventStationModeConnected& evt) {
+    inc_hdl_var(addr_w_conn);
+}
+static void onEsp8266StaDisconnected(const WiFiEventStationModeDisconnected& evt) {
+    inc_hdl_var(addr_w_disc);
+}
+static void onEsp8266StaGotIP(const WiFiEventStationModeGotIP& evt) {
+    inc_hdl_var(addr_w_ip);
+}
+#endif
 
 // ============================================================
 // === WiFi: режимы ===
 // ============================================================
-void modeStaFunc()   { WiFi.mode(WIFI_STA); }
-void modeApFunc()    { WiFi.mode(WIFI_AP); }
-void modeStaApFunc() {
-#if defined(ESP32)
-    WiFi.mode(WIFI_MODE_APSTA);
-#else
-    WiFi.mode(WIFI_AP_STA);
-#endif
-}
+void modeStaFunc()   { WiFi.mode(HDL_WIFI_STA); }
+void modeApFunc()    { WiFi.mode(HDL_WIFI_AP); }
+void modeStaApFunc() { WiFi.mode(HDL_WIFI_APSTA); }
 void wifiOffFunc() {
-    WiFi.mode(WIFI_MODE_NULL);
+    WiFi.mode(HDL_WIFI_OFF);
     g_wifi_channel = 0;
 }
 
@@ -217,7 +281,6 @@ void channelQueryFunc() {
     char ssid[65];
     memcpy(ssid, &top[2], ssidLen); ssid[ssidLen] = '\0';
     stack_ptr += elem_size(top);
-
     int n = safeScanNetworks();
     int best_ch = 0, best_rssi = -1000;
     for (int i = 0; i < n; i++) {
@@ -230,56 +293,40 @@ void channelQueryFunc() {
     WiFi.scanDelete();
     pushUInt16((uint16_t)best_ch);
 }
-// === scanPrefix : "prefix" → "ssid" (пустая строка если не найдено) ===
+
+// === scanPrefix ===
 void scanPrefixFunc() {
-    // 1. Проверяем наличие строки на стеке
     if (stack_is_empty()) { pushStringRaw(""); return; }
     uint8_t* top = &stack_mem[stack_ptr];
     if (top[0] != 0x0E && top[0] != 0x0D) { pushStringRaw(""); return; }
-    
     uint8_t plen = top[1];
     if (plen == 0 || plen > 63) { pushStringRaw(""); return; }
-    
-    // 2. Читаем префикс и снимаем со стека
     char prefix[65];
     memcpy(prefix, &top[2], plen);
     prefix[plen] = '\0';
     stack_ptr += elem_size(top);
-
-    // 3. Сканируем сети
     int n = safeScanNetworks();
     int best_i = -1;
     int best_rssi = -1000;
-    char best_ssid[33] = {0}; // Локальный буфер для лучшего совпадения
-
+    char best_ssid[33] = {0};
     for (int i = 0; i < n; i++) {
         String s = WiFi.SSID(i);
         const char* ssid = s.c_str();
-        
-        // Сравниваем начало строки с префиксом
         if (strncmp(ssid, prefix, plen) == 0) {
             int rssi = WiFi.RSSI(i);
             if (rssi > best_rssi) {
                 best_rssi = rssi;
                 best_i = i;
-                strncpy(best_ssid, ssid, 32); // Копируем имя в наш буфер
+                strncpy(best_ssid, ssid, 32);
                 best_ssid[32] = '\0';
             }
         }
     }
-    
-    // 4. Очищаем память сканера
     WiFi.scanDelete();
-
-    // 5. Помещаем результат в стек HDL. 
-    // Это БЕЗОПАСНО, так как pushStringRaw делает внутреннее копирование (memcpy) 
-    // до того, как функция scanPrefixFunc завершится и локальный best_ssid будет уничтожен.
-    if (best_i >= 0) {
-        pushStringRaw(best_ssid);
-    } else {
-        pushStringRaw("");
-    }
+    if (best_i >= 0) pushStringRaw(best_ssid);
+    else pushStringRaw("");
 }
+
 void gwStaFunc() {
     if (WiFi.status() != WL_CONNECTED) {
         pushStringRaw("0.0.0.0");
@@ -287,6 +334,7 @@ void gwStaFunc() {
     }
     pushStringRaw(WiFi.gatewayIP().toString().c_str());
 }
+
 // ============================================================
 // === band : ssid "2.4"|"5" → channel(u16) ===
 // ============================================================
@@ -299,7 +347,6 @@ void bandFunc() {
     if (band_len > 9) band_len = 9;
     memcpy(band_str, &top[2], band_len); band_str[band_len] = '\0';
     stack_ptr += elem_size(top);
-
     if (stack_is_empty()) { pushUInt16(0); return; }
     top = &stack_mem[stack_ptr];
     if (top[0] != 0x0E && top[0] != 0x0D) { pushUInt16(0); return; }
@@ -308,7 +355,6 @@ void bandFunc() {
     if (ssidLen == 0 || ssidLen > 63) { pushUInt16(0); return; }
     memcpy(ssid, &top[2], ssidLen); ssid[ssidLen] = '\0';
     stack_ptr += elem_size(top);
-
     int n = safeScanNetworks();
     int best_ch = 0, best_rssi = -1000;
     bool want_5ghz = (strcmp(band_str, "5") == 0 || strcmp(band_str, "5G") == 0);
@@ -324,30 +370,75 @@ void bandFunc() {
     WiFi.scanDelete();
     pushUInt16((uint16_t)best_ch);
 }
-// ============================================================
-// === setHostname : "name" → BOOL ===
-// ============================================================
+
 void setHostnameFunc() {
-    if (stack_is_empty()) { pushBool(false); return; }
+    if (stack_is_empty()) {
+        currentOutput->println(getMsg("setHostname: stack empty"));
+        return;
+    }
     uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] != 0x0E && top[0] != 0x0D) { pushBool(false); return; }
+    if (top[0] != 0x0E && top[0] != 0x0D) {
+        currentOutput->println(getMsg("setHostname: expected STRING/NAME"));
+        return;
+    }
     uint8_t len = top[1];
-    if (len == 0 || len > 32) { pushBool(false); return; }
+    if (len == 0 || len > 32) {
+        currentOutput->println(getMsg("setHostname: length must be 1..32"));
+        return;
+    }
+    
+    // === ВАЛИДАЦИЯ И НОРМАЛИЗАЦИЯ ===
     char hostname[33];
-    memcpy(hostname, &top[2], len);
-    hostname[len] = '\0';
+    bool has_invalid = false;
+    uint8_t out_len = 0;
+    
+    for (uint8_t i = 0; i < len; i++) {
+        char c = (char)top[2 + i];
+        
+        // Пробел → заменяем на '_'
+        if (c == ' ') {
+            hostname[out_len++] = '_';
+            continue;
+        }
+        
+        // Допустимые символы: a-z, A-Z, 0-9, '-', '_'
+        if ((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_') {
+            hostname[out_len++] = c;
+            continue;
+        }
+        
+        // Всё остальное — ошибка
+        has_invalid = true;
+        break;
+    }
+    
+    if (has_invalid) {
+        currentOutput->println(getMsg("setHostname: only English letters, digits, '-' and '_' allowed. Use '_' instead of space."));
+        stack_ptr += elem_size(top);
+        return;
+    }
+    
+    hostname[out_len] = '\0';
     stack_ptr += elem_size(top);
     
-    bool ok = WiFi.setHostname(hostname);
+    if (out_len == 0) return;
     
+// Замените WiFi.setHostname(hostname); на:
+#if defined(ESP8266)
+WiFi.hostname(hostname);
+#else
+WiFi.setHostname(hostname);
+#endif
 #if ETH_ENC28J60_ENABLED
     if (ethInstalled) {
-        ok = Ethernet.setHostname(hostname) && ok;
+        Ethernet.setHostname(hostname);
     }
 #endif
-    
-   //pushBool(ok);
 }
+
 // ============================================================
 // === onSta : ssid password → BOOL ===
 // ============================================================
@@ -360,7 +451,6 @@ void wifiFunc() {
     char ssid[65];
     memcpy(ssid, &top[2], ssidLen); ssid[ssidLen] = '\0';
     stack_ptr += elem_size(top);
-
     if (stack_is_empty()) { pushBool(false); return; }
     top = &stack_mem[stack_ptr];
     if (top[0] != 0x0E) { pushBool(false); return; }
@@ -369,10 +459,8 @@ void wifiFunc() {
     char password[65];
     memcpy(password, &top[2], passLen); password[passLen] = '\0';
     stack_ptr += elem_size(top);
-
-    WiFi.mode(WIFI_STA);
+    WiFi.mode(HDL_WIFI_STA);
     delay(100);
-
     if (g_wifi_channel > 0) {
         currentOutput->printf("connecting '%s' ch=%d\n", ssid, g_wifi_channel);
         WiFi.begin(ssid, password, g_wifi_channel);
@@ -380,7 +468,6 @@ void wifiFunc() {
         currentOutput->printf("connecting '%s'\n", ssid);
         WiFi.begin(ssid, password);
     }
-
     for (int i = 0; i < 100; i++) {
         wl_status_t st = WiFi.status();
         if (st == WL_CONNECTED) {
@@ -407,19 +494,22 @@ void ipStaFunc() { pushStringRaw(WiFi.status() == WL_CONNECTED ? WiFi.localIP().
 
 void scanFunc() {
     int n = safeScanNetworks();
-    currentOutput->print("{\"networks\":[");
+    currentOutput->print("{ \"networks\":[ ");
     for (int i = 0; i < n; i++) {
-        if (i) currentOutput->print(",");
-        currentOutput->print("{\"ssid\":\"");
+        if (i) currentOutput->print(", ");
+        currentOutput->print("{ \"ssid\": \"");
         String s = WiFi.SSID(i);
-        for (char c : s) { if (c == '"' || c == '\\') currentOutput->print('\\'); currentOutput->print(c); }
-        currentOutput->print("\",\"rssi\":");
+        for (char c : s) {
+            if (c == '"' || c == '\\') currentOutput->print('\\');
+            currentOutput->print(c);
+        }
+        currentOutput->print("\", \"rssi\": ");
         currentOutput->print(WiFi.RSSI(i));
-        currentOutput->print(",\"channel\":");
+        currentOutput->print(", \"channel\": ");
         currentOutput->print(WiFi.channel(i));
-        currentOutput->print("}");
+        currentOutput->print(" }");
     }
-    currentOutput->print("]}");
+    currentOutput->print("]} ");
     WiFi.scanDelete();
 }
 
@@ -429,17 +519,23 @@ void scanFunc() {
 void onApFunc() {
     String pass, ssid;
     if (!popString(pass) || !popString(ssid)) { pushBool(false); return; }
-    wifi_mode_t mode = WiFi.getMode();
-    if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) WiFi.mode(WIFI_MODE_AP);
+    uint8_t mode = WiFi.getMode();
+    if (mode != HDL_WIFI_AP && mode != HDL_WIFI_APSTA) WiFi.mode(HDL_WIFI_AP);
     pushBool(WiFi.softAP(ssid.c_str(), pass.length() ? pass.c_str() : nullptr));
 }
 
 void setApFunc() {
-    wifi_mode_t mode = WiFi.getMode();
-    if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) { pushBool(false); return; }
+    uint8_t mode = WiFi.getMode();
+    if (mode != HDL_WIFI_AP && mode != HDL_WIFI_APSTA) { pushBool(false); return; }
     bool hidden = false; int32_t ch = 1;
-    if (!stack_is_empty()) { uint8_t* t = &stack_mem[stack_ptr]; if (t[0] == 0 || t[0] == 1) { hidden = (t[0] == 1); stack_ptr++; } }
-    if (!stack_is_empty()) { uint8_t* t = &stack_mem[stack_ptr]; if (t[0] >= 4 && t[0] <= 11) { uint32_t v; if (popUInt32(v)) ch = (int32_t)v; } }
+    if (!stack_is_empty()) {
+        uint8_t* t = &stack_mem[stack_ptr];
+        if (t[0] == 0 || t[0] == 1) { hidden = (t[0] == 1); stack_ptr++; }
+    }
+    if (!stack_is_empty()) {
+        uint8_t* t = &stack_mem[stack_ptr];
+        if (t[0] >= 4 && t[0] <= 11) { uint32_t v; if (popUInt32(v)) ch = (int32_t)v; }
+    }
     String pass, ssid;
     if (!popString(pass) || !popString(ssid)) { pushBool(false); return; }
     if (ch < 1 || ch > 253) { pushBool(false); return; }
@@ -447,8 +543,8 @@ void setApFunc() {
 }
 
 void apConfigFunc() {
-    wifi_mode_t mode = WiFi.getMode();
-    if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) { pushBool(false); return; }
+    uint8_t mode = WiFi.getMode();
+    if (mode != HDL_WIFI_AP && mode != HDL_WIFI_APSTA) { pushBool(false); return; }
     String sn, gw, ip;
     if (!popString(sn) || !popString(gw) || !popString(ip)) { pushBool(false); return; }
     IPAddress L, G, S;
@@ -457,15 +553,16 @@ void apConfigFunc() {
 }
 
 void ipApFunc() {
-    wifi_mode_t mode = WiFi.getMode();
-    pushStringRaw((mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) ? WiFi.softAPIP().toString().c_str() : "0.0.0.0");
+    uint8_t mode = WiFi.getMode();
+    pushStringRaw((mode == HDL_WIFI_AP || mode == HDL_WIFI_APSTA) ? WiFi.softAPIP().toString().c_str() : "0.0.0.0");
 }
 
 // ============================================================
-// === Ethernet ===
+// === Ethernet (ТОЛЬКО ESP32) ===
 // ============================================================
-#if ETH_ENC28J60_ENABLED
+#if HDL_HAS_ETHERNET && ETH_ENC28J60_ENABLED
 void ethInitFunc() {
+    generateEthMac();
     uint8_t mosi, miso, sck, cs;
     if (!popUInt8(cs) || !popUInt8(sck) || !popUInt8(miso) || !popUInt8(mosi)) { pushBool(false); return; }
     if (ethDriver) delete ethDriver;
@@ -537,7 +634,7 @@ void ethDeinitFunc() {
     if (ethDriver) { delete ethDriver; ethDriver = nullptr; }
     pushBool(true);
 }
-#endif
+#endif // HDL_HAS_ETHERNET
 
 // ============================================================
 // === status : → u8 (WiFi + Ethernet) ===
@@ -545,7 +642,7 @@ void ethDeinitFunc() {
 void networkStatusFunc() {
     uint8_t wifi_st = (WiFi.status() == WL_CONNECTED) ? 1 : 0;
     uint8_t eth_st  = 0;
-#if ETH_ENC28J60_ENABLED
+#if HDL_HAS_ETHERNET && ETH_ENC28J60_ENABLED
     if (ethInstalled) {
         if (Ethernet.linkStatus() == LinkON) {
             IPAddress ip = Ethernet.localIP();
@@ -560,15 +657,19 @@ void networkStatusFunc() {
 // === wifiInit ===
 // ============================================================
 void wifiInit() {
+#if defined(ESP32)
     esp_log_level_set("wifi", ESP_LOG_NONE);
     esp_log_level_set("wifi_init", ESP_LOG_NONE);
     esp_log_level_set("esp_netif_handlers", ESP_LOG_NONE);
     esp_log_level_set("eth_enc28j60", ESP_LOG_NONE);
     WiFi.onEvent(onWiFiEvent);
+#elif defined(ESP8266)
+    WiFi.onStationModeConnected(onEsp8266StaConnected);
+    WiFi.onStationModeDisconnected(onEsp8266StaDisconnected);
+    WiFi.onStationModeGotIP(onEsp8266StaGotIP);
+#endif
 
     focusTo("network");
-
-    // Переменные через штатный механизм ядра
     addr_w_start = create_u32("wifi.starts");
     addr_w_conn  = create_u32("wifi.connects");
     addr_w_disc  = create_u32("wifi.disconnects");
@@ -588,7 +689,7 @@ void wifiInit() {
     addInternalWord("status",    networkStatusFunc);
     addInternalWord("dbm",       dbmFunc);
     addInternalWord("ipSta",     ipStaFunc);
-    addInternalWord("gwSta", gwStaFunc);
+    addInternalWord("gwSta",     gwStaFunc);
     addInternalWord("onAp",      onApFunc);
     addInternalWord("setAp",     setApFunc);
     addInternalWord("apConfig",  apConfigFunc);
@@ -596,8 +697,8 @@ void wifiInit() {
     addInternalWord("scan",      scanFunc);
     addInternalWord("scanPrefix", scanPrefixFunc);
     addInternalWord("wifiOff",   wifiOffFunc);
-    addInternalWord("dns.resolve", dnsResolveFunc); // <-- ДОБАВИТЬ ЭТУ СТРОКУ
-    addInternalWord("setHostname", setHostnameFunc);  // ← НОВОЕ СЛОВО
+    addInternalWord("dns.resolve", dnsResolveFunc);
+    addInternalWord("setHostname", setHostnameFunc);
     addInternalWord("mac",       macFunc);
     addInternalWord("mac.raw",   macRawFunc);
     addInternalWord("mac.ap",    macApFunc);
@@ -606,10 +707,10 @@ void wifiInit() {
 }
 
 // ============================================================
-// === ethInit ===
+// === ethInit (регистрация слов) ===
 // ============================================================
 void ethInit() {
-#if ETH_ENC28J60_ENABLED
+#if HDL_HAS_ETHERNET && ETH_ENC28J60_ENABLED
     focusTo("eth");
     addInternalWord("eth.Init",   ethInitFunc);
     addInternalWord("eth.InitEx", ethInitExFunc);
@@ -621,6 +722,7 @@ void ethInit() {
     addInternalWord("eth.Deinit", ethDeinitFunc);
     focusTo("main");
 #endif
+    // На ESP8266 — просто выходим, ничего не регистрируя.
 }
 
 // ============================================================
@@ -634,20 +736,15 @@ struct UdpSocket {
     IPAddress multicast_ip;
     bool is_multicast;
     int pending_size;
-    
-    // 🔑 НОВОЕ: Поддержка потоковой записи в один большой пакет (для SSDP и т.д.)
     bool is_streaming;
-    char stream_buf[512]; // 512 байт с запасом хватает на любой SSDP-ответ
+    char stream_buf[512];
     uint16_t stream_len;
     IPAddress stream_ip;
     uint16_t stream_port;
 };
+
 static UdpSocket* g_udp_sockets[8] = {nullptr};
 
-
-
-
-// Класс-накопитель для UDP-стриминга (объявить перед word_out_udp)
 class UdpStreamPrinter : public Print {
 public:
     UdpSocket* sock;
@@ -679,23 +776,19 @@ void word_out_udp() {
     if (!popUInt32(port32)) return;
     IPAddress ip;
     if (!ip.fromString(ip_str.c_str())) return;
-
     UdpSocket* s = g_udp_sockets[v];
-    
-    // 🔑 ВКЛЮЧАЕМ РЕЖИМ НАКОПЛЕНИЯ
     s->is_streaming = true;
     s->stream_len = 0;
     s->stream_ip = ip;
     s->stream_port = (uint16_t)port32;
-    
     if (!g_udp_stream_printer) {
         g_udp_stream_printer = new UdpStreamPrinter(s);
     } else {
         g_udp_stream_printer->sock = s;
     }
-    
     currentOutput = g_udp_stream_printer;
 }
+
 void udpOpenFunc() {
     uint32_t port32 = 0;
     if (!popUInt32(port32)) { pushUInt8(0xFF); return; }
@@ -724,45 +817,85 @@ void udpMulticastFunc() {
     UdpSocket* s = g_udp_sockets[idx];
     s->active = true; s->port = (uint16_t)port32; s->timeout_ms = 1000; s->is_multicast = true; s->multicast_ip = m_ip; s->pending_size = -1;
     s->udp.setTimeout(s->timeout_ms);
-    if (s->udp.beginMulticast(m_ip, (uint16_t)port32)) pushUInt8((uint8_t)idx);
+// Замените строку с beginMulticast на:
+#if defined(ESP8266)
+if (s->udp.beginMulticast(WiFi.localIP(), m_ip, (uint16_t)port32)) pushUInt8((uint8_t)idx);
+#else
+if (s->udp.beginMulticast(m_ip, (uint16_t)port32)) pushUInt8((uint8_t)idx);
+#endif
     else { s->active = false; pushUInt8(0xFF); }
 }
 
 void udpCloseFunc() {
     uint32_t v = 0;
-    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) { pushBool(false); return; }
+    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) return;
     g_udp_sockets[v]->udp.stop();
     g_udp_sockets[v]->active = false;
     g_udp_sockets[v]->pending_size = -1;
     delete g_udp_sockets[v];
     g_udp_sockets[v] = nullptr;
-    pushBool(true);
+    // Ничего не кладём на стек
 }
 
 void udpSendFunc() {
+    // === 1. ПРОВЕРКА СОКЕТА ===
     uint32_t v = 0;
-    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) { pushBool(false); return; }
+    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) return;
+    
+    // === 2. ПРОВЕРКА IP ===
     String ip_str;
-    if (!popString(ip_str)) { pushBool(false); return; }
+    if (!popString(ip_str)) return;
+    IPAddress ip;
+    if (!ip.fromString(ip_str.c_str())) return;
+    
+    // === 3. ПРОВЕРКА ПОРТА ===
     uint32_t port32 = 0;
-    if (!popUInt32(port32)) { pushBool(false); return; }
-    if (stack_is_empty()) { pushBool(false); return; }
+    if (!popUInt32(port32) || port32 > 65535) return;
+    
+    // === 4. ПРОВЕРКА ДАННЫХ ===
+    if (stack_is_empty()) return;
+    
     uint8_t* data_ptr = &stack_mem[stack_ptr];
     uint8_t tag = data_ptr[0];
     uint16_t data_sz = elem_size(data_ptr);
-    IPAddress ip;
-    if (!ip.fromString(ip_str.c_str())) { stack_ptr += data_sz; pushBool(false); return; }
-    UdpSocket* s = g_udp_sockets[v];
-    s->udp.beginPacket(ip, (uint16_t)port32);
-    bool success = false;
-    if (tag == 0x0E || tag == 0x0D) { uint8_t len = data_ptr[1]; s->udp.write(&data_ptr[2], len); success = true; }
-    else if (tag == 15) { uint8_t len = data_ptr[1]; uint16_t addr = data_ptr[2] | (data_ptr[3] << 8); if (addr + len <= DATA_POOL_SIZE) { s->udp.write(&data_pool[addr], len); success = true; } }
-    else if (tag == 17 || tag == 20) { uint16_t base = data_ptr[1] | (data_ptr[2] << 8); uint16_t len = data_ptr[3] | (data_ptr[4] << 8); uint8_t tp = data_ptr[5]; uint8_t esz = type_registry[tp].size; uint32_t total_bytes = (uint32_t)len * esz; if (base + total_bytes <= DATA_POOL_SIZE) { s->udp.write(&data_pool[base], total_bytes); success = true; } }
-    else if (tag <= 11) { uint16_t payload_len = data_sz - 1; if (payload_len > 0) { s->udp.write(&data_ptr[1], payload_len); success = true; } }
+    
+    const uint8_t* payload = nullptr;
+    uint32_t payload_len = 0;
+    
+    if (tag == 0x0E || tag == 0x0D) {
+        payload = &data_ptr[2];
+        payload_len = data_ptr[1];
+    }
+    else if (tag == 15) {
+        uint8_t len = data_ptr[1];
+        uint16_t addr = data_ptr[2] | (data_ptr[3] << 8);
+        if (addr + len <= DATA_POOL_SIZE) { payload = &data_pool[addr]; payload_len = len; }
+    }
+    else if (tag == 17 || tag == 20) {
+        uint16_t base = data_ptr[1] | (data_ptr[2] << 8);
+        uint16_t len  = data_ptr[3] | (data_ptr[4] << 8);
+        uint8_t esz   = type_registry[data_ptr[5]].size;
+        uint32_t total = (uint32_t)len * esz;
+        if (base + total <= DATA_POOL_SIZE) { payload = &data_pool[base]; payload_len = total; }
+    }
+    else if (tag >= 4 && tag <= 11) {
+        payload = &data_ptr[1];
+        payload_len = data_sz - 1;
+    }
+    
     stack_ptr += data_sz;
-    pushBool(success ? (s->udp.endPacket() > 0) : false);
+    
+    // === 5. НЕВАЛИДНО — ПРОСТО ВЫХОД, НИЧЕГО НЕ ОТПРАВЛЯЕМ ===
+    if (!payload || payload_len == 0) return;
+    
+    // === 6. ОТПРАВКА ===
+    UdpSocket* s = g_udp_sockets[v];
+    if (s->udp.beginPacket(ip, (uint16_t)port32)) {
+        s->udp.write(payload, payload_len);
+        s->udp.endPacket();
+    }
+    // Ничего не кладём на стек
 }
-
 void udpAvailableFunc() {
     uint32_t v = 0;
     if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) { pushUInt16(0); return; }
@@ -801,9 +934,7 @@ void udpTimeoutFunc() {
     g_udp_sockets[v]->udp.setTimeout(ms);
     pushBool(true);
 }
-// === ФИНАЛИЗАЦИЯ UDP-СТРИМИНГА ===
-// Вызывается из word_out_restore() в words.ino перед восстановлением currentOutput.
-// Проходит по всем UDP-сокетам и отправляет накопленные буферы одним пакетом.
+
 void udp_finalize_streaming() {
     for (int i = 0; i < 8; i++) {
         if (!g_udp_sockets[i] || !g_udp_sockets[i]->active) continue;
@@ -817,6 +948,7 @@ void udp_finalize_streaming() {
         }
     }
 }
+
 void udpInit() {
     focusTo("udp");
     addInternalWord("udp.Open",      udpOpenFunc);
@@ -841,6 +973,7 @@ struct TcpSocket {
     bool is_server;
     uint32_t timeout_ms;
 };
+
 static TcpSocket* g_tcp_sockets[8] = {nullptr};
 
 void word_out_tcp() {
@@ -859,7 +992,10 @@ static void tcp_cleanup_idx(int8_t idx) {
     if (idx < 0 || idx >= 8 || !g_tcp_sockets[idx]) return;
     TcpSocket* s = g_tcp_sockets[idx];
     if (s->client) { s->client->stop(); delete s->client; s->client = nullptr; }
+    
+#if defined(ESP32)
     if (s->serverFd >= 0) { ::close(s->serverFd); s->serverFd = -1; }
+#endif
     s->active = false;
     s->is_server = false;
 }
@@ -883,7 +1019,7 @@ void tcpConnectFunc() {
     if (s->client->connect(ip, (uint16_t)port32)) { s->active = true; pushUInt8((uint8_t)idx); }
     else { delete s->client; s->client = nullptr; s->active = false; pushUInt8(0xFF); }
 }
-
+#if defined(ESP32)
 void tcpListenFunc() {
     uint32_t port32 = 0;
     if (!popUInt32(port32)) { pushUInt8(0xFF); return; }
@@ -932,26 +1068,52 @@ void tcpAcceptFunc() {
     s->client->setTimeout(s->timeout_ms);
     pushUInt8((uint8_t)idx);
 }
-
+#endif
 void tcpSendFunc() {
     uint32_t v = 0;
-    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || g_tcp_sockets[v]->is_server || !g_tcp_sockets[v]->client) { pushBool(false); return; }
-    if (stack_is_empty()) { pushBool(false); return; }
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || 
+        g_tcp_sockets[v]->is_server || !g_tcp_sockets[v]->client) return;
+    
+    WiFiClient* c = g_tcp_sockets[v]->client;
+    if (!c->connected()) return;
+    
+    if (stack_is_empty()) return;
+    
     uint8_t* data_ptr = &stack_mem[stack_ptr];
     uint8_t tag = data_ptr[0];
     uint16_t data_sz = elem_size(data_ptr);
-    WiFiClient* c = g_tcp_sockets[v]->client;
-    if (!c->connected()) { stack_ptr += data_sz; pushBool(false); return; }
-    bool success = false;
-    size_t written = 0;
-    if (tag == 0x0E || tag == 0x0D) { uint8_t len = data_ptr[1]; written = c->write(&data_ptr[2], len); success = (written == len); }
-    else if (tag == 15) { uint8_t len = data_ptr[1]; uint16_t addr = data_ptr[2] | (data_ptr[3] << 8); if (addr + len <= DATA_POOL_SIZE) { written = c->write(&data_pool[addr], len); success = (written == len); } }
-    else if (tag == 17 || tag == 20) { uint16_t base = data_ptr[1] | (data_ptr[2] << 8); uint16_t len = data_ptr[3] | (data_ptr[4] << 8); uint8_t tp = data_ptr[5]; uint8_t esz = type_registry[tp].size; uint32_t total_bytes = (uint32_t)len * esz; if (base + total_bytes <= DATA_POOL_SIZE) { written = c->write(&data_pool[base], total_bytes); success = (written == total_bytes); } }
-    else if (tag >= 4 && tag <= 11) { uint16_t payload_len = data_sz - 1; if (payload_len > 0) { written = c->write(&data_ptr[1], payload_len); success = (written == payload_len); } }
+    
+    const uint8_t* payload = nullptr;
+    uint32_t payload_len = 0;
+    
+    if (tag == 0x0E || tag == 0x0D) {
+        payload = &data_ptr[2];
+        payload_len = data_ptr[1];
+    }
+    else if (tag == 15) {
+        uint8_t len = data_ptr[1];
+        uint16_t addr = data_ptr[2] | (data_ptr[3] << 8);
+        if (addr + len <= DATA_POOL_SIZE) { payload = &data_pool[addr]; payload_len = len; }
+    }
+    else if (tag == 17 || tag == 20) {
+        uint16_t base = data_ptr[1] | (data_ptr[2] << 8);
+        uint16_t len  = data_ptr[3] | (data_ptr[4] << 8);
+        uint8_t esz   = type_registry[data_ptr[5]].size;
+        uint32_t total = (uint32_t)len * esz;
+        if (base + total <= DATA_POOL_SIZE) { payload = &data_pool[base]; payload_len = total; }
+    }
+    else if (tag >= 4 && tag <= 11) {
+        payload = &data_ptr[1];
+        payload_len = data_sz - 1;
+    }
+    
     stack_ptr += data_sz;
-    pushBool(success);
+    
+    if (!payload || payload_len == 0) return;
+    
+    c->write(payload, payload_len);
+    // Ничего не кладём на стек
 }
-
 void tcpRecvFunc() {
     uint32_t v = 0;
     if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || g_tcp_sockets[v]->is_server || !g_tcp_sockets[v]->client) { pushUInt16(0); return; }
@@ -1015,7 +1177,7 @@ void reqQuestionFunc() {
     uint16_t base = 0, len = 0;
     if (!popAddrInfo(base, len)) { pushBool(false); return; }
     if (len < 4 || base + len > DATA_POOL_SIZE) { pushBool(false); return; }
-    const char* methods[] = {"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH "};
+    const char* methods[] = { "GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH " };
     const uint8_t method_lens[] = {4, 5, 4, 7, 5, 8, 6};
     for (int i = 0; i < 7; i++) {
         if (len >= method_lens[i] && memcmp(&data_pool[base], methods[i], method_lens[i]) == 0) { pushBool(true); return; }
@@ -1035,7 +1197,7 @@ void reqLineFunc() {
     if (line_end == 0 || line_end >= len) { pushBool(false); pushStringRaw(""); pushStringRaw(""); return; }
     const uint8_t* data = &data_pool[base];
     struct Method { const char* name; uint8_t len; };
-    static const Method methods[] = {{"GET",3},{"POST",4},{"PUT",3},{"DELETE",6},{"HEAD",4},{"OPTIONS",7},{"PATCH",5}};
+    static const Method methods[] = { {"GET",3},{"POST",4},{"PUT",3},{"DELETE",6},{"HEAD",4},{"OPTIONS",7},{"PATCH",5} };
     int method_idx = -1;
     for (int i = 0; i < 7; i++) {
         uint8_t mlen = methods[i].len;
@@ -1070,8 +1232,10 @@ void reqLineFunc() {
 void tcpInit() {
     focusTo("tcp");
     addInternalWord("tcp.Connect",    tcpConnectFunc);
+#if defined(ESP32)
     addInternalWord("tcp.Listen",     tcpListenFunc);
     addInternalWord("tcp.Accept",     tcpAcceptFunc);
+#endif
     addInternalWord("tcp.Send",       tcpSendFunc);
     addInternalWord("tcp.Recv",       tcpRecvFunc);
     addInternalWord("tcp.Available",  tcpAvailableFunc);

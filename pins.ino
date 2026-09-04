@@ -95,9 +95,12 @@ void analogReadWord() {
 void amvWord() {
     uint8_t pin;
     if (!popUInt8(pin)) return;
-    int32_t mV = ::analogReadMilliVolts(pin);
-    if (mV < 0) mV = 0;
-    pushInt32(mV);
+#if defined(ESP32)
+    pushInt32(::analogReadMilliVolts(pin));
+#else
+    // Грубая аппроксимация для ESP8266 (1023 = ~1000mV)
+    pushInt32((::analogRead(pin) * 1000) / 1023);
+#endif
 }
 
 void pulseInFunc() {
@@ -270,13 +273,56 @@ void i2cInitClokFunc() {
 }
 
 void i2cWriteFunc() {
-    uint16_t a, l;
-    uint8_t dev;
-    if (!popAddrInfo(a, l) || !popUInt8(dev)) { pushBool(false); return; }
-    if (!i2cInitialized || a + l > DATA_POOL_SIZE) { pushBool(false); return; }
+  uint8_t dev;
+  if (!popUInt8(dev) || !i2cInitialized || stack_is_empty()) { pushBool(false); return; }
+
+  uint8_t* top = &stack_mem[stack_ptr];
+  const uint8_t* ptr = nullptr;
+  uint16_t len = 0;
+  uint16_t sz = elem_size(top);
+  uint8_t tag = top[0];
+
+  // ЧИСЛА (u8, i8, u16, i16, u24, u32, i32, f)
+  if (tag >= 4 && tag <= 11) {
+    ptr = &top[1]; len = sz - 1;
+  }
+  // STRING / NAME
+  else if (tag == 0x0E || tag == 0x0D) {
+    ptr = &top[2]; len = top[1];
+  }
+  // $STRING
+  else if (tag == 15) {
+    len = top[1];
+    uint16_t a = top[2] | (top[3] << 8);
+    if (a + len > DATA_POOL_SIZE) { pushBool(false); return; }
+    ptr = &data_pool[a];
+  }
+  // ARRAY / REF_ARR
+  else if (tag == 17 || tag == 20) {
+    if (sz != 6) { pushBool(false); return; }
+    uint16_t a = top[1] | (top[2] << 8);
+    len = top[3] | (top[4] << 8);
+    uint8_t esz = type_registry[top[5]].size;
+    uint32_t total = (uint32_t)len * esz;
+    if (a + total > DATA_POOL_SIZE) { pushBool(false); return; }
+    ptr = &data_pool[a];
+    len = (uint16_t)total;
+  }
+  else { pushBool(false); return; }
+
+  stack_ptr += sz;
+
+  // Разбиение на куски по 128 байт
+  const uint16_t CHUNK = 128;
+  uint16_t sent = 0;
+  while (sent < len) {
+    uint16_t chunk = (len - sent > CHUNK) ? CHUNK : (len - sent);
     Wire.beginTransmission(dev);
-    Wire.write(&data_pool[a], (size_t)l);
-    pushBool(Wire.endTransmission(true) == 0);
+    Wire.write(ptr + sent, chunk);
+    if (Wire.endTransmission(true) != 0) { pushBool(false); return; }
+    sent += chunk;
+  }
+  pushBool(true);
 }
 
 void i2cReadFunc() {
@@ -301,11 +347,13 @@ void i2cReadRegFunc() {
     Wire.beginTransmission(dev);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0) { pushBool(false); return; }
-    if (Wire.requestFrom(dev, l) < l) { pushBool(false); return; }
+    
+    // ИСПРАВЛЕНО: явное приведение типов для ESP8266
+    if (Wire.requestFrom((uint8_t)dev, (uint8_t)l) < l) { pushBool(false); return; }
+    
     for (uint8_t i = 0; i < l; i++) data_pool[a + i] = Wire.read();
     pushBool(true);
 }
-
 void i2cScanFunc() {
     uint16_t a, max;
     if (!popAddrInfo(a, max)) { pushUInt8(0); return; }

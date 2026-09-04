@@ -1,13 +1,33 @@
 #define ETH_ENC28J60_ENABLED 0
+#define HDL_NO_BLE 0          // ← 1 = принудительно отключить BLE, 0 = оставить как есть
 // #define pril
+
+// === Определение наличия BLE ===
+#if HDL_NO_BLE
+    #define HDL_HAS_BLE 0
+#elif !defined(ESP8266) && !defined(CONFIG_IDF_TARGET_ESP32S2)
+    #define HDL_HAS_BLE 1
+#else
+    #define HDL_HAS_BLE 0
+#endif
 #include <Arduino.h>
 #include <Wire.h>
+#if defined(ESP32)
 #include "driver/i2s.h"
+#endif
 #ifdef ESP8266
 #include <ESP8266WiFi.h>
+#include <WiFiUdp.h> // <-- ДОБАВИТЬ ЭТО
+#include <ESP8266WebServer.h>
+ESP8266WebServer HTTP(80);
+#include <Hash.h> 
 #else
 #include <WiFi.h>
+#include <WiFiUdp.h>
+#include <WebServer.h>
+WebServer HTTP(80);
 #endif
+
 #include <cstring>
 // #define CHOICE_DEBUG
 // === НАСТРОЙКА ТЕРМИНАЛЬНОГО СЛОЯ ===
@@ -56,6 +76,7 @@ void handleTermChar(char c);
 void stack_clear();
 void word_prompt();
 void exec_word(uint16_t addr);
+extern bool bt_stream_write(uint8_t ch, const uint8_t* data, size_t len);
 bool g_in_block_comment = false; // Состояние многострочного комментария
 #define FILESYSTEM SPIFFS
 #define FORMAT_FILESYSTEM false
@@ -87,14 +108,7 @@ bool g_in_block_comment = false; // Состояние многострочно�
 #include "SPI.h"
 #endif
 #endif
-//---------- WEB сервера
-#if defined(ESP8266)
-#include <ESP8266WebServer.h>        //Содержится в пакете
-ESP8266WebServer HTTP(80);
-#else
-#include <WebServer.h>
-WebServer HTTP(80);
-#endif
+
 File fsUploadFile;
 
 // web.ino — ИСПРАВЛЕННАЯ ВЕРСИЯ
@@ -133,8 +147,11 @@ public:
         T_UDP,    // UDP-сокет
         T_I2C,    // I²C
         T_I2S,    // I²S аудио
-        T_HTTP    // HTTP-ответ
+        T_HTTP,    // HTTP-ответ
+        T_BLE
     };
+
+    
 
     // === КОНСТРУКТОР ===
     HDLStream() : target(T_NONE), ws(nullptr), tcp(nullptr),
@@ -194,7 +211,11 @@ public:
         http_srv = nullptr;
     }
 
-void attachHttp(WebServer* srv) {
+#if defined(ESP8266)
+    void attachHttp(ESP8266WebServer* srv) {
+#else
+    void attachHttp(WebServer* srv) {
+#endif
     flush();
     target = T_HTTP;
     http_srv = srv;
@@ -207,7 +228,16 @@ void attachHttp(WebServer* srv) {
     tcp = nullptr; 
     udp = nullptr;
 }
-
+// ← ВОТ СЮДА ВСТАВЬ attachBle:
+void attachBle(uint8_t ch) {
+    flush();
+    target = T_BLE;
+    ble_ch = ch;
+    ws = nullptr; 
+    tcp = nullptr; 
+    udp = nullptr; 
+    http_srv = nullptr;
+}
     // ============================================================
     // === ОТКЛЮЧЕНИЕ (DETACH) ===
     // ============================================================
@@ -228,6 +258,7 @@ void detach(bool force = false) {
         tcp = nullptr;
         udp = nullptr;
         http_srv = nullptr;
+        ble_ch = 0;   
     }
 }
 
@@ -244,6 +275,11 @@ void detach(bool force = false) {
             case T_I2C:  return "i2c";
             case T_I2S:  return "i2s";
             case T_HTTP: return "http";
+case T_BLE:
+#if HDL_HAS_BLE
+    bt_stream_write(ble_ch, (uint8_t*)buf, buf_len);
+#endif
+    break;
             default:     return "none";
         }
     }
@@ -311,16 +347,25 @@ void detach(bool force = false) {
                 Wire.endTransmission();
                 break;
                 
-            case T_I2S: {
-                size_t w;
-                i2s_write((i2s_port_t)i2s_port, buf, buf_len, &w, 0);
-                break;
-            }
+        case T_I2S: {
+#if defined(ESP32)
+            size_t w;
+            i2s_write((i2s_port_t)i2s_port, buf, buf_len, &w, 0);
+#endif
+            break;
+        }
                 
-            case T_HTTP:
-                if (http_srv) 
-                    http_srv->sendContent(String((char*)buf, buf_len));
-                break;
+        case T_HTTP:
+            if (http_srv) {
+                char temp[257];
+                memcpy(temp, buf, buf_len);
+                temp[buf_len] = '\0'; // Гарантируем нуль-терминацию
+                http_srv->sendContent(temp);
+            }
+            break;
+case T_BLE:                                       
+    bt_stream_write(ble_ch, (uint8_t*)buf, buf_len);
+    break;
                 
             default: 
                 break;
@@ -347,13 +392,17 @@ private:
     WiFiUDP* udp;
     uint8_t i2c_dev;
     uint8_t i2s_port;
+    uint8_t ble_ch = 0;
+#if defined(ESP8266)
+    ESP8266WebServer* http_srv;
+#else
     WebServer* http_srv;
+#endif
     IPAddress dest_ip;
     uint16_t dest_port;
     char buf[256];
     uint8_t buf_len;
     uint8_t ws_client_count = 0;
- 
 };
 
 // Глобальный экземпляр мультиплексора
@@ -527,12 +576,17 @@ static inline bool popAddrInfo(uint16_t &addr, uint16_t &len) {
 static inline bool popString(String &out) {
     if (stack_is_empty()) return false;
     uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] != 0x0E && top[0] != 0x0D) return false;  // ← добавить 0x0D
-    out = String((char*)&top[2], top[1]);
+    if (top[0] != 0x0E && top[0] != 0x0D) return false;
+    
+    uint8_t len = top[1];
+    char temp[257];
+    memcpy(temp, &top[2], len);
+    temp[len] = '\0'; // Гарантируем нуль-терминацию
+    
+    out = temp;
     stack_ptr += elem_size(top);
     return true;
 }
-
 // === ДЕКОДИРОВАНИЕ ЧИСЕЛ ИЗ БУФЕРА ===
 // Универсальный декодер: little-endian + знаковое расширение для signed-тегов
 // buf — указатель на ДАННЫЕ (без тега!), data_bytes — количество байт данных
@@ -2485,8 +2539,9 @@ void word_const() {
   }
   dict_pool[fpos] |= 0x01;
 }
+
 void word_ls() {
-  File root = FILESYSTEM.open("/");
+  File root = FILESYSTEM.open("/", "r");
   if (!root) {
     currentOutput->println("fs mount failed");
     return;
@@ -2500,7 +2555,11 @@ void word_ls() {
   } files[64]; uint8_t f_cnt = 0;
   uint32_t total_size = 0;
   while (File f = root.openNextFile()) {
-    const char* full = f.path();
+#if defined(ESP8266)
+const char* full = f.name(); // ESP8266 использует name()
+#else
+const char* full = f.path(); // ESP32 использует path()
+#endif
     if (!full) continue;
     bool in_scope = false;
     if (is_root) {
@@ -2546,7 +2605,13 @@ void word_ls() {
     currentOutput->printf("%10lu ", (unsigned long)files[i].size);
     currentOutput->println(files[i].name);
   }
-  uint32_t free_bytes = FILESYSTEM.totalBytes() - FILESYSTEM.usedBytes();
+#if defined(ESP32)
+uint32_t free_bytes = FILESYSTEM.totalBytes() - FILESYSTEM.usedBytes();
+#else
+FSInfo fs_info;
+FILESYSTEM.info(fs_info);
+uint32_t free_bytes = fs_info.totalBytes - fs_info.usedBytes;
+#endif
   currentOutput->printf("%6lu files        %lu bytes\n", (unsigned long)f_cnt, (unsigned long)total_size);
   currentOutput->printf("%6lu dirs     %lu bytes free\n", (unsigned long)(d_cnt + 2), (unsigned long)free_bytes);
 }
@@ -2585,11 +2650,15 @@ void word_cd() {
   if (strlen(g_currentDir) > 1) snprintf(new_path, sizeof(new_path), "%s/%s", g_currentDir, txt);
   else snprintf(new_path, sizeof(new_path), "/%s", txt);
   bool found = false;
-  File root = FILESYSTEM.open("/");
+  File root = FILESYSTEM.open("/", "r");
   if (root) {
     size_t p_len = strlen(new_path);
     while (File f = root.openNextFile()) {
-      const char* fp = f.path();
+#if defined(ESP8266)
+const char* fp = f.name(); // ESP8266 использует name()
+#else
+const char* fp = f.path(); // ESP32 использует path()
+#endif
       if (strncmp(fp, new_path, p_len) == 0 && fp[p_len] == '/') {
         found = true;
         break;
@@ -3390,92 +3459,99 @@ static bool execute_file(const char* full_path) {
     return true;
 }
 void word_load() {
-    if (stack_is_empty()) {
-        currentOutput->println(getMsg("load error: stack empty"));
-        return;
-    }
-    uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] != 0x0D && top[0] != 0x0E) {
-        currentOutput->println(getMsg("load error: expected filename"));
-        return;
-    }
-    uint16_t sz = elem_size(top);
-    uint8_t len = top[1];
-    if (len > 255) len = 255;
-    
-    char fname[257];
-    memcpy(fname, &top[2], len);
-    fname[len] = '\0';
-    stack_ptr += sz;
-    
-    char full_path[256];
-    build_full_path(full_path, sizeof(full_path), fname);
-
-    // 🔑 Сохраняем состояние памяти ДО загрузки
-    uint16_t dict_before = dict_ptr;
-    uint16_t data_before = data_ptr;
-
-    execute_file(full_path);
-
-    // 🔑 Выводим статистику использованной памяти С ИМЕНЕМ ФАЙЛА
-    uint16_t dict_used = dict_ptr - dict_before;
-    uint16_t data_used = data_ptr - data_before;
-
-    currentOutput->printf("load %s: dict +%u (free: %u/%u)\n", fname, dict_used, DICT_POOL_SIZE - dict_ptr, DICT_POOL_SIZE);
-    currentOutput->printf("load %s: data +%u (free: %u/%u)\n", fname, data_used, DATA_POOL_SIZE - data_ptr, DATA_POOL_SIZE);
+if (stack_is_empty()) {
+currentOutput->println(getMsg("load error: stack empty"));
+return;
+}
+uint8_t* top = &stack_mem[stack_ptr];
+if (top[0] != 0x0D && top[0] != 0x0E) {
+currentOutput->println(getMsg("load error: expected filename"));
+return;
+}
+uint16_t sz = elem_size(top);
+uint8_t len = top[1];
+if (len > 255) len = 255;
+char fname[257];
+memcpy(fname, &top[2], len);
+fname[len] = '\0';
+stack_ptr += sz;
+char full_path[256];
+build_full_path(full_path, sizeof(full_path), fname);
+// Загружаем файл
+bool ok = execute_file(full_path);
 }
 void word_load_query() {
-    // 1. БЕРЕМ ИМЯ ФАЙЛА СО СТЕКА (оно там, так как в R2L строка читается первой)
-    if (stack_is_empty()) {
-        currentOutput->println(getMsg("load?: filename expected"));
-        return;
+// ============================================================
+// 1. СНАЧАЛА БЕРЁМ ИМЯ ФАЙЛА СО СТЕКА (вершина)
+// ============================================================
+if (stack_is_empty()) {
+    currentOutput->println(getMsg("load?: filename expected"));
+    return;
+}
+uint8_t* top = &stack_mem[stack_ptr];
+if (top[0] != 0x0D && top[0] != 0x0E) {
+    currentOutput->println(getMsg("load?: filename must be string/name"));
+    return;
+}
+uint16_t sz = elem_size(top);
+uint8_t fn_len = top[1];
+if (fn_len > 255) fn_len = 255;
+char fname[257];
+memcpy(fname, &top[2], fn_len);
+fname[fn_len] = '\0';
+stack_ptr += sz;                        // снимаем имя файла
+
+// ============================================================
+// 2. ЗАТЕМ БЕРЁМ УСЛОВИЕ — ЛЮБОЙ ТИП (BOOL, u8..u32, i8..i32, f)
+//    Истина = любое ненулевое значение
+//    Ложь   = все байты данных равны нулю
+// ============================================================
+if (stack_is_empty()) {
+    currentOutput->println(getMsg("load?: condition expected (any type)"));
+    return;
+}
+uint8_t* cond_top = &stack_mem[stack_ptr];
+uint8_t cond_tag = cond_top[0];
+uint16_t cond_sz = elem_size(cond_top);
+
+bool condition = false;
+
+// 🔹 BOOL (теги 0 и 1)
+if (cond_tag == 0) {
+    condition = false;
+}
+else if (cond_tag == 1) {
+    condition = true;
+}
+// 🔹 Числовые типы (u8..f, теги 4..11)
+else if (cond_tag >= 4 && cond_tag <= 11) {
+    // Проверяем все байты данных — если хоть один не ноль, условие истинно
+    for (uint16_t i = 1; i < cond_sz; i++) {
+        if (cond_top[i] != 0) {
+            condition = true;
+            break;
+        }
     }
-    uint8_t* top = &stack_mem[stack_ptr];
-    if (top[0] != 0x0D && top[0] != 0x0E) {
-        currentOutput->println(getMsg("load?: filename must be string/name"));
-        return;
-    }
-    uint16_t sz = elem_size(top);
-    uint8_t fn_len = top[1];
-    if (fn_len > 255) fn_len = 255;
-    
-    char fname[257];
-    memcpy(fname, &top[2], fn_len);
-    fname[fn_len] = '\0';
-    stack_ptr += sz; // 🔑 Снимаем имя файла со стека
-    
-    // 2. СМОТРИМ СЛЕДУЮЩИЙ ТОКЕН в R2L-потоке (это имя слова, например "webconst")
-    int idx = g_tok_idx - 1;
-    if (idx < 0) {
-        currentOutput->println(getMsg("load?: word name expected"));
-        return;
-    }
-    uint8_t len = g_tok_len[idx];
-    if (len == 0 || len > 63) {
-        currentOutput->println(getMsg("load?: invalid word name"));
-        return;
-    }
-    char word_name[64];
-    memcpy(word_name, g_tok_start[idx], len);
-    word_name[len] = '\0';
-    
-    // 3. ПРОВЕРЯЕМ, есть ли слово в словаре
-    if (dict_find(word_name) != 0xFFFF) {
-        // Слово УЖЕ есть. Ничего не загружаем.
-        // 🔑 КЛЮЧЕВОЕ: пропускаем этот токен, чтобы он не исполнился как отдельная команда!
-        g_tok_idx -= 1;
-        return;
-    }
-    
-    // 4. Слова НЕТ. Загружаем файл.
+}
+// 🔹 Неизвестный тип — ошибка
+else {
+    currentOutput->println(getMsg("load?: condition must be BOOL or numeric"));
+    return;
+}
+
+stack_ptr += cond_sz;                   // снимаем условие
+
+// ============================================================
+// 3. ГРУЗИМ ФАЙЛ ТОЛЬКО ЕСЛИ condition == true
+// ============================================================
+if (!condition) {
     char full_path[256];
     build_full_path(full_path, sizeof(full_path), fname);
     execute_file(full_path);
-    
-    // 🔑 КЛЮЧЕВОЕ: даже после загрузки мы должны пропустить токен имени, 
-    // так как он был аргументом для load?, а не самостоятельной командой.
-    g_tok_idx -= 1;
 }
+}
+
+
 void word_save() {
   char full_path[256];
   char* name_ptr = nullptr;
@@ -4906,6 +4982,25 @@ void word_out_file() {
         currentOutput->println(full_path);
     }
 }
+
+
+extern bool bt_stream_write(uint8_t ch, const uint8_t* data, size_t len);
+
+void word_out_ble() {
+    uint8_t ch = 0;
+    if (!stack_is_empty()) {
+        uint8_t* top = &stack_mem[stack_ptr];
+        if (top[0] >= 4 && top[0] <= 11) {
+            popUInt8(ch);
+        }
+    }
+    if (ch >= 4) {
+        currentOutput->println("out>ble: invalid channel (0-3)");
+        return;
+    }
+    g_stream.attachBle(ch);
+    currentOutput = &g_stream;
+}
 void word_out_serial() {
     if (g_outFile) {
         g_outFile.flush();
@@ -5584,9 +5679,15 @@ void word_randRange() {
         return;
     }
 
-    // 4. Генерируем случайное число
-    int32_t range = max_val - min_val + 1;
-    int32_t r = min_val + (esp_random() % range);
+
+// 4. Генерируем случайное число
+int32_t range = max_val - min_val + 1;
+
+#if defined(ESP32)
+int32_t r = min_val + (esp_random() % range);
+#else
+int32_t r = min_val + random(0, range); // ESP8266 требует аргументы (min, max)
+#endif
 
     // 5. Возвращаем результат
     uint8_t out[8];
@@ -6370,16 +6471,26 @@ void serial_desc_func() {
   uint8_t tx = dict_pool[body + 9];
   uint8_t state = dict_pool[body + 10];
 
-  // 3. Получаем указатель на UART
-  Stream* uart = nullptr;
-  if (port == 0) uart = &Serial;
-  else if (port == 1) uart = &Serial1;
-  else if (port == 2) uart = &Serial2;
-  else { pushBool(false); return; }
-
+// 3. Получаем указатель на UART
+Stream* uart = nullptr;
+if (port == 0) uart = &Serial;
+else if (port == 1) uart = &Serial1;
+#if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
+// Serial2 (UART2) существует только на классическом ESP32 и ESP32-S3
+else if (port == 2) uart = &Serial2;
+#endif
+else { 
+    pushBool(false); 
+    return; 
+}
   // 4. Авто-инициализация
   if (state == 0 && port > 0) {
-    ((HardwareSerial*)uart)->begin(baud, SERIAL_8N1, rx, tx);
+// Замените строку begin на:
+#if defined(ESP32)
+((HardwareSerial*)uart)->begin(baud, SERIAL_8N1, rx, tx);
+#else
+((HardwareSerial*)uart)->begin(baud); // ESP8266 не поддерживает кастомные пины в стандартном begin
+#endif
     dict_pool[body + 10] = 1;  // Обновляем состояние в теле слова
   }
 
@@ -7115,99 +7226,131 @@ void word_out_save() {
 void sha1Func() {
     // R2L: приёмник данные sha1
     // Стек (сверху вниз): приёмник (ARRAY u8 >= 20), данные
-    
+
     // 1. Снимаем приёмник
     if (stack_is_empty()) { pushBool(false); return; }
     uint8_t* dst = &stack_mem[stack_ptr];
     if ((dst[0] != 17 && dst[0] != 20) || elem_size(dst) != 6) {
-        stack_ptr += elem_size(dst); pushBool(false); return;
+        stack_ptr += elem_size(dst);
+        pushBool(false);
+        return;
     }
     uint16_t dst_base = dst[1] | (dst[2] << 8);
     uint16_t dst_len  = dst[3] | (dst[4] << 8);
     uint8_t  dst_esz  = type_registry[dst[5]].size;
     uint32_t dst_total = (uint32_t)dst_len * dst_esz;
     stack_ptr += 6;
-    
+
     if (dst_total < 20 || dst_base + 20 > DATA_POOL_SIZE) {
-        pushBool(false); return;
+        pushBool(false);
+        return;
     }
-    
+
     // 2. Снимаем данные
     if (stack_is_empty()) { pushBool(false); return; }
     uint8_t* top = &stack_mem[stack_ptr];
-    const uint8_t* data = nullptr;
-    uint16_t len = 0;
-    
-    if (top[0] == 0x0E || top[0] == 0x0D) {
-        data = &top[2]; len = top[1];
-    } else if (top[0] == 15) {
-        len = top[1];
-        uint16_t a = top[2] | (top[3] << 8);
-        if (a + len <= DATA_POOL_SIZE) data = &data_pool[a];
-    } else if (top[0] == 17 || top[0] == 20) {
-        uint16_t base = top[1] | (top[2] << 8);
-        uint16_t count = top[3] | (top[4] << 8);
-        uint8_t esz = type_registry[top[5]].size;
-        len = count * esz;
-        if (base + len <= DATA_POOL_SIZE) data = &data_pool[base];
-    }
-    stack_ptr += elem_size(top);
-    
-    if (!data || len == 0) { pushBool(false); return; }
-    
-    // 3. SHA-1 ПРЯМО В ПРИЁМНИК — data_ptr НЕ МЕНЯЕТСЯ!
-    mbedtls_sha1_context ctx;
-    mbedtls_sha1_init(&ctx);
-    mbedtls_sha1_starts(&ctx);
-    mbedtls_sha1_update(&ctx, data, len);
-    mbedtls_sha1_finish(&ctx, &data_pool[dst_base]);
-    mbedtls_sha1_free(&ctx);
-    
-    pushBool(true);
-}
-// ============================================================
-// === uuid5 : данные → STRING "xxxxxxxx-xxxx-5xxx-yxxx-..." ===
-// SHA-1 буфер — локальный на C-стеке, приёмник НЕ нужен.
-// На выходе: STRING (тег 0x0E) длиной 36 байт прямо на стеке HDL.
-// ============================================================
-void uuid5Func() {
-    if (stack_is_empty()) { pushStringRaw(""); return; }
-    uint8_t* top = &stack_mem[stack_ptr];
-
-    // 1. Извлекаем сырые байты из элемента на стеке
     const uint8_t* data = nullptr;
     uint16_t len = 0;
 
     if (top[0] == 0x0E || top[0] == 0x0D) {          // STRING / NAME
         data = &top[2];
         len = top[1];
-    } else if (top[0] == 15) {                       // $STRING
+    } 
+    else if (top[0] == 15) {                         // $STRING
         len = top[1];
         uint16_t a = top[2] | (top[3] << 8);
         if (a + len <= DATA_POOL_SIZE) data = &data_pool[a];
-    } else if (top[0] == 17 || top[0] == 20) {       // ARRAY / REF_ARR
+    } 
+    else if (top[0] == 17 || top[0] == 20) {         // ARRAY / REF_ARR
         uint16_t base = top[1] | (top[2] << 8);
         uint16_t count = top[3] | (top[4] << 8);
         uint8_t esz = type_registry[top[5]].size;
         len = count * esz;
         if (base + len <= DATA_POOL_SIZE) data = &data_pool[base];
-    } else {
+    }
+    stack_ptr += elem_size(top);
+
+    if (!data || len == 0) {
+        pushBool(false);
+        return;
+    }
+
+    // 3. Вычисление SHA-1 (кроссплатформенная реализация)
+#if defined(ESP32)
+    #include "mbedtls/sha1.h"
+    mbedtls_sha1_context ctx;
+    mbedtls_sha1_init(&ctx);
+    mbedtls_sha1_starts(&ctx);
+    mbedtls_sha1_update(&ctx, data, len);
+    mbedtls_sha1_finish(&ctx, &data_pool[dst_base]);
+    mbedtls_sha1_free(&ctx);
+
+#elif defined(ESP8266)
+    #include <Hash.h>
+    sha1(data, (uint32_t)len, &data_pool[dst_base]);
+
+#else
+    // Заглушка для других платформ — 20 нулей
+    memset(&data_pool[dst_base], 0, 20);
+#endif
+
+    pushBool(true);
+}
+void uuid5Func() {
+    if (stack_is_empty()) { pushStringRaw(""); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    
+    // 1. Извлекаем сырые байты из элемента на стеке
+    const uint8_t* data = nullptr;
+    uint16_t len = 0;
+    
+    if (top[0] == 0x0E || top[0] == 0x0D) {          // STRING / NAME
+        data = &top[2];
+        len = top[1];
+    } 
+    else if (top[0] == 15) {                         // $STRING
+        len = top[1];
+        uint16_t a = top[2] | (top[3] << 8);
+        if (a + len <= DATA_POOL_SIZE) data = &data_pool[a];
+    } 
+    else if (top[0] == 17 || top[0] == 20) {         // ARRAY / REF_ARR
+        uint16_t base = top[1] | (top[2] << 8);
+        uint16_t count = top[3] | (top[4] << 8);
+        uint8_t esz = type_registry[top[5]].size;
+        len = count * esz;
+        if (base + len <= DATA_POOL_SIZE) data = &data_pool[base];
+    } 
+    else {
         stack_ptr += elem_size(top);
         pushStringRaw("");
         return;
     }
     stack_ptr += elem_size(top);
-
-    if (!data || len == 0) { pushStringRaw(""); return; }
+    
+    if (!data || len == 0) { 
+        pushStringRaw(""); 
+        return; 
+    }
 
     // 2. SHA-1 в ЛОКАЛЬНОМ буфере на C-стеке (не в data_pool!)
     uint8_t hash[20];
+
+#if defined(ESP32)
+    #include "mbedtls/sha1.h"
     mbedtls_sha1_context ctx;
     mbedtls_sha1_init(&ctx);
     mbedtls_sha1_starts(&ctx);
     mbedtls_sha1_update(&ctx, data, len);
     mbedtls_sha1_finish(&ctx, hash);
     mbedtls_sha1_free(&ctx);
+
+#elif defined(ESP8266)
+
+    sha1(data, (uint32_t)len, hash);
+
+#else
+    memset(hash, 0, 20);
+#endif
 
     // 3. Версия 5 (старшие 4 бита байта 6) и вариант 10xx (байт 8)
     hash[6] = (hash[6] & 0x0F) | 0x50;
@@ -7329,9 +7472,36 @@ void word_out_restore() {
     
     currentOutput = (Print*)(uintptr_t)ptr;
 }
+void wordQueryFunc() {
+// 1. Захват имени из R2L-потока (предыдущий токен)
+int idx = g_tok_idx - 1;
+if (idx < 0) {
+    currentOutput->println("word?: no word name before");
+    pushBool(false);
+    return;
+}
+uint8_t len = g_tok_len[idx];
+if (len == 0 || len > 63) {
+    currentOutput->println("word?: invalid name");
+    pushBool(false);
+    return;
+}
+char name[64];
+memcpy(name, g_tok_start[idx], len);
+name[len] = '\0';
+
+// 2. Ищем слово в словаре
+uint16_t addr = dict_find(name);
+pushBool(addr != 0xFFFF);
+
+// 3. Пропускаем токен имени в R2L-цикле
+g_tok_idx -= 1;
+}
 void setup() {
   Serial.begin(115200);
   Serial.println(); delay(500);
+  for (int i = 0; i <= 255; i++) Serial.println();
+   
       // 🔑 КРИТИЧНО: выделяем пулы в heap ПЕРЕД любым использованием
     if (!init_pools()) {
         Serial.println(F("FATAL: heap allocation failed for pools"));
@@ -7343,7 +7513,7 @@ void setup() {
     Serial.printf("pools allocated: %u bytes from heap (free: %u)\n",
         (unsigned)(STACK_SIZE + DICT_POOL_SIZE + DATA_POOL_SIZE + RSTACK_SIZE),
         (unsigned)ESP.getFreeHeap());
-  for (int i = 0; i <= 255; i++) Serial.println();
+
   stack_clear();
   if (!FILESYSTEM.begin()) currentOutput->println("FS Mount Failed");
   // === БАЗОВЫЕ И СИСТЕМНЫЕ СЛОВА ===
@@ -7372,6 +7542,7 @@ void setup() {
   addInternalWord("nop",  wordNop);              // Пустая операция. Используется как маркер конца цепочки (cord) или для выравнивания.
     addInternalWord("?", word_help);
   addInternalWord("words", word_words);          // Выводит список всех доступных слов в текущем контексте (фокусе внимания).
+
   addInternalWord("all", word_words_all);   // ← ДОБАВИТЬ
   addInternalWord("exec", word_exec);
   addInternalWord("sha1",  sha1Func);
@@ -7393,6 +7564,7 @@ void setup() {
   addInternalWord("while", word_while);          // Цикл: проверяет условие на стеке. Если истинно, исполняет тело и возвращается к проверке.
   addInternalWord("goto",  word_goto);           // Безусловный переход к указанному адресу в байт-коде.
   addInternalWord("exit", word_exit);            // Досрочный выход из текущего скомпилированного слова (возврат по стеку вызовов).
+  addInternalWord("word?", wordQueryFunc);
  
   // === МАНИПУЛЯЦИЯ СТЕКОМ ===
   addInternalWord("->",    word_drop);           // Удаление верхнего элемента со стека (очистка мусора).
@@ -7424,6 +7596,7 @@ void setup() {
   focusTo("streams");
   addInternalWord("out>file", word_out_file);    // Перенаправляет весь последующий вывод (print, stack и т.д.) в указанный файл.
   addInternalWord("out>serial",  word_out_serial);
+  addInternalWord( "out >ble ", word_out_ble);
   addInternalWord("out>save",    word_out_save);
   addInternalWord("out>restore", word_out_restore);
   addInternalWord("out?",        word_out_query); //
@@ -7538,6 +7711,8 @@ void setup() {
   rmtModuleInit();
   i2sInit();
   i2cInit();
+  btInit();
+
 #if ENABLE_TERM_LAYER
   addInternalWord("term", word_term);
 #endif
@@ -7566,10 +7741,12 @@ if (FILESYSTEM.exists("/startup.wrd")) {
   printStack();
   printActiveTasks(); // ← СПИСОК ЗАДАЧ
   word_prompt();
+  
 
 }
 
 void loop() {
+  
   // 1. Кооперативное исполнение фоновых задач
   process_tasks(false);
 
@@ -7627,4 +7804,5 @@ if (ws_cmd_ready) {
   // 4. Обслуживание библиотеки WebSocket (пинг/понг, разрывы)
   // ⚠️ ВАЖНО: Это должно вызываться здесь, а не через +loop в startup.wrd
   wsServer.loop();
+  
 }
