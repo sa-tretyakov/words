@@ -826,23 +826,18 @@ void i2sInit() {
     // На ESP8266 — просто выходим, ничего не регистрируя.
 }
 
-// === bt.ino — BLE (Bluetooth Low Energy) с NUS-сервисом ===
-// Работает на: ESP32, S3, C3, C5, C6, H2
-// НЕ работает на: ESP32-S2 (нет радиомодуля), ESP8266 (нет Bluetooth)
-//
-// 🔒 Условная компиляция: на неподдерживаемых платформах файл становится пустым,
-// но функция btInit() остаётся доступной (ничего не делает).
+// === BLE: один ключ HDL_ENABLE_BLE (задаётся в words.ino) ===
+// HDL_HAS_BLE = 1 только если:
+//   • HDL_ENABLE_BLE == 1
+//   • платформа НЕ ESP8266 и НЕ ESP32-S2
+#ifndef HDL_ENABLE_BLE
+  #define HDL_ENABLE_BLE 1
+#endif
 
-// === ОПРЕДЕЛЕНИЕ НАЛИЧИЯ BLE ===
-// Если HDL_ENABLE_BLE не задан в words.ino, #if посчитает его равным 0 (выключено).
-#if HDL_ENABLE_BLE
-    #if !defined(ESP8266) && !defined(CONFIG_IDF_TARGET_ESP32S2)
-        #define HDL_HAS_BLE 1
-    #else
-        #define HDL_HAS_BLE 0
-    #endif
+#if HDL_ENABLE_BLE && !defined(ESP8266) && !defined(CONFIG_IDF_TARGET_ESP32S2)
+  #define HDL_HAS_BLE 1
 #else
-    #define HDL_HAS_BLE 0
+  #define HDL_HAS_BLE 0
 #endif
 
 #if HDL_HAS_BLE

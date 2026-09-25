@@ -3,6 +3,8 @@
 webconst focus
 const http.version = "HTTP/1.1 "
 
+const http: = "http://"
+
 http.ok :
  http.version + "200 OK" + CRLF
  ;
@@ -26,10 +28,6 @@ http.version + "400 Bad Request" + CRLF
 ;
 http.error.line :
 http.version + "500 Internal Server Error" + CRLF
-;
-println :
-print
-ln
 ;
 
 Empty.Line :

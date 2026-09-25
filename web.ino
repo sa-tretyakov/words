@@ -301,33 +301,32 @@ void http404send() {
 
 
 
-// ✅ Точная сигнатура, ожидаемая библиотекой
 void wsServerEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
     switch (type) {
-case WStype_DISCONNECTED:
-    g_stream.wsClientDisconnected();
-    if (!g_stream.isWsConnected()) {
-        g_stream.detach(true); // ← ДОБАВИТЬ true: клиентов больше нет, чистим состояние
-    }
-    break;
-            
+        case WStype_DISCONNECTED:
+            g_stream.wsClientDisconnected();
+            if (!g_stream.isWsConnected()) {
+                g_stream.detach(true); // клиентов больше нет — чистим состояние
+            }
+            break;
+
         case WStype_CONNECTED: {
-            // 🔑 Увеличиваем счетчик клиентов
             g_stream.wsClientConnected();
-            
-            g_stream.attachWs(&wsServer);
-            
-            // Отправляем промпт WS-клиенту
+            // 🔑 Настраиваем g_stream на WS, но НЕ переключаем currentOutput.
+            // currentOutput останется там, где был (обычно Serial).
+            // Когда WS-клиент пришлёт первую команду, loop() сам переключит.
+            // Но промпт нужно отправить именно в WS — делаем временно:
             Print* saved = currentOutput;
+            g_stream.attachWs(&wsServer);
             currentOutput = &g_stream;
             printStack();
             printActiveTasks();
             word_prompt();
             g_stream.flush();
-            currentOutput = saved;
+            currentOutput = saved; // ← возвращаем как было
             break;
         }
-           
+
         case WStype_TEXT: {
             if (length > 0 && length < 255) {
                 memcpy(ws_cmd, payload, length);
@@ -336,11 +335,12 @@ case WStype_DISCONNECTED:
             }
             break;
         }
-          
+
         default:
             break;
     }
 }
+
 void word_onSoket() {
   wsServer.begin();
   wsServer.onEvent(wsServerEvent);
@@ -356,51 +356,5 @@ currentOutput = &g_stream;
 // ✅ ИСПРАВЛЕНО: Имя функции совпадает с регистрацией
 void word_flush_ws() {
 if (currentOutput == &g_stream) g_stream.flush();
-
   
 }
-
-// prilServer
-#ifdef pril // #endif
-
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-
-    switch(type) {
-        case WStype_DISCONNECTED:
-            break;
-        case WStype_CONNECTED:
-            {
-                IPAddress ip = prilServer.remoteIP(num);
-    prilServer.sendTXT(num, "Connected");
-            }
-            break;
-        case WStype_TEXT:
-   if (length > 0) {
-        String command = String((const char *)payload);
-        currentOutput->println(command);
-      }         
-            // prilServer.sendTXT(num, "message here");
-            // prilServer.broadcastTXT("message here");
-            break;
-        case WStype_BIN:
-            // prilServer.sendBIN(num, payload, length);
-            break;
-  case WStype_ERROR:      
-  case WStype_FRAGMENT_TEXT_START:
-  case WStype_FRAGMENT_BIN_START:
-  case WStype_FRAGMENT:
-  case WStype_FRAGMENT_FIN:
-      break;
-    }
-
-}
-void word_onSoketPril() {
-    prilServer.begin();
-    prilServer.onEvent(webSocketEvent);
-  currentOutput->println("WebSocket server started on port 81");
-}
-
-void word_SoketPril() {
-  prilServer.loop();
-}
-#endif

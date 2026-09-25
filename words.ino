@@ -1,33 +1,23 @@
-#define ETH_ENC28J60_ENABLED 0
-#define HDL_NO_BLE 0          // ← 1 = принудительно отключить BLE, 0 = оставить как есть
-// #define pril
+#define ETH_ENC28J60_ENABLED 1
+#define HDL_ENABLE_BLE 1   // 1 = включить BLE (если платформа позволяет), 0 = выключить
 
-// === Определение наличия BLE ===
-#if HDL_NO_BLE
-    #define HDL_HAS_BLE 0
-#elif !defined(ESP8266) && !defined(CONFIG_IDF_TARGET_ESP32S2)
-    #define HDL_HAS_BLE 1
-#else
-    #define HDL_HAS_BLE 0
-#endif
 #include <Arduino.h>
 #include <Wire.h>
 #if defined(ESP32)
 #include "driver/i2s.h"
 #endif
+#include <WiFiUdp.h> 
 #ifdef ESP8266
 #include <ESP8266WiFi.h>
-#include <WiFiUdp.h> // <-- ДОБАВИТЬ ЭТО
 #include <ESP8266WebServer.h>
 ESP8266WebServer HTTP(80);
 #include <Hash.h> 
 #else
 #include <WiFi.h>
-#include <WiFiUdp.h>
 #include <WebServer.h>
 WebServer HTTP(80);
 #endif
-
+#include <OneWire.h>
 #include <cstring>
 // #define CHOICE_DEBUG
 // === НАСТРОЙКА ТЕРМИНАЛЬНОГО СЛОЯ ===
@@ -121,9 +111,7 @@ extern void word_prompt();
 extern void addInternalWord(const char* name, void (*func)());
 
 WebSocketsServer wsServer(82);
-#ifdef pril // #endif 
-WebSocketsServer prilServer(81);
-#endif 
+
 #if defined(ESP8266)
 
 #else
@@ -137,6 +125,10 @@ RTC_NOINIT_ATTR uint8_t crashCounter;
 #endif
 
 
+
+// ============================================================
+// === HDLStream — единый мультиплексор потоков вывода ===
+// ============================================================
 class HDLStream : public Print {
 public:
     // === ТИПЫ КАНАЛОВ ===
@@ -147,11 +139,29 @@ public:
         T_UDP,    // UDP-сокет
         T_I2C,    // I²C
         T_I2S,    // I²S аудио
-        T_HTTP,    // HTTP-ответ
-        T_BLE
+        T_HTTP,   // HTTP-ответ
+        T_BLE,    // BLE NUS
+        T_FILE    // Файл на FS
     };
 
-    
+    // === СНИМОК КОНТЕКСТА (для out>save / out>restore) ===
+    struct Context {
+        Target             target;
+        WebSocketsServer*  ws;
+        WiFiClient*        tcp;
+        WiFiUDP*           udp;
+        IPAddress          udp_ip;
+        uint16_t           udp_port;
+        uint8_t            i2c_dev;
+        uint8_t            i2s_port;
+        uint8_t            ble_ch;
+#if defined(ESP8266)
+        ESP8266WebServer*  http_srv;
+#else
+        WebServer*         http_srv;
+#endif
+        char               file_path[64]; // путь к файлу (для T_FILE)
+    };
 
     // === КОНСТРУКТОР ===
     HDLStream() : target(T_NONE), ws(nullptr), tcp(nullptr),
@@ -161,54 +171,46 @@ public:
     // ============================================================
     // === ПОДКЛЮЧЕНИЕ КАНАЛОВ (ATTACH) ===
     // ============================================================
-    
     void attachWs(WebSocketsServer* srv) {
-        flush(); 
-        target = T_WS; 
+        flush();
+        target = T_WS;
         ws = srv;
-        tcp = nullptr; 
-        udp = nullptr; 
-        http_srv = nullptr;
+        tcp = nullptr; udp = nullptr; http_srv = nullptr;
+        closeFile();
     }
 
     void attachTcp(WiFiClient* c) {
-        flush(); 
-        target = T_TCP; 
+        flush();
+        target = T_TCP;
         tcp = c;
-        ws = nullptr; 
-        udp = nullptr; 
-        http_srv = nullptr;
+        ws = nullptr; udp = nullptr; http_srv = nullptr;
+        closeFile();
     }
 
     void attachUdp(WiFiUDP* u, IPAddress ip, uint16_t port) {
-        flush(); 
-        target = T_UDP; 
-        udp = u; 
-        dest_ip = ip; 
+        flush();
+        target = T_UDP;
+        udp = u;
+        dest_ip = ip;
         dest_port = port;
-        ws = nullptr; 
-        tcp = nullptr; 
-        http_srv = nullptr;
+        ws = nullptr; tcp = nullptr; http_srv = nullptr;
+        closeFile();
     }
 
     void attachI2c(uint8_t dev) {
-        flush(); 
-        target = T_I2C; 
+        flush();
+        target = T_I2C;
         i2c_dev = dev;
-        ws = nullptr; 
-        tcp = nullptr; 
-        udp = nullptr; 
-        http_srv = nullptr;
+        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
+        closeFile();
     }
 
     void attachI2s(uint8_t port) {
-        flush(); 
-        target = T_I2S; 
+        flush();
+        target = T_I2S;
         i2s_port = port;
-        ws = nullptr; 
-        tcp = nullptr; 
-        udp = nullptr; 
-        http_srv = nullptr;
+        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
+        closeFile();
     }
 
 #if defined(ESP8266)
@@ -216,57 +218,140 @@ public:
 #else
     void attachHttp(WebServer* srv) {
 #endif
-    flush();
-    target = T_HTTP;
-    http_srv = srv;
-    
-    // 🔑 КРИТИЧНО: не обнуляем ws, если WebSocket клиенты всё ещё подключены!
-    // Это позволяет восстановить WS-канал после завершения HTTP-запроса.
-    if (!isWsConnected()) {
-        ws = nullptr;
+        flush();
+        target = T_HTTP;
+        http_srv = srv;
+        // 🔑 КРИТИЧНО: не обнуляем ws, если WebSocket клиенты всё ещё подключены!
+        if (!isWsConnected()) {
+            ws = nullptr;
+        }
+        tcp = nullptr; udp = nullptr;
+        closeFile();
     }
-    tcp = nullptr; 
-    udp = nullptr;
-}
-// ← ВОТ СЮДА ВСТАВЬ attachBle:
-void attachBle(uint8_t ch) {
-    flush();
-    target = T_BLE;
-    ble_ch = ch;
-    ws = nullptr; 
-    tcp = nullptr; 
-    udp = nullptr; 
-    http_srv = nullptr;
-}
+
+    void attachBle(uint8_t ch) {
+        flush();
+        target = T_BLE;
+        ble_ch = ch;
+        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
+        closeFile();
+    }
+
+    // === НОВОЕ: ПОДКЛЮЧЕНИЕ ФАЙЛА ===
+    // Открывает файл по пути (с учётом g_currentDir через build_full_path)
+    // и переключает вывод в него.
+    bool attachFile(const char* path) {
+        flush();
+        closeFile(); // закрываем предыдущий, если был
+
+        if (!path || path[0] == '\0') return false;
+
+        // Сохраняем путь (для возможного restore)
+        size_t plen = strlen(path);
+        if (plen >= sizeof(file_path)) plen = sizeof(file_path) - 1;
+        memcpy(file_path, path, plen);
+        file_path[plen] = '\0';
+
+        // Открываем файл
+        file_obj = FILESYSTEM.open(file_path, "w");
+        if (!file_obj) {
+            file_path[0] = '\0';
+            return false;
+        }
+
+        target = T_FILE;
+        ws = nullptr; tcp = nullptr; udp = nullptr; http_srv = nullptr;
+        return true;
+    }
+
     // ============================================================
     // === ОТКЛЮЧЕНИЕ (DETACH) ===
     // ============================================================
-    
-// 🔴 ЖЁСТКИЙ DETACH — всегда сбрасывает в T_NONE (если force=true)
-// Или восстанавливает WS, если клиенты подключены (если force=false)
-void detach(bool force = false) {
-    flush();
-    
-    // 🔑 КРИТИЧНО: если WebSocket клиенты всё ещё подключены и нет принудительного сброса,
-    // восстанавливаем WS как активный канал вместо полного обнуления.
-    if (!force && isWsConnected()) {
-        target = T_WS;
-        http_srv = nullptr; // HTTP-запрос завершён, обнуляем только его
-    } else {
-        target = T_NONE;
-        ws = nullptr;
-        tcp = nullptr;
-        udp = nullptr;
-        http_srv = nullptr;
-        ble_ch = 0;   
+    // force=true  → жёсткий сброс в T_NONE
+    // force=false → если WS-клиенты подключены, восстанавливаем T_WS
+    void detach(bool force = false) {
+        flush();
+        closeFile();
+
+        if (!force && isWsConnected()) {
+            target = T_WS;
+            http_srv = nullptr;
+        } else {
+            target = T_NONE;
+            ws = nullptr;
+            tcp = nullptr;
+            udp = nullptr;
+            http_srv = nullptr;
+            ble_ch = 0;
+        }
     }
-}
+
+    // ============================================================
+    // === SAVE / RESTORE КОНТЕКСТА ===
+    // ============================================================
+    // Сохраняет текущее состояние (для out>save)
+    void saveContext(Context& ctx) const {
+        // Сначала сбрасываем буфер, чтобы данные ушли в текущий канал
+        const_cast<HDLStream*>(this)->flush();
+
+        ctx.target   = target;
+        ctx.ws       = ws;
+        ctx.tcp      = tcp;
+        ctx.udp      = udp;
+        ctx.udp_ip   = dest_ip;
+        ctx.udp_port = dest_port;
+        ctx.i2c_dev  = i2c_dev;
+        ctx.i2s_port = i2s_port;
+        ctx.ble_ch   = ble_ch;
+        ctx.http_srv = http_srv;
+
+        if (target == T_FILE) {
+            size_t plen = strlen(file_path);
+            if (plen >= sizeof(ctx.file_path)) plen = sizeof(ctx.file_path) - 1;
+            memcpy(ctx.file_path, file_path, plen);
+            ctx.file_path[plen] = '\0';
+        } else {
+            ctx.file_path[0] = '\0';
+        }
+    }
+
+    // Восстанавливает состояние (для out>restore)
+    // Для T_FILE — заново открывает файл по сохранённому пути
+    bool restoreContext(const Context& ctx) {
+        flush();
+        closeFile();
+
+        target   = ctx.target;
+        ws       = ctx.ws;
+        tcp      = ctx.tcp;
+        udp      = ctx.udp;
+        dest_ip  = ctx.udp_ip;
+        dest_port= ctx.udp_port;
+        i2c_dev  = ctx.i2c_dev;
+        i2s_port = ctx.i2s_port;
+        ble_ch   = ctx.ble_ch;
+        http_srv = ctx.http_srv;
+
+        // Если восстанавливаем файл — открываем заново
+        if (target == T_FILE && ctx.file_path[0] != '\0') {
+            size_t plen = strlen(ctx.file_path);
+            if (plen >= sizeof(file_path)) plen = sizeof(file_path) - 1;
+            memcpy(file_path, ctx.file_path, plen);
+            file_path[plen] = '\0';
+
+            file_obj = FILESYSTEM.open(file_path, "w");
+            if (!file_obj) {
+                // Файл не открылся — откатываемся в T_NONE
+                target = T_NONE;
+                return false;
+            }
+        }
+        return true;
+    }
 
     // ============================================================
     // === ДИАГНОСТИКА ===
     // ============================================================
-    
-    // Возвращает имя активного канала (для слова out?)
     const char* targetName() const {
         switch (target) {
             case T_WS:   return "ws";
@@ -275,31 +360,22 @@ void detach(bool force = false) {
             case T_I2C:  return "i2c";
             case T_I2S:  return "i2s";
             case T_HTTP: return "http";
-case T_BLE:
-#if HDL_HAS_BLE
-    bt_stream_write(ble_ch, (uint8_t*)buf, buf_len);
-#endif
-    break;
+            case T_BLE:  return "ble";
+            case T_FILE: return "file";
             default:     return "none";
         }
     }
 
-    // 🔧 НОВЫЙ МЕТОД: получение текущего таргета
-    // Возвращает текущий Target, чтобы внешний код мог проверить состояние
-    // без прямого доступа к приватному полю.
-    Target getTarget() const { 
-        return target; 
-    }
+    Target getTarget() const { return target; }
 
     // ============================================================
     // === ЗАПИСЬ ДАННЫХ ===
     // ============================================================
-    
     size_t write(uint8_t c) override {
         if (target == T_NONE) return 0;
-        if (buf_len >= 254) flush();
+        if (buf_len >= 1022) flush();
         buf[buf_len++] = c;
-        if (c == '\n') flush();
+        //if (c == '\n') flush();
         return 1;
     }
 
@@ -307,7 +383,7 @@ case T_BLE:
         if (target == T_NONE) return 0;
         size_t i = 0;
         while (i < size) {
-            if (buf_len >= 254) {
+            if (buf_len >= 1022) {
                 flush();
                 process_tasks(true);
             }
@@ -319,90 +395,128 @@ case T_BLE:
     // ============================================================
     // === СБРОС БУФЕРА ===
     // ============================================================
-    
     void flush() override {
-        if (buf_len == 0 || target == T_NONE) return;
+        if (buf_len == 0) {
+            // Serial.println("[FLUSH] buf_len == 0, skip");
+            return;
+        }
+        if (target == T_NONE) {
+            //Serial.println("[FLUSH] ERROR: target == T_NONE");
+            return;
+        }
         
+        //Serial.print("[FLUSH] TRIGGERED. target=");
+        //Serial.print(target);
+        //Serial.print(" buf_len=");
+        //Serial.println(buf_len);
+
         switch (target) {
             case T_WS:
                 if (ws) ws->broadcastTXT((uint8_t*)buf, buf_len);
                 break;
-                
             case T_TCP:
-                if (tcp && tcp->connected())
+                if (tcp && tcp->connected()) {
                     tcp->write((uint8_t*)buf, buf_len);
-                break;
-                
-            case T_UDP:
-                if (udp) {
-                    udp->beginPacket(dest_ip, dest_port);
-                    udp->write((uint8_t*)buf, buf_len);
-                    udp->endPacket();
+                    tcp->flush();
                 }
                 break;
-                
+            case T_UDP:
+               // Serial.print("[FLUSH] UDP: dest=");
+                //Serial.print(dest_ip.toString());
+                //Serial.print(":");
+                //Serial.println(dest_port);
+                if (udp) {
+                  //  Serial.println("[FLUSH] UDP: pointer VALID, calling beginPacket...");
+                    if (udp->beginPacket(dest_ip, dest_port)) {
+                    //    Serial.print("[FLUSH] UDP: beginPacket OK. Writing ");
+                    //    Serial.print(buf_len);
+                    //    Serial.println(" bytes...");
+                        udp->write((uint8_t*)buf, buf_len);
+                        udp->endPacket();
+                    //    Serial.println("[FLUSH] UDP: endPacket DONE. Packet sent!");
+                    } else {
+                      //  Serial.println("[FLUSH] UDP: beginPacket FAILED (returned false)!");
+                    }
+                } else {
+                    //Serial.println("[FLUSH] UDP ERROR: udp pointer is NULL!");
+                }
+                break;
             case T_I2C:
                 Wire.beginTransmission(i2c_dev);
                 Wire.write((uint8_t*)buf, buf_len);
                 Wire.endTransmission();
                 break;
-                
-        case T_I2S: {
+            case T_I2S: {
 #if defined(ESP32)
-            size_t w;
-            i2s_write((i2s_port_t)i2s_port, buf, buf_len, &w, 0);
+                size_t w;
+                i2s_write((i2s_port_t)i2s_port, buf, buf_len, &w, 0);
 #endif
-            break;
-        }
-                
+                break;
+            }
         case T_HTTP:
             if (http_srv) {
-                char temp[257];
-                memcpy(temp, buf, buf_len);
-                temp[buf_len] = '\0'; // Гарантируем нуль-терминацию
-                http_srv->sendContent(temp);
+                // Безопасно добавляем терминирующий ноль прямо в основной буфер.
+                // buf_len всегда < sizeof(buf), поэтому выход за границы невозможен.
+                // Это полностью устраняет необходимость в магических числах и доп. буферах.
+                buf[buf_len] = '\0';
+                http_srv->sendContent((const char*)buf);
             }
             break;
-case T_BLE:                                       
-    bt_stream_write(ble_ch, (uint8_t*)buf, buf_len);
-    break;
-                
-            default: 
+            case T_BLE:
+#if HDL_HAS_BLE
+                bt_stream_write(ble_ch, (uint8_t*)buf, buf_len);
+#endif
+                break;
+            case T_FILE:
+                if (file_obj) file_obj.write((uint8_t*)buf, buf_len);
+                break;
+            default:
+               // Serial.print("[FLUSH] UNKNOWN target: ");
+               // Serial.println(target);
                 break;
         }
-        
         buf_len = 0;
     }
-     // 🔧 НОВЫЕ МЕТОДЫ: управление счетчиком WS-клиентов
-    void wsClientConnected() { 
-        ws_client_count++; 
-    }
-    
-    void wsClientDisconnected() { 
-        if (ws_client_count > 0) ws_client_count--; 
-    }
-    
-    bool isWsConnected() const { 
-        return ws_client_count > 0; 
-    }
+
+    // ============================================================
+    // === СЧЁТЧИК WS-КЛИЕНТОВ ===
+    // ============================================================
+    void wsClientConnected()   { ws_client_count++; }
+    void wsClientDisconnected(){ if (ws_client_count > 0) ws_client_count--; }
+    bool isWsConnected() const { return ws_client_count > 0; }
+
 private:
     Target target;
     WebSocketsServer* ws;
-    WiFiClient* tcp;
-    WiFiUDP* udp;
-    uint8_t i2c_dev;
-    uint8_t i2s_port;
-    uint8_t ble_ch = 0;
+    WiFiClient*       tcp;
+    WiFiUDP*          udp;
+    uint8_t           i2c_dev;
+    uint8_t           i2s_port;
+    uint8_t           ble_ch = 0;
 #if defined(ESP8266)
     ESP8266WebServer* http_srv;
 #else
-    WebServer* http_srv;
+    WebServer*        http_srv;
 #endif
-    IPAddress dest_ip;
-    uint16_t dest_port;
-    char buf[256];
-    uint8_t buf_len;
-    uint8_t ws_client_count = 0;
+    IPAddress         dest_ip;
+    uint16_t          dest_port;
+
+    // === НОВОЕ: файловый вывод ===
+    File              file_obj;        // сам файловый объект
+    char              file_path[64];   // путь (для restore)
+
+    char              buf[1024];
+    uint16_t          buf_len;
+    uint8_t           ws_client_count = 0;
+
+    // Закрытие файла (если был открыт)
+    void closeFile() {
+        if (file_obj) {
+            file_obj.flush();
+            file_obj.close();
+        }
+        file_path[0] = '\0';
+    }
 };
 
 // Глобальный экземпляр мультиплексора
@@ -505,7 +619,39 @@ static bool init_pools() {
     return true;
 }
 
-
+// === РЕЕСТР ТИПОВ ===
+enum { CAT_NONE, CAT_UINT, CAT_INT, CAT_FLOAT, CAT_TEXT, CAT_ADDR, CAT_LIST, CAT_STRUCT, CAT_REF };
+struct TypeInfo {
+  const char* name;
+  const char* short_name;
+  uint8_t     size;
+  uint8_t     category;
+  const char* desc;
+};
+const TypeInfo type_registry[] = {
+  /*  0 */ {"BOOL",    "B",     0, CAT_NONE,   "Boolean false"},
+  /*  1 */ {"BOOL",    "B",     0, CAT_NONE,   "Boolean true"},
+  /*  2 */ {"NULL",    "N",     0, CAT_NONE,   "Void/marker"},
+  /*  3 */ {"CONTEXT", "ctx",   1, CAT_UINT,   "Context ID"},
+  /*  4 */ {"UINT8",   "u8",    1, CAT_UINT,   "Unsigned 8-bit"},
+  /*  5 */ {"INT8",    "i8",    1, CAT_INT,    "Signed 8-bit"},
+  /*  6 */ {"UINT16",  "u16",   2, CAT_UINT,   "Unsigned 16-bit"},
+  /*  7 */ {"INT16",   "i16",   2, CAT_INT,    "Signed 16-bit"},
+  /*  8 */ {"UINT24",  "u24",   3, CAT_UINT,   "Unsigned 24-bit"},
+  /*  9 */ {"UINT32",  "u32",   4, CAT_UINT,   "Unsigned 32-bit"},
+  /* 10 */ {"INT32",   "i32",   4, CAT_INT,    "Signed 32-bit"},
+  /* 11 */ {"FLOAT",   "f",     4, CAT_FLOAT,  "IEEE754 float"},
+  /* 12 */ {"MARKER",  "M",     0, CAT_TEXT,   "Text len+bytes"},
+  /* 13 */ {"NAME",    "N",     0, CAT_TEXT,   "Identifier text"},
+  /* 14 */ {"STRING",  "S",     0, CAT_TEXT,   "Literal string"},
+  /* 15 */ {"$STRING", "$S",    3, CAT_REF,    "Pool ref len+addr"},
+  /* 16 */ {"CONCAT",  "C",     0, CAT_LIST,   "Addr chain"},
+  /* 17 */ {"ARRAY",   "arr",   5, CAT_STRUCT, "Array header"},
+  /* 18 */ {"ADDR",    "@",     2, CAT_ADDR,   "Pool offset"},
+  /* 19 */ {"FUNC",    "fn",    4, CAT_ADDR,   "C function ptr"},
+  /* 20 */ {"REF_ARR", "ref", 5, CAT_STRUCT, "Array reference (base:2, len:2, type:1)"},
+  {nullptr, nullptr, 0, 0, nullptr}
+};
 
 inline bool rstack_is_empty() {
   return rstack_ptr == RSTACK_SIZE;
@@ -521,6 +667,62 @@ inline uint16_t rstack_pop() {
   uint16_t val = rstack_mem[rstack_ptr] | (rstack_mem[rstack_ptr + 1] << 8);
   rstack_ptr += 2;
   return val;
+}
+
+// === ИЗВЛЕЧЕНИЕ ДАННЫХ СО СТЕКА (с удалением элемента) ===
+// Каждый хелпер возвращает true, если тип совпал.
+// При успехе заполняет: ptr (адрес байтов), len (длина в байтах), sz (полный размер элемента).
+
+static inline bool extractNumber(const uint8_t* top, const uint8_t*& ptr, uint16_t& len, uint16_t& sz) {
+    uint8_t tag = top[0];
+    if (tag < 4 || tag > 11) return false;
+    sz = elem_size(top);
+    if (sz < 2) return false;
+    ptr = &top[1];
+    len = sz - 1;
+    return true;
+}
+
+static inline bool extractString(const uint8_t* top, const uint8_t*& ptr, uint16_t& len, uint16_t& sz) {
+    if (top[0] != 0x0E) return false;  // только STRING, без NAME
+    sz = elem_size(top);
+    ptr = &top[2];
+    len = top[1];
+    return true;
+}
+
+static inline bool extractRefString(const uint8_t* top, const uint8_t*& ptr, uint16_t& len, uint16_t& sz) {
+    if (top[0] != 15) return false;
+    sz = elem_size(top);
+    len = top[1];
+    uint16_t a = top[2] | (top[3] << 8);
+    if (a + len > DATA_POOL_SIZE) return false;
+    ptr = &data_pool[a];
+    return true;
+}
+
+static inline bool extractArray(const uint8_t* top, const uint8_t*& ptr, uint16_t& len, uint16_t& sz) {
+    uint8_t tag = top[0];
+    if (tag != 17 && tag != 20) return false;
+    sz = elem_size(top);
+    if (sz != 6) return false;
+    uint16_t a = top[1] | (top[2] << 8);
+    uint16_t count = top[3] | (top[4] << 8);
+    uint8_t esz = type_registry[top[5]].size;
+    uint32_t total = (uint32_t)count * esz;
+    if (a + total > DATA_POOL_SIZE) return false;
+    ptr = &data_pool[a];
+    len = (uint16_t)total;
+    return true;
+}
+
+// === ДИСПЕТЧЕР ===
+static inline bool extractPayload(const uint8_t* top, const uint8_t*& ptr, uint16_t& len, uint16_t& sz) {
+    if (extractNumber(top, ptr, len, sz))     return true;
+    if (extractString(top, ptr, len, sz))     return true;
+    if (extractRefString(top, ptr, len, sz))  return true;
+    if (extractArray(top, ptr, len, sz))      return true;
+    return false;
 }
 // ============================================================
 // === ЕДИНЫЙ БЛОК ХЕЛПЕРОВ СТЕКА (все в одном месте) ===
@@ -683,42 +885,169 @@ static inline void pushStringRaw(const char* s) {
     memcpy(&b[2], s, l);
     stack_push(b, 2 + l);
 }
-
-
-
-// === РЕЕСТР ТИПОВ ===
-enum { CAT_NONE, CAT_UINT, CAT_INT, CAT_FLOAT, CAT_TEXT, CAT_ADDR, CAT_LIST, CAT_STRUCT, CAT_REF };
-struct TypeInfo {
-  const char* name;
-  const char* short_name;
-  uint8_t     size;
-  uint8_t     category;
-  const char* desc;
+// ============================================================
+// === СТЕК СОХРАНЁННЫХ КОНТЕКСТОВ ВЫВОДА (для out>save / out>restore) ===
+// ============================================================
+struct SavedOutput {
+    Print*              output;    // текущий currentOutput (Serial или &g_stream)
+    HDLStream::Context  ctx;       // контекст g_stream (если output == &g_stream)
+    bool                has_ctx;   // true если ctx валиден
 };
-const TypeInfo type_registry[] = {
-  /*  0 */ {"BOOL",    "B",     0, CAT_NONE,   "Boolean false"},
-  /*  1 */ {"BOOL",    "B",     0, CAT_NONE,   "Boolean true"},
-  /*  2 */ {"NULL",    "N",     0, CAT_NONE,   "Void/marker"},
-  /*  3 */ {"CONTEXT", "ctx",   1, CAT_UINT,   "Context ID"},
-  /*  4 */ {"UINT8",   "u8",    1, CAT_UINT,   "Unsigned 8-bit"},
-  /*  5 */ {"INT8",    "i8",    1, CAT_INT,    "Signed 8-bit"},
-  /*  6 */ {"UINT16",  "u16",   2, CAT_UINT,   "Unsigned 16-bit"},
-  /*  7 */ {"INT16",   "i16",   2, CAT_INT,    "Signed 16-bit"},
-  /*  8 */ {"UINT24",  "u24",   3, CAT_UINT,   "Unsigned 24-bit"},
-  /*  9 */ {"UINT32",  "u32",   4, CAT_UINT,   "Unsigned 32-bit"},
-  /* 10 */ {"INT32",   "i32",   4, CAT_INT,    "Signed 32-bit"},
-  /* 11 */ {"FLOAT",   "f",     4, CAT_FLOAT,  "IEEE754 float"},
-  /* 12 */ {"MARKER",  "M",     0, CAT_TEXT,   "Text len+bytes"},
-  /* 13 */ {"NAME",    "N",     0, CAT_TEXT,   "Identifier text"},
-  /* 14 */ {"STRING",  "S",     0, CAT_TEXT,   "Literal string"},
-  /* 15 */ {"$STRING", "$S",    3, CAT_REF,    "Pool ref len+addr"},
-  /* 16 */ {"CONCAT",  "C",     0, CAT_LIST,   "Addr chain"},
-  /* 17 */ {"ARRAY",   "arr",   5, CAT_STRUCT, "Array header"},
-  /* 18 */ {"ADDR",    "@",     2, CAT_ADDR,   "Pool offset"},
-  /* 19 */ {"FUNC",    "fn",    4, CAT_ADDR,   "C function ptr"},
-  /* 20 */ {"REF_ARR", "ref", 5, CAT_STRUCT, "Array reference (base:2, len:2, type:1)"},
-  {nullptr, nullptr, 0, 0, nullptr}
-};
+static SavedOutput g_saved_outputs[4];
+static uint8_t     g_saved_count = 0;
+
+// ============================================================
+// === out>file "filename" ===
+// Переключает вывод в файл через g_stream (T_FILE).
+// Ввод остаётся текущим (Serial/WS/...).
+// ============================================================
+void word_out_file() {
+    if (stack_is_empty()) {
+        currentOutput->println(getMsg("out>file: filename expected"));
+        return;
+    }
+    uint8_t* top = &stack_mem[stack_ptr];
+    uint8_t tag = top[0];
+    char fname[257];
+    uint8_t len = 0;
+
+    if (tag == 0x0E || tag == 0x0D) {
+        len = top[1];
+        if (len > 255) len = 255;
+        memcpy(fname, &top[2], len);
+        fname[len] = '\0';
+    }
+    else if (tag == 15) {
+        len = top[1];
+        uint16_t addr = top[2] | (top[3] << 8);
+        if (addr + len <= DATA_POOL_SIZE) {
+            if (len > 255) len = 255;
+            memcpy(fname, &data_pool[addr], len);
+            fname[len] = '\0';
+        } else {
+            currentOutput->println(getMsg("out>file: $STRING out of data_pool"));
+            return;
+        }
+    }
+    else {
+        currentOutput->println(getMsg("out>file: NAME/STRING/$STRING expected"));
+        return;
+    }
+    stack_ptr += elem_size(top);
+
+    // Собираем полный путь
+    char full_path[256];
+    build_full_path(full_path, sizeof(full_path), fname);
+
+    // 🔑 Переключаем вывод через g_stream
+    if (g_stream.attachFile(full_path)) {
+        currentOutput = &g_stream;
+    } else {
+        // Ошибка — сообщаем в ТЕКУЩИЙ канал (не сбрасываем на Serial!)
+        currentOutput->print(getMsg("out>file: FAILED -> "));
+        currentOutput->println(full_path);
+    }
+}
+
+// ============================================================
+// === out>serial ===
+// Возвращает вывод в Serial. Закрывает файл, если был открыт.
+// ============================================================
+void word_out_serial() {
+    // detach(true) закроет файл (если был T_FILE) и сбросит g_stream в T_NONE
+    g_stream.detach(true);
+    currentOutput = &Serial;
+}
+
+// ============================================================
+// === out>save ===
+// Сохраняет текущий канал вывода в стек (до 4 уровней вложенности).
+// Кладёт на HDL-стек индекс сохранённого слота (u8).
+// ============================================================
+void word_out_save() {
+    if (g_saved_count >= 4) {
+        currentOutput->println("out>save: stack full (max 4)");
+        return;
+    }
+    SavedOutput& s = g_saved_outputs[g_saved_count];
+    s.output  = currentOutput;
+    s.has_ctx = (currentOutput == &g_stream);
+    if (s.has_ctx) {
+        g_stream.saveContext(s.ctx);
+    }
+    uint8_t idx = g_saved_count;
+    g_saved_count++;
+    pushUInt8(idx);
+}
+// ============================================================
+// === out>restore ===
+// Восстанавливает канал вывода из стека по индексу.
+// Для T_FILE — заново открывает файл по сохранённому пути.
+// 🔑 ГАРАНТИРОВАННЫЙ FLUSH: перед восстановлением сбрасываем g_stream,
+// чтобы все данные ушли в сеть (UDP/TCP/WS), даже если последний print
+// не добавил \n.
+// ============================================================
+void word_out_restore() {
+    uint8_t idx;
+    if (!popUInt8(idx)) {
+        currentOutput->println(getMsg("out>restore: index expected"));
+        return;
+    }
+    if (idx >= g_saved_count) {
+        currentOutput->println(getMsg("out>restore: invalid index"));
+        return;
+    }
+    SavedOutput& s = g_saved_outputs[idx];
+    
+    // 🔑 КРИТИЧНО: сбрасываем g_stream ВСЕГДА, даже если currentOutput уже изменился
+    // Это гарантирует, что все данные ушли в сеть (UDP/TCP/WS)
+    if (currentOutput == &g_stream) {
+        g_stream.flush();
+    }
+    
+    // Восстанавливаем контекст g_stream (если он был активен)
+    if (s.has_ctx) {
+        if (!g_stream.restoreContext(s.ctx)) {
+            currentOutput->println(getMsg("out>restore: failed to restore context"));
+        }
+    } else {
+        // Если раньше g_stream не был активен — сбрасываем его
+        g_stream.detach(true);
+    }
+    
+    // Восстанавливаем currentOutput
+    currentOutput = s.output;
+    
+    // Освобождаем слот
+    g_saved_count = idx;
+}
+
+
+// ============================================================
+// === out? — диагностика потока вывода ===
+// Всегда выводит в Serial (аварийный канал).
+// Все строки — через getMsg() для многоязычности.
+// ============================================================
+void word_out_query() {
+    Serial.println();
+    Serial.println(getMsg("out? === DIAGNOSTIC ==="));
+    if (currentOutput == &Serial) {
+        Serial.println(getMsg("out? channel: Serial"));
+    } else if (currentOutput == &g_stream) {
+        Serial.print(getMsg("out? channel: g_stream -> "));
+        Serial.println(g_stream.targetName());
+    } else {
+        Serial.print(getMsg("out? channel: UNKNOWN @ 0x"));
+        Serial.println((uint32_t)(uintptr_t)currentOutput, HEX);
+    }
+    Serial.print(getMsg("out? g_stream.target = "));
+    Serial.println(g_stream.targetName());
+    Serial.print(getMsg("out? saved contexts: "));
+    Serial.println(g_saved_count);
+    Serial.println(getMsg("out? ======================="));
+    Serial.println();
+}
+
 // Хелпер для получения имени чипа на этапе компиляции
 static const char* getChipName() {
 #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -1066,20 +1395,46 @@ static void apply_op(const uint8_t* l_data, uint16_t l_len, uint8_t l_tag, uint1
         }
     }
 
-    // 🔹 СЛОЖЕНИЕ СТРОК (Конкатенация)
-    if (op_len == 1 && op[0] == '+' && (actual_l_tag >= 12 && actual_l_tag <= 14) && (r_tag >= 12 && r_tag <= 14)) {
-        uint8_t l_txt_len = actual_l_data[0];
+// 🔹 СЛОЖЕНИЕ СТРОК (Конкатенация) — поддержка STRING, NAME, MARKER и $STRING
+if (op_len == 1 && op[0] == '+') {
+    bool l_is_text = (actual_l_tag >= 12 && actual_l_tag <= 14) || actual_l_tag == 15;
+    bool r_is_text = (r_tag >= 12 && r_tag <= 14) || r_tag == 15;
+    if (l_is_text && r_is_text) {
+        // Извлекаем байты LHS
+        const uint8_t* l_bytes;
+        uint8_t l_txt_len;
+        if (actual_l_tag == 15) {
+            // $STRING: данные в data_pool
+            l_txt_len = actual_l_data[0];
+            uint16_t l_addr = actual_l_data[1] | (actual_l_data[2] << 8);
+            l_bytes = &data_pool[l_addr];
+        } else {
+            // STRING/NAME/MARKER: данные сразу после длины
+            l_txt_len = actual_l_data[0];
+            l_bytes = &actual_l_data[1];
+        }
+        // Извлекаем байты RHS
+        const uint8_t* r_bytes;
         uint8_t r_txt_len = stack_mem[r_addr + 1];
+        if (r_tag == 15) {
+            // $STRING: данные в data_pool
+            uint16_t r_addr_val = stack_mem[r_addr + 2] | (stack_mem[r_addr + 3] << 8);
+            r_bytes = &data_pool[r_addr_val];
+        } else {
+            // STRING/NAME/MARKER: данные сразу после длины
+            r_bytes = &stack_mem[r_addr + 2];
+        }
+        // Склеиваем
         uint16_t new_len = (uint16_t)l_txt_len + r_txt_len;
         if (new_len > 254) new_len = 254;
         uint8_t res[256];
-        res[0] = 0x0E;
+        res[0] = 0x0E;  // STRING
         res[1] = (uint8_t)new_len;
         uint16_t cl = (l_txt_len > new_len) ? new_len : l_txt_len;
-        memcpy(&res[2], &actual_l_data[1], cl);
+        memcpy(&res[2], l_bytes, cl);
         uint16_t cr = new_len - cl;
         if (cr > r_txt_len) cr = r_txt_len;
-        memcpy(&res[2 + cl], &stack_mem[r_addr + 2], cr);
+        memcpy(&res[2 + cl], r_bytes, cr);
         uint16_t rsz = 2 + new_len;
         if (stack_ptr < rsz) {
             currentOutput->println("stack overflow");
@@ -1090,7 +1445,7 @@ static void apply_op(const uint8_t* l_data, uint16_t l_len, uint8_t l_tag, uint1
         memcpy(&stack_mem[stack_ptr], res, rsz);
         return;
     }
-
+}
     // 🔹 СРАВНЕНИЕ СТРОК (== и !=)
     if (op_len == 2 && (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0) &&
         (actual_l_tag >= 12 && actual_l_tag <= 14) && (r_tag >= 12 && r_tag <= 14)) {
@@ -1282,6 +1637,7 @@ if (res_float) {
     stack_push(res_buf, 1 + res_len);
 }
 }
+
 void choiceFunc() {
     uint8_t abuf[3];
     if (stack_pop(abuf, 3) != 3 || abuf[0] != 0x12) return;
@@ -3447,6 +3803,14 @@ static bool execute_file(const char* full_path) {
         return false;
     }
     
+    // 🔑 Сохраняем полный контекст вывода (включая g_stream состояние)
+    word_out_save();
+    uint8_t saved_idx;
+    if (!popUInt8(saved_idx)) {
+        f.close();
+        return false;
+    }
+    
     String line;
     while (f.available()) {
         line = f.readStringUntil('\n');
@@ -3456,8 +3820,14 @@ static bool execute_file(const char* full_path) {
         executeLine(line.c_str());
     }
     f.close();
+    
+    // 🔑 Восстанавливаем контекст вывода
+    pushUInt8(saved_idx);
+    word_out_restore();
+    
     return true;
 }
+
 void word_load() {
 if (stack_is_empty()) {
 currentOutput->println(getMsg("load error: stack empty"));
@@ -4432,6 +4802,7 @@ struct TaskEntry {
 };
 TaskEntry g_tasks[MAX_TASKS];
 uint8_t   g_task_count = 0;
+
 // === ЕДИНЫЙ ПЛАНИРОВЩИК ЗАДАЧ ===
 // only_continuous = true  -> исполняет ТОЛЬКО +loop (для yield в длинных операциях)
 // only_continuous = false -> исполняет ВСЕ задачи (+loop и +task) (для главного loop)
@@ -4439,23 +4810,41 @@ void process_tasks(bool only_continuous) {
     if (g_task_count > 0 && Serial.available() == 0) {
         uint32_t now = millis();
         for (uint8_t i = 0; i < g_task_count; i++) {
+            bool should_run = false;
+            
             if (g_tasks[i].interval == 0) {
                 // 🔁 Непрерывный цикл: исполняем всегда
-                uint16_t sp_save = stack_ptr;
-                exec_word(g_tasks[i].addr);
-                stack_ptr = sp_save;
+                should_run = true;
             }
             else if (!only_continuous && (now - g_tasks[i].last >= g_tasks[i].interval)) {
-                // ⏱ Таймерная задача: исполняем ТОЛЬКО если флаг false
+                //  Таймерная задача: исполняем по интервалу
                 g_tasks[i].last = now;
+                should_run = true;
+            }
+            
+            if (should_run) {
+                //  СОХРАНЯЕМ контекст вывода перед исполнением задачи
+                Print* saved_output = currentOutput;
+                HDLStream::Context saved_ctx;
+                bool has_ctx = (currentOutput == &g_stream);
+                if (has_ctx) {
+                    g_stream.saveContext(saved_ctx);
+                }
+                
+                // Исполняем задачу
                 uint16_t sp_save = stack_ptr;
                 exec_word(g_tasks[i].addr);
                 stack_ptr = sp_save;
+                
+                // 🔑 ВОССТАНАВЛИВАЕМ контекст вывода после исполнения задачи
+                if (has_ctx) {
+                    g_stream.restoreContext(saved_ctx);
+                }
+                currentOutput = saved_output;
             }
         }
     }
 }
-
 void printActiveTasks() {
   if (g_task_count == 0) return;
   currentOutput->print("tasks: ");
@@ -4904,84 +5293,6 @@ void word_body() {
     // 5. Пропускаем токен в R2L-цикле
     g_tok_idx -= 1;
 }
-static File g_outFile;
-// === ПЕРЕНАПРАВЛЕНИЕ ВЫВОДА В ФАЙЛ ===
-// HDL-запись:  out>file "filename"
-// Переключает весь последующий вывод (print, stack, json> и т.д.) в указанный файл.
-//
-// 🔑 КЛЮЧЕВЫЕ ПРАВИЛА:
-//   1. Закрываем предыдущий файл (если был открыт) ПЕРЕД открытием нового.
-//   2. При ошибке открытия НЕ сбрасываем currentOutput на Serial —
-//      это ломает WS/HTTP/TCP-каналы. Сообщаем об ошибке в ТЕКУЩИЙ канал.
-//   3. Используем build_full_path — единая логика путей (абсолютные/относительные).
-//   4. Используем getMsg — поддержка локализации.
-//
-void word_out_file() {
-    // === 1. ПРОВЕРКА СТЕКА ===
-    if (stack_is_empty()) {
-        currentOutput->println(getMsg("out>file: filename expected"));
-        return;
-    }
-
-    uint8_t* top = &stack_mem[stack_ptr];
-    uint8_t tag = top[0];
-
-    // Поддерживаем STRING (0x0E), NAME (0x0D) и $STRING (15)
-    char fname[257];
-    uint8_t len = 0;
-
-    if (tag == 0x0E || tag == 0x0D) {
-        len = top[1];
-        if (len > 255) len = 255;
-        memcpy(fname, &top[2], len);
-        fname[len] = '\0';
-    }
-    else if (tag == 15) {
-        len = top[1];
-        uint16_t addr = top[2] | (top[3] << 8);
-        if (addr + len <= DATA_POOL_SIZE) {
-            if (len > 255) len = 255;
-            memcpy(fname, &data_pool[addr], len);
-            fname[len] = '\0';
-        } else {
-            currentOutput->println(getMsg("out>file: $STRING out of data_pool"));
-            return;
-        }
-    }
-    else {
-        currentOutput->println(getMsg("out>file: NAME/STRING/$STRING expected"));
-        return;
-    }
-
-    // Снимаем имя со стека
-    stack_ptr += elem_size(top);
-
-    // === 2. СБОРКА ПОЛНОГО ПУТИ ===
-    char full_path[256];
-    build_full_path(full_path, sizeof(full_path), fname);
-
-    // === 3. ЗАКРЫТИЕ ПРЕДЫДУЩЕГО ФАЙЛА (если был открыт) ===
-    if (g_outFile) {
-        g_outFile.flush();   // гарантируем запись буфера на диск
-        g_outFile.close();
-    }
-
-    // === 4. ОТКРЫТИЕ НОВОГО ФАЙЛА ===
-    g_outFile = FILESYSTEM.open(full_path, "w");
-
-    if (g_outFile) {
-        // ✅ Успех — переключаем вывод в файл
-        currentOutput = &g_outFile;
-        // Сообщение об успехе уже пойдёт в файл (это нормально — пользователь сам открыл файл)
-    }
-    else {
-        // 🔑 КРИТИЧНО: НЕ сбрасываем currentOutput на Serial!
-        // Если сейчас активен WS/HTTP/TCP — они должны остаться активными.
-        // Сообщаем об ошибке в ТЕКУЩИЙ канал.
-        currentOutput->print(getMsg("out>file: FAILED -> "));
-        currentOutput->println(full_path);
-    }
-}
 
 
 extern bool bt_stream_write(uint8_t ch, const uint8_t* data, size_t len);
@@ -5001,17 +5312,7 @@ void word_out_ble() {
     g_stream.attachBle(ch);
     currentOutput = &g_stream;
 }
-void word_out_serial() {
-    if (g_outFile) {
-        g_outFile.flush();
-        g_outFile.close();
-    }
-    if (currentOutput == &g_stream) {
-        g_stream.flush();
-        g_stream.detach(true); // ← ДОБАВИТЬ true: пользователь явно хочет Serial
-    }
-    currentOutput = &Serial;
-}
+
 void word_add_loop() { // === +loop / -loop (фоновое исполнение без задержки) ===
   if (stack_is_empty()) return;
   uint8_t* top = &stack_mem[stack_ptr];
@@ -5140,6 +5441,7 @@ struct CheckpointState {
   uint8_t  currentContext;
   uint8_t  g_next_ctx;
   uint8_t  g_task_count;
+  uint16_t g_local_id;  // ← ДОБАВИТЬ
   bool     valid;
 } g_checkpoint = {0, 0, STACK_SIZE, RSTACK_SIZE, 0, 1, 0, false};
 
@@ -5151,6 +5453,7 @@ void word_checkpoint() { // <--
   g_checkpoint.currentContext = currentContext;
   g_checkpoint.g_next_ctx     = g_next_ctx;
   g_checkpoint.g_task_count   = g_task_count;
+  g_checkpoint.g_local_id     = g_local_id;  // ← ДОБАВИТЬ
   g_checkpoint.valid          = true;
 
   // Сброс состояний парсера/компилятора
@@ -5161,7 +5464,7 @@ blk_depth = 0;
 }
 void word_forget() {
   if (!g_checkpoint.valid) {
-    currentOutput->println("forget: no <-- checkpoint");
+        currentOutput->println(getMsg("forget: no <-- checkpoint"));
     return;
   }
 
@@ -5172,6 +5475,7 @@ void word_forget() {
   rstack_ptr     = g_checkpoint.rstack_ptr;
   currentContext = g_checkpoint.currentContext;
   g_next_ctx     = g_checkpoint.g_next_ctx;
+  g_local_id     = g_checkpoint.g_local_id;  // ← ДОБАВИТЬ
 
   // 🔹 2. Безопасный откат задач
   uint8_t kept = 0;
@@ -5202,7 +5506,7 @@ blk_depth = 0;
   }
 
   // 🔹 5. Финальное сообщение — через currentOutput, без смены канала!
-  currentOutput->println("forget: rolled back to <--");
+    currentOutput->println(getMsg("forget: rolled back to <--"));
   word_prompt();  // ← Перерисовываем приглашение в том же канале
 }
 
@@ -5711,83 +6015,133 @@ uint16_t g_json_acc_len = 0;
 bool g_json_acc_first = true;
 
 void jsonSetWord() {
-// 1. Снимаем ключ (NAME или STRING)
-if (stack_is_empty()) {
-currentOutput->println("json-set: key expected");
-return;
-}
-uint8_t* top = &stack_mem[stack_ptr];
-if (top[0] != 0x0E && top[0] != 0x0D) {
-currentOutput->println("json-set: key must be string/name");
-return;
-}
-uint8_t key_len = top[1];
-char key[130];
-uint16_t k_out = 0;
-// Копируем ключ с экранированием кавычек
-for (uint8_t i = 0; i < key_len && k_out < 125; i++) {
-char c = top[2 + i];
-if (c == '"' || c == '\\') key[k_out++] = '\\';
-key[k_out++] = c;
-}
-key[k_out] = '\0';
-stack_ptr += elem_size(top);
-// 2. Смотрим на значение (не снимая со стека)
-if (stack_is_empty()) {
-currentOutput->println("json-set: value expected");
-return;
-}
-top = &stack_mem[stack_ptr];
-// 3. Сериализуем значение в JSON-литерал
-char val_str[128];
-uint16_t val_len = 0;
-uint8_t tag = top[0];
-if (tag == 0 || tag == 1) { // BOOL
-val_len = sprintf(val_str, tag == 1 ? "true" : "false");
-} else if (tag >= 4 && tag <= 11) { // Числа
-if (tag == 11) { // FLOAT
-float f; memcpy(&f, &top[1], 4);
-val_len = sprintf(val_str, "%g", f);
-} else {
-// ✅ ИСПОЛЬЗУЕМ ХЕЛПЕРЫ decode_int_le И is_signed_tag
-int32_t val = decode_int_le(&top[1], elem_size(top) - 1, tag);
-if (is_signed_tag(tag)) val_len = sprintf(val_str, "%ld", (long)val);
-else val_len = sprintf(val_str, "%lu", (unsigned long)(uint32_t)val);
-}
-} else if (tag == 0x0E || tag == 15) { // STRING или $STRING
-val_str[val_len++] = '"';
-uint16_t slen;
-const uint8_t* src;
-if (tag == 0x0E) {
-slen = top[1]; src = &top[2];
-} else {
-slen = top[1];
-uint16_t a = top[2] | (top[3] << 8);
-src = &data_pool[a];
-}
-for (uint16_t i = 0; i < slen && val_len < 120; i++) {
-char c = src[i];
-if (c == '"' || c == '\\') val_str[val_len++] = '\\';
-val_str[val_len++] = c;
-}
-val_str[val_len++] = '"';
-} else {
-val_len = sprintf(val_str, "null");
-}
-val_str[val_len] = '\0';
-// Снимаем значение со стека
-stack_ptr += elem_size(top);
-// 4. Дописываем пару в буфер
-char pair[256];
-int pair_len = sprintf(pair, "%s\"%s\":%s", g_json_acc_first ? "" : ",", key, val_str);
-g_json_acc_first = false;
-if (g_json_acc_len + pair_len < 250) {
-memcpy(&g_json_acc[g_json_acc_len], pair, pair_len);
-g_json_acc_len += pair_len;
-g_json_acc[g_json_acc_len] = '\0';
-} else {
-currentOutput->println("json-set: buffer overflow");
-}
+    // 1. Снимаем ключ (NAME или STRING)
+    if (stack_is_empty()) {
+        currentOutput->println("json-set: key expected");
+        return;
+    }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E && top[0] != 0x0D) {
+        currentOutput->println("json-set: key must be string/name");
+        return;
+    }
+    uint8_t key_len = top[1];
+    char key[130];
+    uint16_t k_out = 0;
+    for (uint8_t i = 0; i < key_len && k_out < 125; i++) {
+        char c = top[2 + i];
+        if (c == '"' || c == '\\') key[k_out++] = '\\';
+        key[k_out++] = c;
+    }
+    key[k_out] = '\0';
+    stack_ptr += elem_size(top);
+
+    // 2. Смотрим на значение (не снимая со стека)
+    if (stack_is_empty()) {
+        currentOutput->println("json-set: value expected");
+        return;
+    }
+    top = &stack_mem[stack_ptr];
+
+    // 3. Сериализуем значение в JSON-литерал
+    char val_str[128];
+    uint16_t val_len = 0;
+    uint8_t tag = top[0];
+
+    if (tag == 0 || tag == 1) {  // BOOL
+        val_len = sprintf(val_str, tag == 1 ? "true" : "false");
+    }
+    else if (tag >= 4 && tag <= 11) {  // Числа
+        if (tag == 11) {  // FLOAT
+            float f; memcpy(&f, &top[1], 4);
+            val_len = sprintf(val_str, "%g", f);
+        } else {
+            int32_t val = decode_int_le(&top[1], elem_size(top) - 1, tag);
+            if (is_signed_tag(tag))
+                val_len = sprintf(val_str, "%ld", (long)val);
+            else
+                val_len = sprintf(val_str, "%lu", (unsigned long)(uint32_t)val);
+        }
+    }
+    else if (tag == 0x0E || tag == 15) {  // STRING / $STRING
+        val_str[val_len++] = '"';
+        uint16_t slen;
+        const uint8_t* src;
+        if (tag == 0x0E) {
+            slen = top[1]; src = &top[2];
+        } else {
+            slen = top[1];
+            uint16_t a = top[2] | (top[3] << 8);
+            src = &data_pool[a];
+        }
+        for (uint16_t i = 0; i < slen && val_len < 120; i++) {
+            char c = src[i];
+            if (c == '"' || c == '\\') val_str[val_len++] = '\\';
+            val_str[val_len++] = c;
+        }
+        val_str[val_len++] = '"';
+    }
+    else if (tag == 17 || tag == 20) {  // 🔑 ARRAY / REF_ARR
+        uint16_t base = top[1] | (top[2] << 8);
+        uint16_t len  = top[3] | (top[4] << 8);
+        uint8_t  el_tp = top[5];
+        uint8_t  esz = type_registry[el_tp].size;
+        val_str[val_len++] = '[';
+        for (uint16_t i = 0; i < len && val_len < 115; i++) {
+            if (i > 0) val_str[val_len++] = ',';
+            uint16_t a = base + i * esz;
+            if (a + esz > DATA_POOL_SIZE) {
+                memcpy(&val_str[val_len], "null", 4); val_len += 4; continue;
+            }
+            if (el_tp == 15) {  // $STRING в массиве
+                uint8_t slen = data_pool[a];
+                uint16_t d_addr = data_pool[a + 1] | (data_pool[a + 2] << 8);
+                if (slen == 0 || d_addr + slen > DATA_POOL_SIZE) {
+                    memcpy(&val_str[val_len], "null", 4); val_len += 4;
+                } else {
+                    val_str[val_len++] = '"';
+                    for (uint8_t j = 0; j < slen && val_len < 110; j++) {
+                        char c = data_pool[d_addr + j];
+                        if (c == '"' || c == '\\') val_str[val_len++] = '\\';
+                        val_str[val_len++] = c;
+                    }
+                    val_str[val_len++] = '"';
+                }
+            } else if (el_tp == 11) {  // FLOAT
+                float f; memcpy(&f, &data_pool[a], 4);
+                val_len += sprintf(&val_str[val_len], "%g", f);
+            } else {  // числа
+                int32_t v = decode_int_le(&data_pool[a], esz, el_tp);
+                if (is_signed_tag(el_tp))
+                    val_len += sprintf(&val_str[val_len], "%ld", (long)v);
+                else
+                    val_len += sprintf(&val_str[val_len], "%lu", (unsigned long)(uint32_t)v);
+            }
+        }
+        val_str[val_len++] = ']';
+    }
+    else {
+        val_len = sprintf(val_str, "null");
+    }
+    val_str[val_len] = '\0';
+
+    // Снимаем значение со стека
+    stack_ptr += elem_size(top);
+
+    // 4. Дописываем пару в буфер
+    char pair[256];
+    int pair_len = sprintf(pair, "%s\"%s\":%s",
+                           g_json_acc_first ? "" : ",",
+                           key, val_str);
+    g_json_acc_first = false;
+
+    if (g_json_acc_len + pair_len < 250) {
+        memcpy(&g_json_acc[g_json_acc_len], pair, pair_len);
+        g_json_acc_len += pair_len;
+        g_json_acc[g_json_acc_len] = '\0';
+    } else {
+        currentOutput->println("json-set: buffer overflow");
+    }
 }
 void jsonToVarWord() {
     if (g_json_acc_len == 0) {
@@ -6910,24 +7264,60 @@ void word_between() {
         stack_push(hdr, 6);
     }
 }
+
+// === ИСПРАВЛЕННАЯ ВЕРСИЯ: возвращает ссылки, без копирования ===
+
 static bool part_range(const char* name, bool as_string,
                        uint16_t &addr, uint16_t &out_len, uint8_t &tp) {
     if (stack_is_empty()) {
-        currentOutput->printf("%s: array expected\n", name);
+        currentOutput->printf("%s: source expected\n", name);
         return false;
     }
     uint8_t* top = &stack_mem[stack_ptr];
-    if ((top[0] != 17 && top[0] != 20) || elem_size(top) != 6) {
-        currentOutput->printf("%s: array expected\n", name);
+    uint32_t base = 0, count = 0;
+    uint8_t esz = 1;
+    
+    // === ИСТОЧНИК: ARRAY / REF_ARR ===
+    if (top[0] == 17 || top[0] == 20) {
+        if (elem_size(top) != 6) {
+            currentOutput->printf("%s: bad array header\n", name);
+            return false;
+        }
+        base  = top[1] | (top[2] << 8);
+        count = top[3] | (top[4] << 8);
+        tp    = top[5];
+        esz   = type_registry[tp].size;
+        if (esz == 0) esz = 1;
+        stack_ptr += 6;
+    }
+    // === ИСТОЧНИК: $STRING (данные уже в data_pool) ===
+    else if (top[0] == 15) {
+        uint8_t slen  = top[1];
+        uint16_t saddr = top[2] | (top[3] << 8);
+        if (saddr + slen > DATA_POOL_SIZE) {
+            currentOutput->printf("%s: $STRING out of data_pool\n", name);
+            stack_ptr += 4;
+            return false;
+        }
+        stack_ptr += 4;
+        base  = saddr;
+        count = slen;
+        tp    = 4;   // u8
+        esz   = 1;
+    }
+    // === ИСТОЧНИК: STRING / NAME (данные НА СТЕКЕ) ===
+    // 🔑 ОШИБКА: нельзя создать ссылку на стек!
+    else if (top[0] == 0x0E || top[0] == 0x0D) {
+        currentOutput->printf("%s: source must be $STRING or ARRAY (not literal)\n", name);
+        stack_ptr += elem_size(top);
         return false;
     }
-    uint16_t base  = top[1] | (top[2] << 8);
-    uint16_t count = top[3] | (top[4] << 8);
-    tp = top[5];
-    uint8_t esz = type_registry[tp].size;
-    if (esz == 0) esz = 1;
-    stack_ptr += 6;
-
+    else {
+        currentOutput->printf("%s: array or $STRING expected\n", name);
+        return false;
+    }
+    
+    // === Снимаем две границы ===
     uint32_t a = 0, b = 0;
     if (!popUInt32(a) || !popUInt32(b)) {
         currentOutput->printf("%s: two bounds expected\n", name);
@@ -6935,20 +7325,19 @@ static bool part_range(const char* name, bool as_string,
     }
     uint32_t start = (a < b) ? a : b;
     uint32_t end   = (a < b) ? b : a;
-    uint32_t len   = end - start;
-
+    
     if (as_string && esz != 1) {
         currentOutput->printf("%s: string part expects u8/i8 array\n", name);
         return false;
     }
-
     if (start > count) start = count;
     if (end   > count) end   = count;
     if (end < start)   end   = start;
-    len = end - start;
-
+    
+    uint32_t len = end - start;
     uint32_t byte_off = start * (uint32_t)esz;
-    uint32_t addr32   = (uint32_t)base + byte_off;
+    uint32_t addr32   = base + byte_off;
+    
     if (addr32 > DATA_POOL_SIZE) {
         currentOutput->printf("%s: address out of data_pool\n", name);
         return false;
@@ -6958,56 +7347,53 @@ static bool part_range(const char* name, bool as_string,
         currentOutput->printf("%s: range out of data_pool\n", name);
         return false;
     }
-
-    // 🔧 БЫЛО: if (as_string && byte_len > 255) { error; return false; }
-    // ТЕПЕРЬ: просто отдаём реальную длину, вызывающий сам решит что делать
-
-    addr = (uint16_t)addr32;
+    
+    addr    = (uint16_t)addr32;
     out_len = as_string ? (uint16_t)byte_len : (uint16_t)len;
     return true;
 }
+
 void word_part() {
     uint16_t addr;
     uint16_t len;
     uint8_t tp;
-
+    
     if (!part_range("part", false, addr, len, tp)) {
         return;
     }
-
+    
+    // Возвращаем REF_ARR (ссылку на подмассив)
     uint8_t out[6] = {
-        20,
+        20,  // REF_ARR
         (uint8_t)(addr & 0xFF),
         (uint8_t)(addr >> 8),
         (uint8_t)(len & 0xFF),
         (uint8_t)(len >> 8),
         tp
     };
-
     stack_push(out, 6);
 }
+
 void word_part_str() {
     uint16_t addr;
-    uint16_t len;   // реальная длина среза в байтах
+    uint16_t len;
     uint8_t tp;
+    
     if (!part_range("part$", true, addr, len, tp)) {
         return;
     }
-
-    // 🔑 Определяем наличие остатка
+    
     bool has_remainder = (len > 255);
     uint16_t out_len = has_remainder ? 255 : len;
-
-    // 🔹 Кладём $STRING (первые 255 байт или весь срез)
+    
+    // Возвращаем $STRING (ссылку на часть строки)
     uint8_t str_out[4] = {
-        15,
+        15,  // $STRING
         (uint8_t)out_len,
         (uint8_t)(addr & 0xFF),
         (uint8_t)(addr >> 8)
     };
     stack_push(str_out, 4);
-
-    // 🔹 Кладём BOOL ПОВЕРХ (Вариант А — удобно для if { ... })
     pushBool(has_remainder);
 }
 static void focusTo(const char* name) {
@@ -7216,37 +7602,14 @@ void caseConvertFunc() {
     }
   }
 }
-// В net.ino добавить:
-void word_out_save() {
-    uint32_t ptr = (uint32_t)(uintptr_t)currentOutput;
-    pushUInt32(ptr);
-}
 
 
 void sha1Func() {
-    // R2L: приёмник данные sha1
-    // Стек (сверху вниз): приёмник (ARRAY u8 >= 20), данные
+// Человеческая запись: sha1 источник результат
+// R2L исполнение: результат → источник → sha1
+// Стек (сверху вниз): данные (STRING/NAME/$STRING/ARRAY), приёмник (ARRAY u8 >= 20)
 
-    // 1. Снимаем приёмник
-    if (stack_is_empty()) { pushBool(false); return; }
-    uint8_t* dst = &stack_mem[stack_ptr];
-    if ((dst[0] != 17 && dst[0] != 20) || elem_size(dst) != 6) {
-        stack_ptr += elem_size(dst);
-        pushBool(false);
-        return;
-    }
-    uint16_t dst_base = dst[1] | (dst[2] << 8);
-    uint16_t dst_len  = dst[3] | (dst[4] << 8);
-    uint8_t  dst_esz  = type_registry[dst[5]].size;
-    uint32_t dst_total = (uint32_t)dst_len * dst_esz;
-    stack_ptr += 6;
-
-    if (dst_total < 20 || dst_base + 20 > DATA_POOL_SIZE) {
-        pushBool(false);
-        return;
-    }
-
-    // 2. Снимаем данные
+    // === 1. СНИМАЕМ ДАННЫЕ (источник — ВЕРХ стека) ===
     if (stack_is_empty()) { pushBool(false); return; }
     uint8_t* top = &stack_mem[stack_ptr];
     const uint8_t* data = nullptr;
@@ -7268,14 +7631,34 @@ void sha1Func() {
         len = count * esz;
         if (base + len <= DATA_POOL_SIZE) data = &data_pool[base];
     }
-    stack_ptr += elem_size(top);
-
+    
     if (!data || len == 0) {
+        stack_ptr += elem_size(top);
+        pushBool(false);
+        return;
+    }
+    stack_ptr += elem_size(top);  // снимаем источник
+
+    // === 2. СНИМАЕМ ПРИЁМНИК (массив — теперь ВЕРХ стека) ===
+    if (stack_is_empty()) { pushBool(false); return; }
+    uint8_t* dst = &stack_mem[stack_ptr];
+    if ((dst[0] != 17 && dst[0] != 20) || elem_size(dst) != 6) {
+        stack_ptr += elem_size(dst);
+        pushBool(false);
+        return;
+    }
+    uint16_t dst_base = dst[1] | (dst[2] << 8);
+    uint16_t dst_len  = dst[3] | (dst[4] << 8);
+    uint8_t  dst_esz  = type_registry[dst[5]].size;
+    uint32_t dst_total = (uint32_t)dst_len * dst_esz;
+    stack_ptr += 6;  // снимаем приёмник
+
+    if (dst_total < 20 || dst_base + 20 > DATA_POOL_SIZE) {
         pushBool(false);
         return;
     }
 
-    // 3. Вычисление SHA-1 (кроссплатформенная реализация)
+    // === 3. ВЫЧИСЛЕНИЕ SHA-1 ===
 #if defined(ESP32)
     #include "mbedtls/sha1.h"
     mbedtls_sha1_context ctx;
@@ -7284,13 +7667,10 @@ void sha1Func() {
     mbedtls_sha1_update(&ctx, data, len);
     mbedtls_sha1_finish(&ctx, &data_pool[dst_base]);
     mbedtls_sha1_free(&ctx);
-
 #elif defined(ESP8266)
     #include <Hash.h>
     sha1(data, (uint32_t)len, &data_pool[dst_base]);
-
 #else
-    // Заглушка для других платформ — 20 нулей
     memset(&data_pool[dst_base], 0, 20);
 #endif
 
@@ -7369,6 +7749,79 @@ void uuid5Func() {
     // 5. Кладём как STRING (тег 0x0E) прямо на стек HDL
     pushStringRaw(buf);
 }
+// ============================================================
+// === CRC ОБЩЕГО НАЗНАЧЕНИЯ: crc8 / crc16 / crc32 ===
+// ============================================================
+// Использование в HDL:
+//   "123456789" crc8 print     → 161   (0xA1, Dallas/Maxim)
+//   "123456789" crc16 print    → 19255 (0x4B37, Modbus RTU)
+//   "123456789" crc32 print    → 3421780262 (0xCBF43926, Ethernet)
+//
+// Принимает: числа, STRING, NAME, $STRING, ARRAY u8, REF_ARR u8
+// Возвращает: u8 / u16 / u32
+
+// --- CRC-8: полином 0x31 отражённый = 0x8C (Dallas/Maxim, 1-Wire) ---
+static uint8_t crc8_dallas(const uint8_t* data, uint16_t len) {
+    uint8_t crc = 0;
+    while (len--) {
+        uint8_t byte = *data++;
+        for (uint8_t i = 0; i < 8; i++) {
+            uint8_t mix = (crc ^ byte) & 0x01;
+            crc >>= 1;
+            if (mix) crc ^= 0x8C;
+            byte >>= 1;
+        }
+    }
+    return crc;
+}
+
+// --- CRC-16: полином 0x8005 отражённый = 0xA001 (Modbus RTU) ---
+static uint16_t crc16_modbus(const uint8_t* data, uint16_t len) {
+    uint16_t crc = 0xFFFF;
+    while (len--) {
+        crc ^= *data++;
+        for (uint8_t i = 0; i < 8; i++) {
+            if (crc & 0x0001) crc = (crc >> 1) ^ 0xA001;
+            else              crc >>= 1;
+        }
+    }
+    return crc;
+}
+
+// --- CRC-32: полином 0x04C11DB7 отражённый = 0xEDB88320 (Ethernet/ZIP) ---
+static uint32_t crc32_ethernet(const uint8_t* data, uint16_t len) {
+    uint32_t crc = 0xFFFFFFFF;
+    while (len--) {
+        crc ^= *data++;
+        for (uint8_t i = 0; i < 8; i++) {
+            if (crc & 1) crc = (crc >> 1) ^ 0xEDB88320;
+            else         crc >>= 1;
+        }
+    }
+    return ~crc;
+}
+
+// --- Диспетчер: использует extractPayload из ядра ---
+template <typename T>
+static void crc_dispatch(T (*compute)(const uint8_t*, uint16_t),
+                         void (*push)(T), T fallback) {
+    if (stack_is_empty()) { push(fallback); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    const uint8_t* data = nullptr;
+    uint16_t len = 0, sz = 0;
+    if (!extractPayload(top, data, len, sz)) {
+        stack_ptr += elem_size(top);
+        push(fallback);
+        return;
+    }
+    stack_ptr += sz;
+    push(compute(data, len));
+}
+
+void crc8Func()  { crc_dispatch(crc8_dallas,    pushUInt8,  (uint8_t)0); }
+void crc16Func() { crc_dispatch(crc16_modbus,   pushUInt16, (uint16_t)0); }
+void crc32Func() { crc_dispatch(crc32_ethernet, pushUInt32, (uint32_t)0); }
+
 void word_exec() {
     if (stack_is_empty()) {
         currentOutput->println("exec: stack empty");
@@ -7421,57 +7874,11 @@ void word_exec() {
     // 🔑 Прямой вызов — быстрее и чище
     exec_word(addr);
 }
-// === ДИАГНОСТИКА ПОТОКА ВЫВОДА ===
-// 🔑 КРИТИЧНО: всегда выводит в Serial, независимо от currentOutput!
-// Это аварийный канал — когда основной вывод «улетел», Serial остаётся
-// единственным надёжным способом увидеть, что происходит.
-void word_out_query() {
-    Serial.println();
-    Serial.println("=== out? DIAGNOSTIC ===");
-    
-    if (currentOutput == &Serial) {
-        Serial.println("out: Serial");
-    }
-    else if (currentOutput == &g_outFile) {
-        Serial.println("out: FILE (g_outFile)");
-    }
-    else if (currentOutput == &g_stream) {
-        Serial.print("out: g_stream -> ");
-        Serial.println(g_stream.targetName());
-    }
-    else {
-        Serial.print("out: UNKNOWN @ 0x");
-        Serial.println((uint32_t)(uintptr_t)currentOutput, HEX);
-    }
-    
-    // Дополнительно: состояние g_stream
-    Serial.print("g_stream.target = ");
-    Serial.println(g_stream.targetName());
-    
-    // Состояние файла
-    Serial.print("g_outFile open: ");
-    Serial.println(g_outFile ? "YES" : "NO");
-    
-    Serial.println("=======================");
-    Serial.println();
-}
+
 // Объявляем функцию из net.ino
 extern void udp_finalize_streaming();
 
-void word_out_restore() {
-    uint32_t ptr = 0;
-    if (!popUInt32(ptr)) return;
-    
-    // 🔑 КЛЮЧЕВОЕ: перед восстановлением канала — финализируем UDP-стриминг
-    udp_finalize_streaming();
-    
-    // Закрываем файл ТОЛЬКО если он был активным каналом
-    if (g_outFile && currentOutput == &g_outFile) {
-        g_outFile.close();
-    }
-    
-    currentOutput = (Print*)(uintptr_t)ptr;
-}
+
 void wordQueryFunc() {
 // 1. Захват имени из R2L-потока (предыдущий токен)
 int idx = g_tok_idx - 1;
@@ -7497,9 +7904,348 @@ pushBool(addr != 0xFFFF);
 // 3. Пропускаем токен имени в R2L-цикле
 g_tok_idx -= 1;
 }
-void setup() {
-  Serial.begin(115200);
-  Serial.println(); delay(500);
+void word_json_out() {
+    if (g_json_acc_len == 0) {
+        currentOutput->print("{}");
+    } else {
+        currentOutput->print('{');
+        currentOutput->print(g_json_acc);
+        currentOutput->print('}');
+    }
+    currentOutput->println();
+    
+    // 🔑 ОЧИСТКА БУФЕРА
+    g_json_acc_len = 0;
+    g_json_acc_first = true;
+    g_json_acc[0] = '\0';
+}
+void jsonMoveWord() {
+    // 1. Снимаем ключ со стека
+    if (stack_is_empty()) {
+        currentOutput->println("json-move: key expected");
+        return;
+    }
+    uint8_t* top = &stack_mem[stack_ptr];
+    if (top[0] != 0x0E && top[0] != 0x0D) {
+        currentOutput->println("json-move: key must be string/name");
+        return;
+    }
+    uint8_t key_len = top[1];
+    char key[65];
+    if (key_len > 64) key_len = 64;
+    memcpy(key, &top[2], key_len);
+    key[key_len] = '\0';
+    stack_ptr += elem_size(top);
+
+    // 2. Находим переменную ГЛОБАЛЬНО (во всех контекстах)
+    uint16_t addr = dict_find(key);
+    if (addr == 0xFFFF) {
+        currentOutput->print("json-move: not found: ");
+        currentOutput->println(key);
+        return;
+    }
+
+    uint8_t nlen = dict_pool[addr + 2];
+    uint8_t flags = dict_pool[addr + 4 + nlen];
+
+    // 🔑 УБРАЛИ ПРОВЕРКУ КОНТЕКСТА — ищем везде
+    if (!(flags & 0x02)) {
+        currentOutput->print("json-move: not a variable: ");
+        currentOutput->println(key);
+        return;
+    }
+
+    // 3. Кладём значение на стек (копируем тело переменной)
+    uint16_t next = dict_pool[addr] | (dict_pool[addr + 1] << 8);
+    uint16_t body_start = addr + 5 + nlen;
+    uint16_t end = next ? next : dict_ptr;
+    if (flags & 0x04) end -= 4;
+    uint16_t body_size = end - body_start;
+
+    if (body_size == 0) {
+        currentOutput->print("json-move: empty: ");
+        currentOutput->println(key);
+        return;
+    }
+
+    if (stack_ptr < body_size) {
+        currentOutput->println("json-move: stack overflow");
+        return;
+    }
+    stack_ptr -= body_size;
+    memcpy(&stack_mem[stack_ptr], &dict_pool[body_start], body_size);
+
+    // 4. Кладём ключ на стек (как NAME)
+    uint8_t name_size = 2 + key_len;
+    if (stack_ptr < name_size) {
+        currentOutput->println("json-move: stack overflow");
+        return;
+    }
+    stack_ptr -= name_size;
+    stack_mem[stack_ptr] = 0x0D;
+    stack_mem[stack_ptr + 1] = key_len;
+    memcpy(&stack_mem[stack_ptr + 2], key, key_len);
+
+    // 5. Вызываем json-set — он сам всё сериализует
+    jsonSetWord();
+}
+// === Base64 encoder ===
+// Человеческая запись: base64> приёмник источник
+// R2L: источник → приёмник → base64>
+// Источник: ARRAY u8 (любой длины)
+// Приёмник: $STRING или STRING (должен быть достаточно большим)
+// Возвращает: строку base64 на стек
+
+static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+void base64Func() {
+    // 1. Снимаем источник (массив u8)
+    if (stack_is_empty()) { pushStringRaw(""); return; }
+    uint8_t* src = &stack_mem[stack_ptr];
+    if (src[0] != 17 && src[0] != 20) { stack_ptr += elem_size(src); pushStringRaw(""); return; }
+    uint16_t src_base = src[1] | (src[2] << 8);
+    uint16_t src_len  = src[3] | (src[4] << 8);
+    uint8_t  src_tp   = src[5];
+    if (type_registry[src_tp].size != 1) { stack_ptr += elem_size(src); pushStringRaw(""); return; }
+    stack_ptr += 6;
+    
+    if (src_base + src_len > DATA_POOL_SIZE) { pushStringRaw(""); return; }
+    
+    // 2. Вычисляем длину base64: ceil(src_len / 3) * 4
+    uint16_t out_len = ((src_len + 2) / 3) * 4;
+    if (out_len > 255) { pushStringRaw(""); return; } // STRING лимит 255
+    
+    // 3. Кодируем в локальный буфер
+    char out[257];
+    uint16_t pos = 0;
+    for (uint16_t i = 0; i < src_len; i += 3) {
+        uint8_t b0 = data_pool[src_base + i];
+        uint8_t b1 = (i + 1 < src_len) ? data_pool[src_base + i + 1] : 0;
+        uint8_t b2 = (i + 2 < src_len) ? data_pool[src_base + i + 2] : 0;
+        
+        out[pos++] = b64_table[b0 >> 2];
+        out[pos++] = b64_table[((b0 & 0x03) << 4) | (b1 >> 4)];
+        out[pos++] = (i + 1 < src_len) ? b64_table[((b1 & 0x0F) << 2) | (b2 >> 6)] : '=';
+        out[pos++] = (i + 2 < src_len) ? b64_table[b2 & 0x3F] : '=';
+    }
+    out[pos] = '\0';
+    
+    // 4. Кладём как STRING на стек
+    pushStringRaw(out);
+}
+// === ПОДСЧЁТ ДЛИНЫ JSON НА ЛЕТУ (без буферов, без классов) ===
+// delta_mode = true  → только dirty-переменные (для json>>)
+// recursive  = true  → рекурсивно по дочерним контекстам (для json*>)
+// НЕ печатает, НЕ сбрасывает dirty-флаги. Только считает байты.
+static uint16_t calc_json_len_core(bool delta_mode, bool recursive) {
+    uint16_t len = 1; // '{'
+    bool first = true;
+    uint16_t p = 0;
+    
+    while (p < dict_ptr) {
+        uint16_t next = dict_pool[p] | (dict_pool[p + 1] << 8);
+        uint8_t nlen  = dict_pool[p + 2];
+        uint8_t ctx   = dict_pool[p + 3 + nlen];
+        uint8_t flags = dict_pool[p + 4 + nlen];
+        
+        if (ctx != currentContext || (flags & 0x10)) {
+            if (next == 0) break;
+            p = next;
+            continue;
+        }
+        
+        bool is_var   = (flags & 0x02) != 0;
+        bool is_alias = (flags & 0x20) != 0;
+        bool is_chain = (flags & 0x40) != 0;
+        bool is_dirty = (flags & 0x80) != 0;
+        bool is_ctx   = (flags == 0x0C);
+        
+        if (!is_var || is_alias || is_chain || is_ctx || (delta_mode && !is_dirty)) {
+            if (next == 0) break;
+            p = next;
+            continue;
+        }
+        
+        uint16_t body_start = p + 5 + nlen;
+        uint16_t end = next ? next : dict_ptr;
+        uint16_t val_size = (end - 4) - body_start;
+        if (val_size == 0) {
+            if (next == 0) break;
+            p = next;
+            continue;
+        }
+        
+        uint8_t tag = dict_pool[body_start];
+        uint16_t data_ptr_addr = body_start;
+        
+        if (!first) len += 1; // ','
+        first = false;
+        
+        // "имя":
+        len += 2 + nlen;
+        
+        // === ПОДСЧЁТ ДЛИНЫ ЗНАЧЕНИЯ ===
+        if (tag == 17 || tag == 20) { // Массив
+            uint16_t base = dict_pool[data_ptr_addr + 1] | (dict_pool[data_ptr_addr + 2] << 8);
+            uint16_t arr_len  = dict_pool[data_ptr_addr + 3] | (dict_pool[data_ptr_addr + 4] << 8);
+            uint8_t  el_tp = dict_pool[data_ptr_addr + 5];
+            uint8_t esz = type_registry[el_tp].size;
+            len += 1; // '['
+            for (uint16_t i = 0; i < arr_len; i++) {
+                if (i > 0) len += 1; // ','
+                uint16_t addr = base + i * esz;
+                if (addr + esz > DATA_POOL_SIZE) { len += 4; continue; } // null
+                if (el_tp == 15) { // $STRING
+                    uint8_t slen = data_pool[addr];
+                    uint16_t d_addr = data_pool[addr + 1] | (data_pool[addr + 2] << 8);
+                    if (slen == 0 || d_addr + slen > DATA_POOL_SIZE) { len += 4; continue; }
+                    len += 2; // ""
+                    for (uint8_t j = 0; j < slen; j++) {
+                        char c = data_pool[d_addr + j];
+                        if (c == '"' || c == '\\') len += 1; // экранирование
+                        len += 1;
+                    }
+                } else if (el_tp == 11) { // float
+                    char num[24];
+                    float f; memcpy(&f, &data_pool[addr], 4);
+                    len += snprintf(num, sizeof(num), "%.4g", f);
+                } else {
+                    char num[24];
+                    int32_t v = decode_int_le(&data_pool[addr], esz, el_tp);
+                    if (is_signed_tag(el_tp)) len += snprintf(num, sizeof(num), "%ld", (long)v);
+                    else len += snprintf(num, sizeof(num), "%lu", (unsigned long)(uint32_t)v);
+                }
+            }
+            len += 1; // ']'
+        }
+        else if (tag == 0 || tag == 1) { // bool
+            len += (tag == 1) ? 4 : 5; // true / false
+        }
+        else if (tag >= 4 && tag <= 11) { // число
+            if (tag == 11) {
+                char num[24];
+                float f; memcpy(&f, &dict_pool[data_ptr_addr + 1], 4);
+                len += snprintf(num, sizeof(num), "%.4g", f);
+            } else {
+                char num[24];
+                int32_t v = decode_int_le(&dict_pool[data_ptr_addr + 1], val_size - 1, tag);
+                if (is_signed_tag(tag)) len += snprintf(num, sizeof(num), "%ld", (long)v);
+                else len += snprintf(num, sizeof(num), "%lu", (unsigned long)(uint32_t)v);
+            }
+        }
+        else if (tag == 0x0E || tag == 15) { // строка
+            uint16_t slen;
+            const uint8_t* src;
+            if (tag == 0x0E) {
+                slen = dict_pool[data_ptr_addr + 1];
+                src = &dict_pool[data_ptr_addr + 2];
+            } else {
+                slen = dict_pool[data_ptr_addr + 1];
+                uint16_t a = dict_pool[data_ptr_addr + 2] | (dict_pool[data_ptr_addr + 3] << 8);
+                if (a + slen > DATA_POOL_SIZE) { len += 4; goto next_var; }
+                src = &data_pool[a];
+            }
+            len += 2; // ""
+            for (uint16_t i = 0; i < slen; i++) {
+                char c = src[i];
+                if (c == '"' || c == '\\') len += 1;
+                len += 1;
+            }
+        }
+        else {
+            len += 4; // null
+        }
+        
+        next_var:
+        // 🔑 НЕ сбрасываем dirty-флаг! Только считаем.
+        if (next == 0) break;
+        p = next;
+    }
+    
+    // === РЕКУРСИВНЫЙ ОБХОД ДОЧЕРНИХ КОНТЕКСТОВ ===
+    if (recursive) {
+        p = 0;
+        while (p < dict_ptr) {
+            uint16_t next = dict_pool[p] | (dict_pool[p + 1] << 8);
+            uint8_t nlen  = dict_pool[p + 2];
+            uint8_t ctx   = dict_pool[p + 3 + nlen];
+            uint8_t flags = dict_pool[p + 4 + nlen];
+            
+            if (flags == 0x0C && ctx == currentContext) {
+                uint16_t body_start = p + 5 + nlen;
+                if (body_start + 2 <= dict_ptr && dict_pool[body_start] == 0x03) {
+                    uint8_t child_ctx_id = dict_pool[body_start + 1];
+                    if (!first) len += 1;
+                    first = false;
+                    len += 2 + nlen; // "имя":
+                    // Рекурсивный подсчёт для дочернего контекста
+                    uint8_t saved_ctx = currentContext;
+                    currentContext = child_ctx_id;
+                    uint16_t child_len = calc_json_len_core(delta_mode, true);
+                    currentContext = saved_ctx;
+                    len += child_len;
+                }
+            }
+            if (next == 0) break;
+            p = next;
+        }
+    }
+    
+    len += 1; // '}'
+    return len;
+}
+
+// === ОТПРАВКА WS-ЗАГОЛОВКА В ТЕКУЩИЙ КАНАЛ ===
+// Отправляет 2 или 4 байта WS-фрейма с вычисленной длиной JSON.
+static void send_ws_frame_header(uint16_t json_len) {
+    uint8_t header[4];
+    uint8_t header_len = 0;
+    
+    header[0] = 0x81; // FIN=1 + opcode=1 (текст)
+    
+    if (json_len < 126) {
+        header[1] = (uint8_t)json_len;
+        header_len = 2;
+    } else if (json_len <= 65535) {
+        header[1] = 126;
+        header[2] = (json_len >> 8) & 0xFF; // big-endian
+        header[3] = json_len & 0xFF;
+        header_len = 4;
+    } else {
+        return; // слишком большой фрейм
+    }
+    
+    currentOutput->write(header, header_len);
+}
+
+// === json>frame — заголовок для полного JSON ===
+void word_json_frame() {
+    uint16_t json_len = calc_json_len_core(false, false);
+    if (json_len == 0) return;
+    send_ws_frame_header(json_len);
+}
+
+// === json>>frame — заголовок для дельта-JSON ===
+void word_json_delta_frame() {
+    uint16_t json_len = calc_json_len_core(true, false);
+    if (json_len == 0) return;
+    send_ws_frame_header(json_len);
+}
+
+// === json*>frame — заголовок для рекурсивного JSON ===
+void word_json_star_frame() {
+    uint16_t json_len = calc_json_len_core(false, true);
+    if (json_len == 0) return;
+    send_ws_frame_header(json_len);
+}
+void setup() {  
+    Serial.begin(115200);
+  // 3. ЖДЁМ ПОДКЛЮЧЕНИЯ ТЕРМИНАЛА (КРИТИЧНО ДЛЯ USB CDC)
+  while (!Serial) {
+    delay(100);
+  }
+    
+    Serial.println();
   for (int i = 0; i <= 255; i++) Serial.println();
    
       // 🔑 КРИТИЧНО: выделяем пулы в heap ПЕРЕД любым использованием
@@ -7546,7 +8292,11 @@ void setup() {
   addInternalWord("all", word_words_all);   // ← ДОБАВИТЬ
   addInternalWord("exec", word_exec);
   addInternalWord("sha1",  sha1Func);
+  addInternalWord("base64>", base64Func);
   addInternalWord("uuid5", uuid5Func);
+  addInternalWord("crc8",    crc8Func);
+  addInternalWord("crc16",   crc16Func);
+  addInternalWord("crc32",   crc32Func);
   addInternalWord("<--", word_checkpoint);
   addInternalWord("xxx", word_forget);
   addInternalWord("main", word_main);            // Переключает фокус внимания в корневой (глобальный) контекст.
@@ -7619,6 +8369,8 @@ void setup() {
   addInternalWord("json>file", word_json_export_file);     // Сохраняет JSON-дампа контекста в указанный файл.
   addInternalWord("json-set", jsonSetWord);      // Добавляет пару "ключ:значение" во внутренний буфер сборки JSON.
   addInternalWord("json>var", jsonToVarWord);    // Парсит накопленный JSON-буфер и создаёт из него переменные в текущем контексте.
+  addInternalWord( "json>out", word_json_out);
+  addInternalWord("json-move", jsonMoveWord);
   focusTo("main");
 
   // === КОНТЕКСТ: TIMES (Время и планирование) ===
@@ -7708,6 +8460,7 @@ void setup() {
   webInit();
   udpInit();
   tcpInit();
+  owModuleInit();
   rmtModuleInit();
   i2sInit();
   i2cInit();
@@ -7746,63 +8499,63 @@ if (FILESYSTEM.exists("/startup.wrd")) {
 }
 
 void loop() {
-  
-  // 1. Кооперативное исполнение фоновых задач
-  process_tasks(false);
+    // 1. Кооперативное исполнение фоновых задач
+    process_tasks(false);
 
-  // 2. Обработка Serial (ваш оригинальный код)
-  while (Serial.available()) {
-    char c = Serial.read();
+    // 2. SERIAL (приоритет) — посимвольный ввод
+    while (Serial.available()) {
+        char c = Serial.read();
 #if ENABLE_TERM_LAYER
-    if (g_termMode) {
-      handleTermChar(c);
-      continue;
-    }
+        if (g_termMode) {
+            handleTermChar(c);
+            continue;
+        }
 #endif
-    static uint8_t idx = 0;
-    if (c == '\r' || c == '\n') {
-      if (idx > 0) {
-        line_buf[idx] = '\0';
-        Serial.print(line_buf); Serial.println();
-        executeLine(line_buf);
-        Serial.println();
-        printStack();
-        printActiveTasks();
-        word_prompt();
-      }
-      idx = 0;
-    } else if (c >= 32 && idx < 255) {
-      line_buf[idx++] = c;
+        static uint8_t idx = 0;
+        if (c == '\r' || c == '\n') {
+            if (idx > 0) {
+                line_buf[idx] = '\0';
+                // 🔑 Переключаем вывод на Serial (принцип: откуда данные — туда ответ)
+                currentOutput = &Serial;
+                Serial.print(line_buf); Serial.println();
+                executeLine(line_buf);
+                Serial.println();
+                printStack();
+                printActiveTasks();
+                word_prompt();
+            }
+            idx = 0;
+        } else if (c >= 32 && idx < 255) {
+            line_buf[idx++] = c;
+        }
     }
-  }
 
-
-
-// 3. ✅ ДЕТЕРМИНИРОВАННАЯ обработка WebSocket
+// 3. WEBSOCKET — детерминированная обработка
 if (ws_cmd_ready) {
     ws_cmd_ready = false;
     
-    // 🔑 Временно переключаем currentOutput на g_stream
-    Print* saved = currentOutput;
+    // Сохраняем состояние для гарантированного flush
+    HDLStream::Target saved_target = g_stream.getTarget();
+    WebSocketsServer* saved_ws = g_stream.getTarget() == HDLStream::T_WS ? &wsServer : nullptr;
+    
+    // Переключаем вывод на WS
+    g_stream.attachWs(&wsServer);
     currentOutput = &g_stream;
     
-    currentOutput->println();
-    currentOutput->print(ws_cmd); 
+    // Исполняем команду
     currentOutput->println();
     executeLine(ws_cmd);
     currentOutput->println();
     printStack();
     printActiveTasks();
     word_prompt();
-    g_stream.flush();
     
-    // 🔑 Восстанавливаем currentOutput (обычно обратно в Serial)
-    currentOutput = saved;
-    
-    // ❌ НЕ вызываем g_stream.detach() — WS клиент всё ещё подключен!
+    // 🔑 ГАРАНТИРОВАННЫЙ СБРОС: даже если currentOutput был изменён внутри executeLine
+    if (saved_ws) {
+        g_stream.attachWs(saved_ws);
+        g_stream.flush();
+    }
 }
-  // 4. Обслуживание библиотеки WebSocket (пинг/понг, разрывы)
-  // ⚠️ ВАЖНО: Это должно вызываться здесь, а не через +loop в startup.wrd
-  wsServer.loop();
-  
+    // 4. Обслуживание WebSocket (пинг/понг, разрывы)
+    wsServer.loop();
 }

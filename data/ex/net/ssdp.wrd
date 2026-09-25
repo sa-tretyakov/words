@@ -13,9 +13,6 @@
 webconst word?
 load? ex/http/webconst.wrd
 
-
-
-
 upnp focus
 ssdp device
 ssdp.SchemaURL      = "description.xml"
@@ -134,7 +131,6 @@ out>restore
 ;
 
 ssdp.HTTP200.send :
-// ssdp.Response
 out>save
 out>udp ssdp.soket ssdp.ip.zapros ssdp.port.zapros
 ssdp.Response
@@ -163,6 +159,8 @@ ssdpRead :
         ssdp.ip.zapros = 
         np = 
         // print "Получили "
+        // print np
+        // print " "
         // println ssdp.ip.zapros
         if -1 != ssdp?response {
         ssdp.HTTP200.send 

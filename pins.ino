@@ -1,7 +1,187 @@
 // === pins.ino — GPIO, звук, LEDC, I2C (поддержка ESP32 Core 2.x и 3.x) ===
 // Все функции используют нативные хелперы ядра: popUInt8, popUInt32, pushBool, pushStringRaw.
 #include <Arduino.h>
+// ============================================================
+// === 1-Wire ТРАНСПОРТ (ow.*) ===
+// ============================================================
+//
+// Использование в HDL:
+//   4 ow.Init .              \ инициализация на пине 4 → true/false
+//   ow.Reset .               \ presence pulse → true если есть устройство
+//   0xCCu8 ow.Write          \ Skip ROM
+//   0x44u8 ow.Write          \ Convert T
+//   ow.Skip                  \ альтернатива 0xCC
+//   myRomArr ow.Select .     \ Match ROM (массив из 8 u8)
+//   ow.Read .                \ прочитать байт
+//   ow.ReadBit .             \ прочитать бит
+//   1u8 ow.WriteBit          \ записать бит
+//   myBuf ow.Search .        \ найти все устройства → количество
+//
+// CRC проверяется общим словом crc8 из ядра:
+//   myRomArr crc8 .          \ должно быть 0 для валидного ROM-кода
 
+static OneWire* g_ow = nullptr;
+
+// ------------------------------------------------------------
+// Хелпер: извлечь массив u8/i8 со стека (снимает элемент)
+// ------------------------------------------------------------
+static bool popByteArray(const uint8_t*& out_data, uint16_t& out_len) {
+    if (stack_is_empty()) return false;
+    uint8_t* top = &stack_mem[stack_ptr];
+    const uint8_t* data;
+    uint16_t len, sz;
+    if (!extractPayload(top, data, len, sz)) {
+        stack_ptr += elem_size(top);
+        return false;
+    }
+    // Требуем ARRAY или REF_ARR
+    if (top[0] != 17 && top[0] != 20) {
+        stack_ptr += sz;
+        return false;
+    }
+    // Требуем размер элемента = 1 байт (u8 или i8)
+    uint8_t type_id = top[5];
+    if (type_registry[type_id].size != 1) {
+        stack_ptr += sz;
+        return false;
+    }
+    out_data = data;
+    out_len = len;
+    stack_ptr += sz;
+    return true;
+}
+
+// ------------------------------------------------------------
+// ow.Init : pin → BOOL
+// ------------------------------------------------------------
+void owInitFunc() {
+    uint8_t pin;
+    if (!popUInt8(pin)) { pushBool(false); return; }
+    if (g_ow) { delete g_ow; g_ow = nullptr; }
+    g_ow = new OneWire(pin);
+    pushBool(g_ow != nullptr);
+}
+
+// ------------------------------------------------------------
+// ow.Reset → BOOL (presence pulse)
+// ------------------------------------------------------------
+void owResetFunc() {
+    if (!g_ow) { pushBool(false); return; }
+    pushBool(g_ow->reset() != 0);
+}
+
+// ------------------------------------------------------------
+// ow.Write : u8 →
+// ------------------------------------------------------------
+void owWriteFunc() {
+    uint8_t b;
+    if (!popUInt8(b) || !g_ow) return;
+    g_ow->write(b, 0);
+}
+
+// ------------------------------------------------------------
+// ow.Read → u8
+// ------------------------------------------------------------
+void owReadFunc() {
+    if (!g_ow) { pushUInt8(0xFF); return; }
+    pushUInt8((uint8_t)g_ow->read());
+}
+
+// ------------------------------------------------------------
+// ow.WriteBit : u8 →
+// ------------------------------------------------------------
+void owWriteBitFunc() {
+    uint8_t b;
+    if (!popUInt8(b) || !g_ow) return;
+    g_ow->write_bit(b & 1);
+}
+
+// ------------------------------------------------------------
+// ow.ReadBit → u8
+// ------------------------------------------------------------
+void owReadBitFunc() {
+    if (!g_ow) { pushUInt8(0); return; }
+    pushUInt8((uint8_t)g_ow->read_bit());
+}
+
+// ------------------------------------------------------------
+// ow.Select : arr(8 u8) → BOOL (Match ROM)
+// ------------------------------------------------------------
+void owSelectFunc() {
+    if (!g_ow) { pushBool(false); return; }
+    const uint8_t* data; uint16_t len;
+    if (!popByteArray(data, len) || len < 8) {
+        pushBool(false);
+        return;
+    }
+    g_ow->select(data);
+    pushBool(true);
+}
+
+// ------------------------------------------------------------
+// ow.Skip → BOOL (Skip ROM)
+// ------------------------------------------------------------
+void owSkipFunc() {
+    if (!g_ow) { pushBool(false); return; }
+    g_ow->skip();
+    pushBool(true);
+}
+
+// ------------------------------------------------------------
+// ow.Search : arr(u8) → u8 (количество найденных устройств)
+// Массив должен быть минимум на 8*N байт, где N — ожидаемое число устройств.
+// Автоматически вызывает reset_search перед поиском.
+// ------------------------------------------------------------
+void owSearchFunc() {
+    if (!g_ow) { pushUInt8(0); return; }
+    if (stack_is_empty()) { pushUInt8(0); return; }
+
+    uint8_t* top = &stack_mem[stack_ptr];
+    uint16_t sz = elem_size(top);
+
+    // Требуем ARRAY или REF_ARR
+    if (top[0] != 17 && top[0] != 20) {
+        stack_ptr += sz;
+        pushUInt8(0);
+        return;
+    }
+    uint16_t base  = top[1] | (top[2] << 8);
+    uint16_t count = top[3] | (top[4] << 8);
+    uint8_t  type_id = top[5];
+    stack_ptr += sz;
+
+    // Требуем размер элемента = 1 байт
+    if (type_registry[type_id].size != 1) { pushUInt8(0); return; }
+    if (base + count > DATA_POOL_SIZE)    { pushUInt8(0); return; }
+
+    uint8_t max_devs = count / 8;
+    uint8_t found = 0;
+    uint8_t rom[8];
+
+    g_ow->reset_search();
+    while (found < max_devs && g_ow->search(rom)) {
+        memcpy(&data_pool[base + found * 8], rom, 8);
+        found++;
+    }
+    pushUInt8(found);
+}
+
+// ------------------------------------------------------------
+// Регистрация модуля
+// ------------------------------------------------------------
+void owModuleInit() {
+    focusTo("ow");
+    addInternalWord("ow.Init",     owInitFunc);
+    addInternalWord("ow.Reset",    owResetFunc);
+    addInternalWord("ow.Write",    owWriteFunc);
+    addInternalWord("ow.Read",     owReadFunc);
+    addInternalWord("ow.WriteBit", owWriteBitFunc);
+    addInternalWord("ow.ReadBit",  owReadBitFunc);
+    addInternalWord("ow.Select",   owSelectFunc);
+    addInternalWord("ow.Skip",     owSkipFunc);
+    addInternalWord("ow.Search",   owSearchFunc);
+    focusTo("main");
+}
 // === Захватываем значения ядра на этапе компиляции ===
 constexpr uint8_t HDL_INPUT        = (uint8_t)INPUT;
 constexpr uint8_t HDL_OUTPUT       = (uint8_t)OUTPUT;
@@ -278,41 +458,12 @@ void i2cWriteFunc() {
 
   uint8_t* top = &stack_mem[stack_ptr];
   const uint8_t* ptr = nullptr;
-  uint16_t len = 0;
-  uint16_t sz = elem_size(top);
-  uint8_t tag = top[0];
+  uint16_t len = 0, sz = 0;
 
-  // ЧИСЛА (u8, i8, u16, i16, u24, u32, i32, f)
-  if (tag >= 4 && tag <= 11) {
-    ptr = &top[1]; len = sz - 1;
-  }
-  // STRING / NAME
-  else if (tag == 0x0E || tag == 0x0D) {
-    ptr = &top[2]; len = top[1];
-  }
-  // $STRING
-  else if (tag == 15) {
-    len = top[1];
-    uint16_t a = top[2] | (top[3] << 8);
-    if (a + len > DATA_POOL_SIZE) { pushBool(false); return; }
-    ptr = &data_pool[a];
-  }
-  // ARRAY / REF_ARR
-  else if (tag == 17 || tag == 20) {
-    if (sz != 6) { pushBool(false); return; }
-    uint16_t a = top[1] | (top[2] << 8);
-    len = top[3] | (top[4] << 8);
-    uint8_t esz = type_registry[top[5]].size;
-    uint32_t total = (uint32_t)len * esz;
-    if (a + total > DATA_POOL_SIZE) { pushBool(false); return; }
-    ptr = &data_pool[a];
-    len = (uint16_t)total;
-  }
-  else { pushBool(false); return; }
-
+  if (!extractPayload(top, ptr, len, sz)) { pushBool(false); return; }
   stack_ptr += sz;
 
-  // Разбиение на куски по 128 байт
+  // Разбиение на куски по 128 байт (аппаратное ограничение Wire)
   const uint16_t CHUNK = 128;
   uint16_t sent = 0;
   while (sent < len) {
@@ -324,11 +475,20 @@ void i2cWriteFunc() {
   }
   pushBool(true);
 }
-
+void i2cWriteRegFunc() {
+  uint8_t val, reg, dev;
+  if (!popUInt8(dev) || !popUInt8(reg) || !popUInt8(val) ) { pushBool(false); return; }
+  if (!i2cInitialized) { pushBool(false); return; }
+  
+  Wire.beginTransmission(dev);
+  Wire.write(reg);
+  Wire.write(val);
+  pushBool(Wire.endTransmission(true) == 0);
+}
 void i2cReadFunc() {
     uint16_t a, l;
     uint8_t dev;
-    if (!popAddrInfo(a, l) || !popUInt8(dev)) { pushBool(false); return; }
+    if (!popUInt8(dev)  || !popAddrInfo(a, l) ) { pushBool(false); return; }
     if (!i2cInitialized || a + l > DATA_POOL_SIZE || l == 0) { pushBool(false); return; }
     Wire.requestFrom((uint8_t)dev, (uint8_t)l);
     uint16_t cnt = 0;
@@ -342,7 +502,7 @@ void i2cReadFunc() {
 void i2cReadRegFunc() {
     uint16_t a, l;
     uint8_t reg, dev;
-    if (!popAddrInfo(a, l) || !popUInt8(reg) || !popUInt8(dev)) { pushBool(false); return; }
+    if (!popUInt8(dev) || !popUInt8(reg) || !popAddrInfo(a, l) ) { pushBool(false); return; }
     if (!i2cInitialized || a + l > DATA_POOL_SIZE || l == 0) { pushBool(false); return; }
     Wire.beginTransmission(dev);
     Wire.write(reg);
@@ -374,6 +534,7 @@ void i2cInit() {
     addInternalWord("i2c.Init",     i2cInitFunc);      // sda scl → BOOL.
     addInternalWord("i2c.Initclok", i2cInitClokFunc);  // sda scl freq → BOOL.
     addInternalWord("i2c.Write",    i2cWriteFunc);     // array dev → BOOL.
+    addInternalWord("i2c.WriteReg", i2cWriteRegFunc);
     addInternalWord("i2c.Read",     i2cReadFunc);      // array dev → BOOL.
     addInternalWord("i2c.ReadReg",  i2cReadRegFunc);   // array reg dev → BOOL.
     addInternalWord("i2c.Scan",     i2cScanFunc);      // array → u8 (количество найденных).

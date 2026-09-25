@@ -6,21 +6,31 @@
     {
       "chipFamily": "ESP32",
       "parts": [
-        { "path": "./build/esp32/words.ino.bootloader.bin", "offset": 4096 },
-        { "path": "./build/esp32/words.ino.partitions.bin", "offset": 32768 },
-        { "path": "./build/esp32/words.boot_app0.bin", "offset": 57344 },
-        { "path": "./build/esp32/words.ino.esp32.bin", "offset": 65536 },
-        { "path": "./build/esp32/words.spiffs.bin", "offset": 3211264 }
+        { "path": "./build/esp32.esp32.esp32/words.ino.bootloader.bin", "offset": 4096 },
+        { "path": "./build/esp32.esp32.esp32/words.ino.partitions.bin", "offset": 32768 },
+        { "path": "./build/esp32.esp32.esp32/words.boot_app0.bin", "offset": 57344 },
+        { "path": "./build/esp32.esp32.esp32/words.ino.esp32.bin", "offset": 65536 },
+        { "path": "./build/esp32.esp32.esp32/words.spiffs.bin", "offset": 3211264 }
       ]
     },
     {
       "chipFamily": "ESP32-S3",
       "parts": [
-        { "path": "./build/esp32-s3/words.ino.bootloader.bin", "offset": 0 },
-        { "path": "./build/esp32-s3/words.ino.partitions.bin", "offset": 32768 },
-        { "path": "./build/esp32-s3/words.boot_app0.bin", "offset": 57344 },
-        { "path": "./build/esp32-s3/words.ino.esp32s3.bin", "offset": 65536 },
-        { "path": "./build/esp32-s3/words.spiffs.bin", "offset": 3211264 }
+        { "path": "./build/esp32.esp32.esp32s3/words.ino.bootloader.bin", "offset": 0 },
+        { "path": "./build/esp32.esp32.esp32s3/words.ino.partitions.bin", "offset": 32768 },
+        { "path": "./build/esp32.esp32.esp32s3/words.boot_app0.bin", "offset": 57344 },
+        { "path": "./build/esp32.esp32.esp32s3/words.ino.esp32s3.bin", "offset": 65536 },
+        { "path": "./build/esp32.esp32.esp32s3/words.spiffs.bin", "offset": 3211264 }
+      ]
+    },
+	{
+      "chipFamily": "ESP32-C5",
+      "parts": [
+        { "path": "./build/esp32.esp32.esp32c5/words.ino.bootloader.bin", "offset": 0 },
+        { "path": "./build/esp32.esp32.esp32c5/words.ino.partitions.bin", "offset": 32768 },
+        { "path": "./build/esp32.esp32.esp32c5/boot_app0.bin", "offset": 57344 },
+        { "path": "./build/esp32.esp32.esp32c5/words.ino.bin", "offset": 65536 },
+        { "path": "./build/esp32.esp32.esp32c5/words.spiffs.bin", "offset": 3211264 }
       ]
     }
   ]

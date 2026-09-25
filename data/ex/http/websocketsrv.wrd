@@ -1,0 +1,80 @@
+// load test.wrd <--
+main
+webSocket focus
+webSocket.srv = tcp.Listen 81
+webSocket.req = array u8 1024 // массив для приема строки с сервера
+webSocket.hash = array u8 20        // приёмник для SHA-1 (ровно 20 байт)
+const webSocket.magic = "258EAFA5-E914-47DA-95CA-5AB5DC65B357"
+?client :
+  if 255 == {                         // если индекс 255 (никого нет в очереди на подключение)
+    exit                              // досрочно выйти из слова, ничего не делая
+  }  
+;
+
+
+webSocket.handshake : // 
+println http.version + "101 Switching Protocols"
+println "Upgrade: websocket"
+println "Connection: Upgrade"
+println "Sec-WebSocket-Accept: " + 
+Empty.Line
+;
+
+
+webSocket.handshake.send :
+cli =
+accept$ =
+out>save
+out>tcp  cli
+webSocket.handshake accept$
+out>restore
+;
+webSocket.data.send :
+cli =
+out>save
+out>tcp  cli
+json>frame
+json>
+out>restore
+;
+
+webSocket.read :
+  cli = tcp.Accept webSocket.srv      // принять входящее соединение, получить индекс клиента
+  ?client cli                         // выход
+  n = tcp.Recv cli webSocket.req      // прочитать байты из клиента в массив req, сохранить количество в n
+  if n == 0 {                         // если получено 0 байт (клиент закрыл соединение или тишина)
+    tcp.Close cli                     // закрыть сокет клиента
+    exit                              // завершить выполнение слова
+  }
+    println n
+
+    if req? webSocket.req  {
+    key = find webSocket.req "Sec-WebSocket-Key: " -) 0
+    key += len "Sec-WebSocket-Key: "
+    end.key = find webSocket.req CRLF -) key
+
+    part$ webSocket.req key end.key
+    ->
+    keys$ =
+    
+     // 3. Склеиваем с магической строкой
+    full.key$ = keys$ + webSocket.magic
+    
+    // 4. Вычисляем SHA-1 (результат запишется в webSocket.hash)
+    // Стек: full.key$ webSocket.hash sha1
+    sha1 full.key$ webSocket.hash
+    accept$ = base64> webSocket.hash 
+    println full.key$
+    // webSocket.handshake accept$
+    webSocket.handshake.send cli accept$
+    println "WebSocket Handshake SUCCESS!"
+     // modules 
+    //  webSocket.data.send cli
+    exit
+    }
+    tcp.Close cli 
+  
+;
+
+
+webSocket.read 1 +task

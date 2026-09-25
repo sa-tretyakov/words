@@ -744,51 +744,80 @@ struct UdpSocket {
 };
 
 static UdpSocket* g_udp_sockets[8] = {nullptr};
-
-class UdpStreamPrinter : public Print {
-public:
-    UdpSocket* sock;
-    UdpStreamPrinter(UdpSocket* s) : sock(s) {}
-    size_t write(uint8_t c) override {
-        if (!sock || !sock->is_streaming) return 0;
-        if (sock->stream_len < 511) sock->stream_buf[sock->stream_len++] = (char)c;
-        return 1;
-    }
-    size_t write(const uint8_t* buffer, size_t size) override {
-        if (!sock || !sock->is_streaming) return 0;
-        size_t to_copy = (size < (512 - sock->stream_len)) ? size : (512 - sock->stream_len);
-        if (to_copy > 0) {
-            memcpy(&sock->stream_buf[sock->stream_len], buffer, to_copy);
-            sock->stream_len += to_copy;
-        }
-        return to_copy;
-    }
-};
-
-static UdpStreamPrinter* g_udp_stream_printer = nullptr;
-
+// ============================================================
+// === out>udp socket_idx ip port ===
+// Переключает вывод в UDP-сокет через g_stream (T_UDP).
+// Поддерживает ВСЕ числовые размеры (теги 4..11) и строковые (0x0D, 0x0E, 15).
+// ============================================================
 void word_out_udp() {
+    // 1. Снимаем индекс сокета (принимает любые числа: u8, u16, u32 и т.д.)
     uint32_t v = 0;
-    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) return;
-    String ip_str;
-    if (!popString(ip_str)) return;
-    uint32_t port32 = 0;
-    if (!popUInt32(port32)) return;
-    IPAddress ip;
-    if (!ip.fromString(ip_str.c_str())) return;
-    UdpSocket* s = g_udp_sockets[v];
-    s->is_streaming = true;
-    s->stream_len = 0;
-    s->stream_ip = ip;
-    s->stream_port = (uint16_t)port32;
-    if (!g_udp_stream_printer) {
-        g_udp_stream_printer = new UdpStreamPrinter(s);
-    } else {
-        g_udp_stream_printer->sock = s;
+    if (!popUInt32(v) || v >= 8 || !g_udp_sockets[v] || !g_udp_sockets[v]->active) {
+        currentOutput->print("out>udp: invalid socket (tag=");
+        if (!stack_is_empty()) currentOutput->print(stack_mem[stack_ptr]);
+        currentOutput->println(")");
+        return;
     }
-    currentOutput = g_udp_stream_printer;
+    
+    // 2. Снимаем IP-адрес (принимает STRING, NAME и $STRING)
+    uint8_t* top = &stack_mem[stack_ptr];
+    uint8_t tag = top[0];
+    char ip_buf[64];
+    uint8_t ip_len = 0;
+    
+    if (tag == 0x0E || tag == 0x0D) {          // STRING или NAME
+        ip_len = top[1];
+        if (ip_len > 63) ip_len = 63;
+        memcpy(ip_buf, &top[2], ip_len);
+        ip_buf[ip_len] = '\0';
+        stack_ptr += elem_size(top);
+    }
+    else if (tag == 15) {                      // $STRING (переменная из data_pool)
+        ip_len = top[1];
+        uint16_t addr = top[2] | (top[3] << 8);
+        if (addr + ip_len <= DATA_POOL_SIZE) {
+            if (ip_len > 63) ip_len = 63;
+            memcpy(ip_buf, &data_pool[addr], ip_len);
+            ip_buf[ip_len] = '\0';
+        } else {
+            currentOutput->println("out>udp: $STRING out of data_pool");
+            return;
+        }
+        stack_ptr += elem_size(top);
+    }
+    else {
+        currentOutput->print("out>udp: ip expected STRING/NAME/$STRING, got tag: ");
+        currentOutput->println(tag);
+        return;
+    }
+    
+    // 3. Снимаем порт (принимает ВСЕ числовые теги от 4 до 11)
+    uint32_t port32 = 0;
+    if (!popUInt32(port32)) {
+        currentOutput->print("out>udp: port expected numeric (4..11), got tag: ");
+        if (!stack_is_empty()) currentOutput->println(stack_mem[stack_ptr]);
+        else currentOutput->println("empty stack");
+        return;
+    }
+    if (port32 > 65535) {
+        currentOutput->println("out>udp: port > 65535");
+        return;
+    }
+    
+    // 4. Валидация IP-адреса
+    IPAddress ip;
+    if (!ip.fromString(ip_buf)) {
+        currentOutput->print("out>udp: bad ip format '");
+        currentOutput->print(ip_buf);
+        currentOutput->println("'");
+        return;
+    }
+    
+    // 5. Успех: все параметры валидны. Переключаем таргет.
+    UdpSocket* s = g_udp_sockets[v];
+    g_stream.attachUdp(&s->udp, ip, (uint16_t)port32);
+    currentOutput = &g_stream;
 }
-
 void udpOpenFunc() {
     uint32_t port32 = 0;
     if (!popUInt32(port32)) { pushUInt8(0xFF); return; }
@@ -967,21 +996,37 @@ void udpInit() {
 // === TCP ===
 // ============================================================
 struct TcpSocket {
-    WiFiClient* client;
-    int serverFd;
-    bool active;
-    bool is_server;
-    uint32_t timeout_ms;
+    WiFiClient* client = nullptr;
+    int serverFd = -1;
+    bool active = false;
+    bool is_server = false;
+    uint32_t timeout_ms = 5000;
+    
+    TcpSocket() {}  // Конструктор по умолчанию
 };
 
 static TcpSocket* g_tcp_sockets[8] = {nullptr};
 
+
+// ============================================================
+// === out>tcp socket_idx ===
+// Переключает вывод в TCP-сокет через g_stream (T_TCP).
+// ============================================================
 void word_out_tcp() {
     uint32_t v = 0;
-    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active || !g_tcp_sockets[v]->client) return;
-    g_stream.attachTcp(g_tcp_sockets[v]->client);
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active) {
+        currentOutput->println("out>tcp: invalid socket");
+        return;
+    }
+    TcpSocket* s = g_tcp_sockets[v];
+    if (!s->client || !s->client->connected()) {
+        currentOutput->println("out>tcp: not connected");
+        return;
+    }
+    g_stream.attachTcp(s->client);
     currentOutput = &g_stream;
 }
+
 
 static int8_t tcp_find_slot() {
     for (int i = 0; i < 8; i++) { if (!g_tcp_sockets[i] || !g_tcp_sockets[i]->active) return i; }
@@ -991,8 +1036,11 @@ static int8_t tcp_find_slot() {
 static void tcp_cleanup_idx(int8_t idx) {
     if (idx < 0 || idx >= 8 || !g_tcp_sockets[idx]) return;
     TcpSocket* s = g_tcp_sockets[idx];
-    if (s->client) { s->client->stop(); delete s->client; s->client = nullptr; }
     
+    Serial.print("tcp_cleanup_idx called for socket ");
+    Serial.println(idx);
+    
+    if (s->client) { s->client->stop(); delete s->client; s->client = nullptr; }
 #if defined(ESP32)
     if (s->serverFd >= 0) { ::close(s->serverFd); s->serverFd = -1; }
 #endif
@@ -1144,7 +1192,12 @@ void tcpConnectedFunc() {
 
 void tcpCloseFunc() {
     uint32_t v = 0;
-    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active) { pushBool(false); return; }
+    if (!popUInt32(v) || v >= 8 || !g_tcp_sockets[v] || !g_tcp_sockets[v]->active) { 
+        pushBool(false); 
+        return; 
+    }
+    currentOutput->print(getMsg("tcpClose called for socket "));
+    currentOutput->println(v);
     tcp_cleanup_idx((int8_t)v);
     delete g_tcp_sockets[v];
     g_tcp_sockets[v] = nullptr;
@@ -1246,7 +1299,11 @@ void tcpInit() {
     addInternalWord("tcp.RemotePort", tcpRemotePortFunc);
     addInternalWord("req?",           reqQuestionFunc);
     addInternalWord("req.line",       reqLineFunc);
+    addInternalWord("json>frame",   word_json_frame);
+addInternalWord("json>>frame",  word_json_delta_frame);
+addInternalWord("json*>frame",  word_json_star_frame);
     focusTo("streams");
     addInternalWord("out>tcp",        word_out_tcp);
+    
     focusTo("main");
 }
