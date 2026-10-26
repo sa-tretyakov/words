@@ -1,59 +1,93 @@
-// === pins.ino — GPIO, звук, LEDC, I2C (поддержка ESP32 Core 2.x и 3.x) ===
-// Все функции используют нативные хелперы ядра: popUInt8, popUInt32, pushBool, pushStringRaw.
-#include <Arduino.h>
-// ============================================================
-// === 1-Wire ТРАНСПОРТ (ow.*) ===
-// ============================================================
+// === pins.ino — GPIO, звук, LEDC, I2C (ESP32 Core 3.x, все семейства) ===
 //
-// Использование в HDL:
-//   4 ow.Init .              \ инициализация на пине 4 → true/false
-//   ow.Reset .               \ presence pulse → true если есть устройство
-//   0xCCu8 ow.Write          \ Skip ROM
-//   0x44u8 ow.Write          \ Convert T
-//   ow.Skip                  \ альтернатива 0xCC
-//   myRomArr ow.Select .     \ Match ROM (массив из 8 u8)
-//   ow.Read .                \ прочитать байт
-//   ow.ReadBit .             \ прочитать бит
-//   1u8 ow.WriteBit          \ записать бит
-//   myBuf ow.Search .        \ найти все устройства → количество
+// Поддерживаемые чипы: ESP32, ESP32-S2, ESP32-S3, ESP32-C3, ESP32-C5, ESP32-C6, ESP32-H2
+// Требуется: ESP_ARDUINO_VERSION_MAJOR >= 3 (Arduino Core 3.x)
 //
-// CRC проверяется общим словом crc8 из ядра:
-//   myRomArr crc8 .          \ должно быть 0 для валидного ROM-кода
+// 🔒 УСЛОВНАЯ КОМПИЛЯЦИЯ через #ifdef:
+// По умолчанию ВСЕ блоки ВКЛЮЧЕНЫ (строки раскомментированы).
+// Чтобы ОТКЛЮЧИТЬ ненужный блок — закомментируйте соответствующую строку:
 
+//#define HDL_ENABLE_ADC       // ADC API (оптимизированный для классического ESP32)
+//#define HDL_ENABLE_OW        // 1-Wire (ow.*)
+#define HDL_ENABLE_GPIO      // Базовые GPIO (pinMode, digitalRead, analogRead, ...)
+#define HDL_ENABLE_SOUND     // Звук (tone, beep, noTone)
+//#define HDL_ENABLE_LEDC      // Аппаратный PWM (ledcSetup, ledcAttach, ledcWrite)
+#define HDL_ENABLE_I2C       // I2C (Wire)
+
+#include <Arduino.h>
+
+// ============================================================
+// === БЛОК 1: ADC API ДЛЯ ESP32 CORE 3.x ===
+// ============================================================
+#ifdef HDL_ENABLE_ADC
+
+#if defined(CONFIG_IDF_TARGET_ESP32)
+// Классический ESP32 — используем adc_oneshot API (быстрее, точнее)
+#include "esp_adc/adc_oneshot.h"
+
+static adc_oneshot_unit_handle_t g_adc1_handle = nullptr;
+static adc_oneshot_unit_handle_t g_adc2_handle = nullptr;
+
+static bool adc_read_oneshot(uint8_t pin, int &out_raw) {
+    adc_unit_t unit;
+    adc_channel_t channel;
+    switch (pin) {
+        case 36: unit = ADC_UNIT_1; channel = ADC_CHANNEL_0; break;
+        case 37: unit = ADC_UNIT_1; channel = ADC_CHANNEL_1; break;
+        case 38: unit = ADC_UNIT_1; channel = ADC_CHANNEL_2; break;
+        case 39: unit = ADC_UNIT_1; channel = ADC_CHANNEL_3; break;
+        case 32: unit = ADC_UNIT_1; channel = ADC_CHANNEL_4; break;
+        case 33: unit = ADC_UNIT_1; channel = ADC_CHANNEL_5; break;
+        case 34: unit = ADC_UNIT_1; channel = ADC_CHANNEL_6; break;
+        case 35: unit = ADC_UNIT_1; channel = ADC_CHANNEL_7; break;
+        case 4:  unit = ADC_UNIT_2; channel = ADC_CHANNEL_0; break;
+        case 0:  unit = ADC_UNIT_2; channel = ADC_CHANNEL_1; break;
+        case 2:  unit = ADC_UNIT_2; channel = ADC_CHANNEL_2; break;
+        case 15: unit = ADC_UNIT_2; channel = ADC_CHANNEL_3; break;
+        case 13: unit = ADC_UNIT_2; channel = ADC_CHANNEL_4; break;
+        case 12: unit = ADC_UNIT_2; channel = ADC_CHANNEL_5; break;
+        case 14: unit = ADC_UNIT_2; channel = ADC_CHANNEL_6; break;
+        case 27: unit = ADC_UNIT_2; channel = ADC_CHANNEL_7; break;
+        case 25: unit = ADC_UNIT_2; channel = ADC_CHANNEL_8; break;
+        case 26: unit = ADC_UNIT_2; channel = ADC_CHANNEL_9; break;
+        default: return false;
+    }
+    adc_oneshot_unit_handle_t *handle_ptr = (unit == ADC_UNIT_1) ? &g_adc1_handle : &g_adc2_handle;
+    if (*handle_ptr == nullptr) {
+        adc_oneshot_unit_init_cfg_t init_cfg = { .unit_id = unit, .ulp_mode = ADC_ULP_MODE_DISABLE };
+        if (adc_oneshot_new_unit(&init_cfg, handle_ptr) != ESP_OK) return false;
+    }
+    adc_oneshot_chan_cfg_t chan_cfg = { .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT };
+    if (adc_oneshot_config_channel(*handle_ptr, channel, &chan_cfg) != ESP_OK) return false;
+    return adc_oneshot_read(*handle_ptr, channel, &out_raw) == ESP_OK;
+}
+#define HDL_ADC_ONESHOT 1
+#else
+// Все остальные чипы (S2/S3/C3/C5/C6/H2) — используем универсальный analogRead()
+#define HDL_ADC_ONESHOT 0
+#endif
+
+#endif // HDL_ENABLE_ADC
+
+// ============================================================
+// === БЛОК 2: 1-Wire (ow.*) ===
+// ============================================================
+#ifdef HDL_ENABLE_OW
+#include <OneWire.h>
 static OneWire* g_ow = nullptr;
 
-// ------------------------------------------------------------
-// Хелпер: извлечь массив u8/i8 со стека (снимает элемент)
-// ------------------------------------------------------------
 static bool popByteArray(const uint8_t*& out_data, uint16_t& out_len) {
     if (stack_is_empty()) return false;
     uint8_t* top = &stack_mem[stack_ptr];
-    const uint8_t* data;
-    uint16_t len, sz;
-    if (!extractPayload(top, data, len, sz)) {
-        stack_ptr += elem_size(top);
-        return false;
-    }
-    // Требуем ARRAY или REF_ARR
-    if (top[0] != 17 && top[0] != 20) {
-        stack_ptr += sz;
-        return false;
-    }
-    // Требуем размер элемента = 1 байт (u8 или i8)
+    const uint8_t* data; uint16_t len, sz;
+    if (!extractPayload(top, data, len, sz)) { stack_ptr += sz; return false; }
+    if (top[0] != 17 && top[0] != 20) { stack_ptr += sz; return false; }
     uint8_t type_id = top[5];
-    if (type_registry[type_id].size != 1) {
-        stack_ptr += sz;
-        return false;
-    }
-    out_data = data;
-    out_len = len;
-    stack_ptr += sz;
+    if (type_registry[type_id].size != 1) { stack_ptr += sz; return false; }
+    out_data = data; out_len = len; stack_ptr += sz;
     return true;
 }
 
-// ------------------------------------------------------------
-// ow.Init : pin → BOOL
-// ------------------------------------------------------------
 void owInitFunc() {
     uint8_t pin;
     if (!popUInt8(pin)) { pushBool(false); return; }
@@ -61,103 +95,31 @@ void owInitFunc() {
     g_ow = new OneWire(pin);
     pushBool(g_ow != nullptr);
 }
-
-// ------------------------------------------------------------
-// ow.Reset → BOOL (presence pulse)
-// ------------------------------------------------------------
-void owResetFunc() {
-    if (!g_ow) { pushBool(false); return; }
-    pushBool(g_ow->reset() != 0);
-}
-
-// ------------------------------------------------------------
-// ow.Write : u8 →
-// ------------------------------------------------------------
-void owWriteFunc() {
-    uint8_t b;
-    if (!popUInt8(b) || !g_ow) return;
-    g_ow->write(b, 0);
-}
-
-// ------------------------------------------------------------
-// ow.Read → u8
-// ------------------------------------------------------------
-void owReadFunc() {
-    if (!g_ow) { pushUInt8(0xFF); return; }
-    pushUInt8((uint8_t)g_ow->read());
-}
-
-// ------------------------------------------------------------
-// ow.WriteBit : u8 →
-// ------------------------------------------------------------
-void owWriteBitFunc() {
-    uint8_t b;
-    if (!popUInt8(b) || !g_ow) return;
-    g_ow->write_bit(b & 1);
-}
-
-// ------------------------------------------------------------
-// ow.ReadBit → u8
-// ------------------------------------------------------------
-void owReadBitFunc() {
-    if (!g_ow) { pushUInt8(0); return; }
-    pushUInt8((uint8_t)g_ow->read_bit());
-}
-
-// ------------------------------------------------------------
-// ow.Select : arr(8 u8) → BOOL (Match ROM)
-// ------------------------------------------------------------
+void owResetFunc()    { if (!g_ow) { pushBool(false); return; } pushBool(g_ow->reset() != 0); }
+void owWriteFunc()    { uint8_t b; if (!popUInt8(b) || !g_ow) return; g_ow->write(b, 0); }
+void owReadFunc()     { if (!g_ow) { pushUInt8(0xFF); return; } pushUInt8((uint8_t)g_ow->read()); }
+void owWriteBitFunc() { uint8_t b; if (!popUInt8(b) || !g_ow) return; g_ow->write_bit(b & 1); }
+void owReadBitFunc()  { if (!g_ow) { pushUInt8(0); return; } pushUInt8((uint8_t)g_ow->read_bit()); }
 void owSelectFunc() {
     if (!g_ow) { pushBool(false); return; }
     const uint8_t* data; uint16_t len;
-    if (!popByteArray(data, len) || len < 8) {
-        pushBool(false);
-        return;
-    }
-    g_ow->select(data);
-    pushBool(true);
+    if (!popByteArray(data, len) || len < 8) { pushBool(false); return; }
+    g_ow->select(data); pushBool(true);
 }
-
-// ------------------------------------------------------------
-// ow.Skip → BOOL (Skip ROM)
-// ------------------------------------------------------------
-void owSkipFunc() {
-    if (!g_ow) { pushBool(false); return; }
-    g_ow->skip();
-    pushBool(true);
-}
-
-// ------------------------------------------------------------
-// ow.Search : arr(u8) → u8 (количество найденных устройств)
-// Массив должен быть минимум на 8*N байт, где N — ожидаемое число устройств.
-// Автоматически вызывает reset_search перед поиском.
-// ------------------------------------------------------------
+void owSkipFunc()   { if (!g_ow) { pushBool(false); return; } g_ow->skip(); pushBool(true); }
 void owSearchFunc() {
     if (!g_ow) { pushUInt8(0); return; }
     if (stack_is_empty()) { pushUInt8(0); return; }
-
     uint8_t* top = &stack_mem[stack_ptr];
     uint16_t sz = elem_size(top);
-
-    // Требуем ARRAY или REF_ARR
-    if (top[0] != 17 && top[0] != 20) {
-        stack_ptr += sz;
-        pushUInt8(0);
-        return;
-    }
+    if (top[0] != 17 && top[0] != 20) { stack_ptr += sz; pushUInt8(0); return; }
     uint16_t base  = top[1] | (top[2] << 8);
     uint16_t count = top[3] | (top[4] << 8);
-    uint8_t  type_id = top[5];
     stack_ptr += sz;
-
-    // Требуем размер элемента = 1 байт
-    if (type_registry[type_id].size != 1) { pushUInt8(0); return; }
-    if (base + count > DATA_POOL_SIZE)    { pushUInt8(0); return; }
-
-    uint8_t max_devs = count / 8;
-    uint8_t found = 0;
+    if (type_registry[top[5]].size != 1) { pushUInt8(0); return; }
+    if (base + count > DATA_POOL_SIZE)   { pushUInt8(0); return; }
+    uint8_t max_devs = count / 8, found = 0;
     uint8_t rom[8];
-
     g_ow->reset_search();
     while (found < max_devs && g_ow->search(rom)) {
         memcpy(&data_pool[base + found * 8], rom, 8);
@@ -166,9 +128,6 @@ void owSearchFunc() {
     pushUInt8(found);
 }
 
-// ------------------------------------------------------------
-// Регистрация модуля
-// ------------------------------------------------------------
 void owModuleInit() {
     focusTo("ow");
     addInternalWord("ow.Init",     owInitFunc);
@@ -182,133 +141,15 @@ void owModuleInit() {
     addInternalWord("ow.Search",   owSearchFunc);
     focusTo("main");
 }
-// === Захватываем значения ядра на этапе компиляции ===
-constexpr uint8_t HDL_INPUT        = (uint8_t)INPUT;
-constexpr uint8_t HDL_OUTPUT       = (uint8_t)OUTPUT;
-constexpr uint8_t HDL_INPUT_PULLUP = (uint8_t)INPUT_PULLUP;
-constexpr uint8_t HDL_LOW          = (uint8_t)LOW;
-constexpr uint8_t HDL_HIGH         = (uint8_t)HIGH;
-
-// === ФУНКЦИИ-ОБЁРТКИ ДЛЯ КОНСТАНТ ===
-void lowWord()         { pushUInt8(HDL_LOW); }
-void highWord()        { pushUInt8(HDL_HIGH); }
-void inputWord()       { pushUInt8(HDL_INPUT); }
-void outputWord()      { pushUInt8(HDL_OUTPUT); }
-void inputPullupWord() { pushUInt8(HDL_INPUT_PULLUP); }
-void lsbfirstWord()    { pushUInt8(0); }
-void msbfirstWord()    { pushUInt8(1); }
-void crWord()          { pushStringRaw("\r"); }
-void lfWord()          { pushStringRaw("\n"); }
-void crlfWord()        { pushStringRaw("\r\n"); }
-void crlf2Word()       { pushStringRaw("\r\n\r\n"); }
-
-// === РЕГИСТРАЦИЯ GPIO ===
-void gpioInit() {
-    focusTo("gpio");
-    addInternalWord("pinMode",      pinModeWord);       // pin mode → void.
-    addInternalWord("digitalWrite", digitalWriteWord);  // pin value → void.
-    addInternalWord("analogWrite",  analogWriteWord);   // pin value → void.
-    addInternalWord("digitalRead",  digitalReadWord);   // pin → u8.
-    addInternalWord("analogRead",   analogReadWord);    // pin → u16.
-    addInternalWord("amv",          amvWord);           // pin → u32 (милливольты).
-    addInternalWord("pulseIn",      pulseInFunc);       // pin state [timeout] → u32.
-    addInternalWord("shiftOut",     shiftOutWord);      // dataPin clockPin bitOrder value → void.
-    addInternalWord("chip",         chipWord);          // → STRING (имя чипа).
-    addInternalWord("chip.id", chipIdFunc);
-    addInternalWord("LOW",          lowWord);           // → u8 (0).
-    addInternalWord("HIGH",         highWord);          // → u8 (1).
-    addInternalWord("INPUT",        inputWord);         // → u8 (INPUT).
-    addInternalWord("OUTPUT",       outputWord);        // → u8 (OUTPUT).
-    addInternalWord("INPUT_PULLUP", inputPullupWord);   // → u8 (INPUT_PULLUP).
-    addInternalWord("LSBFIRST",     lsbfirstWord);      // → u8 (0).
-    addInternalWord("MSBFIRST",     msbfirstWord);      // → u8 (1).
-    focusTo("main");
-    focusTo("io");
-    addInternalWord("CR",    crWord);                   // → STRING "\r".
-    addInternalWord("LF",    lfWord);                   // → STRING "\n".
-    addInternalWord("CRLF",  crlfWord);                 // → STRING "\r\n".
-    addInternalWord("CRLF2", crlf2Word);                // → STRING "\r\n\r\n".
-    focusTo("audio");
-    addInternalWord("tone",   toneWord);                // pin freq [duration] → void.
-    addInternalWord("beep",   beepWord);                // pin freq [duration] → void.
-    addInternalWord("noTone", noToneWord);              // pin → void.
-    executeLine("leds cont");
-    addInternalWord("ledcSetup",  ledcSetupWord);       // channel freq resolution → void.
-    addInternalWord("ledcAttach", ledcAttachWord);      // pin channel → void.
-    addInternalWord("ledcWrite",  ledcWriteWord);       // ch_or_pin duty → void.
-    focusTo("main");
-}
-
-// === GPIO ===
-void pinModeWord() {
-    uint8_t mode, pin;
-    if (!popUInt8(mode) || !popUInt8(pin)) return;
-    ::pinMode(pin, mode);
-}
-
-void digitalWriteWord() {
-    uint8_t val, pin;
-    if (!popUInt8(val) || !popUInt8(pin)) return;
-    ::digitalWrite(pin, val);
-}
-
-void analogWriteWord() {
-    uint8_t val, pin;
-    if (!popUInt8(val) || !popUInt8(pin)) return;
-    ::analogWrite(pin, val);
-}
-
-void digitalReadWord() {
-    uint8_t pin;
-    if (!popUInt8(pin)) return;
-    pushUInt8(::digitalRead(pin));
-}
-
-void analogReadWord() {
-    uint8_t pin;
-    if (!popUInt8(pin)) return;
-    uint16_t val = (uint16_t)::analogRead(pin);
-    uint8_t out[3] = {6, (uint8_t)(val & 0xFF), (uint8_t)(val >> 8)};
-    stack_push(out, 3);
-}
-
-void amvWord() {
-    uint8_t pin;
-    if (!popUInt8(pin)) return;
-#if defined(ESP32)
-    pushInt32(::analogReadMilliVolts(pin));
 #else
-    // Грубая аппроксимация для ESP8266 (1023 = ~1000mV)
-    pushInt32((::analogRead(pin) * 1000) / 1023);
-#endif
-}
+void owModuleInit() {}
+#endif // HDL_ENABLE_OW
 
-void pulseInFunc() {
-    uint8_t state, pin;
-    if (!popUInt8(state) || !popUInt8(pin)) return;
-    uint32_t timeout = 1000000UL;
-    if (!stack_is_empty()) {
-        uint8_t* top = &stack_mem[stack_ptr];
-        if (top[0] >= 4 && top[0] <= 11) popUInt32(timeout);
-    }
-    unsigned long duration = ::pulseIn(pin, state, timeout);
-    uint8_t out[5] = {9};
-    memcpy(&out[1], &duration, 4);
-    stack_push(out, 5);
-}
+// ============================================================
+// === БЛОК 3: ЗВУК (tone / beep / noTone) ===
+// ============================================================
+#ifdef HDL_ENABLE_SOUND
 
-void shiftOutWord() {
-    uint8_t value, bitOrder, clockPin, dataPin;
-    if (!popUInt8(value) || !popUInt8(bitOrder) || !popUInt8(clockPin) || !popUInt8(dataPin)) return;
-    ::shiftOut(dataPin, clockPin, bitOrder, value);
-}
-
-void chipWord() {
-    pushStringRaw(getChipName());
-}
-
-// === ЗВУКОВАЯ ПЕРИФЕРИЯ ===
-#if defined(ESP32) && defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
 #define TONE_MAX_PINS 8
 static struct { uint8_t pin; uint32_t freq; } g_tone_pins[TONE_MAX_PINS];
 static uint8_t g_tone_count = 0;
@@ -318,7 +159,6 @@ static int8_t tone_get_channel(uint8_t pin) {
         if (g_tone_pins[i].pin == pin) return i;
     return -1;
 }
-
 static int8_t tone_alloc_channel(uint8_t pin) {
     if (g_tone_count >= TONE_MAX_PINS) return -1;
     if (!::ledcAttach(pin, 5000, 10)) return -1;
@@ -326,191 +166,349 @@ static int8_t tone_alloc_channel(uint8_t pin) {
     g_tone_pins[g_tone_count].freq = 0;
     return g_tone_count++;
 }
-#endif
 
 void toneWord() {
-    uint8_t pin;
-    uint32_t freq;
+    uint8_t pin; uint32_t freq;
     if (!popUInt8(pin) || !popUInt32(freq) || freq == 0) return;
     uint32_t duration = 0;
     if (!stack_is_empty()) {
         uint8_t* top = &stack_mem[stack_ptr];
         if (top[0] >= 4 && top[0] <= 11) popUInt32(duration);
     }
-#if defined(ESP32) && defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
     int8_t idx = tone_get_channel(pin);
     if (idx < 0) idx = tone_alloc_channel(pin);
     if (idx < 0) return;
     ::ledcWriteTone(pin, freq);
     g_tone_pins[idx].freq = freq;
-    if (duration > 0) {
-        delay(duration);
-        ::ledcWriteTone(pin, 0);
-    }
-#else
-    ::tone(pin, freq, duration);
-#endif
+    if (duration > 0) { delay(duration); ::ledcWriteTone(pin, 0); }
 }
-
 void beepWord() {
-    uint8_t pin;
-    uint32_t freq;
+    uint8_t pin; uint32_t freq;
     if (!popUInt8(pin) || !popUInt32(freq)) return;
     uint32_t duration = 50;
     if (!stack_is_empty()) {
         uint8_t* top = &stack_mem[stack_ptr];
         if (top[0] >= 4 && top[0] <= 11) popUInt32(duration);
     }
-#if defined(ESP32) && defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
     int8_t idx = tone_get_channel(pin);
     if (idx < 0) idx = tone_alloc_channel(pin);
     if (idx < 0) return;
     ::ledcWriteTone(pin, freq);
     delay(duration);
     ::ledcWriteTone(pin, 0);
-#else
-    ::tone(pin, freq, duration);
-#endif
 }
-
 void noToneWord() {
     uint8_t pin;
     if (!popUInt8(pin)) return;
-#if defined(ESP32) && defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
     ::ledcWriteTone(pin, 0);
-#else
-    ::noTone(pin);
-#endif
 }
 
-// === LEDC PWM (ESP32) ===
-#if defined(ESP32) && defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void soundInit() {
+    focusTo("audio");
+    addInternalWord("tone",   toneWord);
+    addInternalWord("beep",   beepWord);
+    addInternalWord("noTone", noToneWord);
+    focusTo("main");
+}
+#else
+void soundInit() {}
+#endif // HDL_ENABLE_SOUND
+
+// ============================================================
+// === БЛОК 4: LEDC PWM (ESP32) ===
+// ============================================================
+#ifdef HDL_ENABLE_LEDC
+
 static uint32_t g_last_ledc_freq = 5000;
 static uint8_t  g_last_ledc_res  = 8;
-#endif
 
 void ledcSetupWord() {
-    uint8_t resolution, channel;
-    uint32_t freq;
+    uint8_t resolution, channel; uint32_t freq;
     if (!popUInt8(resolution) || !popUInt32(freq) || !popUInt8(channel)) return;
-#if defined(ESP32)
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
     g_last_ledc_freq = freq;
     g_last_ledc_res  = resolution;
     (void)channel;
-#else
-    ::ledcSetup(channel, freq, resolution);
-#endif
-#endif
 }
-
 void ledcAttachWord() {
     uint8_t channel, pin;
     if (!popUInt8(channel) || !popUInt8(pin)) return;
-#if defined(ESP32)
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    (void)channel;
     ::ledcAttach(pin, g_last_ledc_freq, g_last_ledc_res);
-#else
-    ::ledcAttachPin(pin, channel);
-#endif
-#else
-    (void)pin; (void)channel;
-#endif
 }
-
 void ledcWriteWord() {
-    uint32_t duty;
-    uint8_t ch_or_pin;
-    if (!popUInt32(duty) || !popUInt8(ch_or_pin)) return;
-#if defined(ESP32)
-    ::ledcWrite(ch_or_pin, duty);
-#endif
+    uint32_t duty; uint8_t pin;
+    if (!popUInt32(duty) || !popUInt8(pin)) return;
+    ::ledcWrite(pin, duty);
 }
 
-// === I2C ===
-#include <Wire.h>
+void ledcInit() {
+    executeLine("leds cont");
+    addInternalWord("ledcSetup",  ledcSetupWord);
+    addInternalWord("ledcAttach", ledcAttachWord);
+    addInternalWord("ledcWrite",  ledcWriteWord);
+    executeLine("main");
+}
+#else
+void ledcInit() {}
+#endif // HDL_ENABLE_LEDC
 
+
+// ============================================================
+// === БЛОК 5: GPIO (базовые пины) — РЕАЛИЗАЦИЯ ФУНКЦИЙ ======
+// ============================================================
+#ifdef HDL_ENABLE_GPIO
+
+// === КОНСТАНТЫ-СЛОВА (кладут u8 на стек) ===
+ void lowWord()         { pushUInt8(LOW); }
+ void highWord()        { pushUInt8(HIGH); }
+ void inputWord()       { pushUInt8(INPUT); }
+ void outputWord()      { pushUInt8(OUTPUT); }
+ void inputPullupWord() { pushUInt8(INPUT_PULLUP); }
+ void lsbfirstWord()    { pushUInt8(LSBFIRST); }
+ void msbfirstWord()    { pushUInt8(MSBFIRST); }
+
+// === СТРОКОВЫЕ КОНСТАНТЫ (кладут STRING на стек) ===
+void crWord()    { pushStringRaw("\r"); }
+void lfWord()    { pushStringRaw("\n"); }
+void crlfWord()  { pushStringRaw("\r\n"); }
+void crlf2Word() { pushStringRaw("\r\n\r\n"); }
+
+// === pinMode : pin mode → ===
+// R2L: mode → pin → pinMode
+void pinModeWord() {
+    uint8_t pin, mode;
+    if (!popUInt8(mode) || !popUInt8(pin)) {
+        pushBool(false);
+        return;
+    }
+    ::pinMode(pin, mode);
+    pushBool(true);
+}
+
+// === digitalWrite : pin value → ===
+// R2L: value → pin → digitalWrite
+void digitalWriteWord() {
+    uint8_t pin, val;
+    if (!popUInt8(val) || !popUInt8(pin)) {
+        pushBool(false);
+        return;
+    }
+    ::digitalWrite(pin, val ? HIGH : LOW);
+    pushBool(true);
+}
+
+// === digitalRead : pin → u8 ===
+void digitalReadWord() {
+    uint8_t pin;
+    if (!popUInt8(pin)) {
+        pushUInt8(0);
+        return;
+    }
+    pushUInt8((uint8_t)::digitalRead(pin));
+}
+
+// === analogWrite : pin value → ===
+// value — u32 (для совместимости с разным разрешением ШИМ)
+void analogWriteWord() {
+    uint8_t pin;
+    uint32_t val;
+    if (!popUInt32(val) || !popUInt8(pin)) {
+        pushBool(false);
+        return;
+    }
+#if defined(ESP32)
+    // ESP32: ledcWriteTone или analogWrite (Arduino Core 3.x)
+    ::analogWrite(pin, (uint8_t)(val & 0xFF));
+#else
+    ::analogWrite(pin, (uint8_t)(val & 0xFF));
+#endif
+    pushBool(true);
+}
+
+// === analogRead : pin → u16 ===
+void analogReadWord() {
+    uint8_t pin;
+    if (!popUInt8(pin)) { pushUInt16(0); return; }
+    
+    int raw = 0;
+    bool ok = false;
+    
+#if defined(ESP32) && defined(HDL_ENABLE_ADC) && HDL_ADC_ONESHOT
+    // 🔑 Используем НОВЫЙ драйвер (тот же, что в блоке ADC)
+    // Проверка ADC2 + Wi-Fi: на классическом ESP32 ADC2 заблокирован при Wi-Fi
+    if (pin == 4 || pin == 0 || pin == 2 || pin == 15 ||
+        pin == 13 || pin == 12 || pin == 14 || pin == 27 ||
+        pin == 25 || pin == 26) {
+        // Это пины ADC2
+        if (WiFi.status() == WL_CONNECTED) {
+            pushUInt16(0);  // ADC2 недоступен при Wi-Fi
+            return;
+        }
+    }
+    //ok = adc_read_oneshot(pin, raw);
+#else
+    // Другие чипы (S2/S3/C3/C5/C6/H2) или ADC отключён — legacy-драйвер
+    raw = ::analogRead(pin);
+    ok = true;
+#endif
+    
+    pushUInt16(ok ? (uint16_t)(raw & 0xFFFF) : 0);
+}
+
+// === amv : pin → u32 (милливольты) ===
+void amvWord() {
+    uint8_t pin;
+    if (!popUInt8(pin)) { pushUInt32(0); return; }
+    
+    int raw = 0;
+    bool ok = false;
+    
+#if defined(ESP32) && defined(HDL_ENABLE_ADC) && HDL_ADC_ONESHOT
+    // 🔑 Тот же драйвер, что в блоке ADC
+    if (pin == 4 || pin == 0 || pin == 2 || pin == 15 ||
+        pin == 13 || pin == 12 || pin == 14 || pin == 27 ||
+        pin == 25 || pin == 26) {
+        if (WiFi.status() == WL_CONNECTED) {
+            pushUInt32(0);
+            return;
+        }
+    }
+   // ok = adc_read_oneshot(pin, raw);
+#else
+    raw = ::analogRead(pin);
+    ok = true;
+#endif
+    
+    if (!ok) { pushUInt32(0); return; }
+    
+#if defined(ESP32)
+    // 12 бит → 4095, Vref ≈ 3300 мВ
+    uint32_t mv = ((uint32_t)(raw & 0xFFF) * 3300UL) / 4095UL;
+#else
+    // ESP8266: 10 бит → 1023, Vref ≈ 1000 мВ
+    uint32_t mv = ((uint32_t)(raw & 0x3FF) * 1000UL) / 1023UL;
+#endif
+    pushUInt32(mv);
+}
+
+// === pulseIn : pin value timeout → u32 (микросекунды) ===
+// R2L: timeout → value → pin → pulseIn
+void pulseInFunc() {
+    uint8_t pin, val;
+    uint32_t timeout;
+    if (!popUInt32(timeout) || !popUInt8(val) || !popUInt8(pin)) {
+        pushUInt32(0);
+        return;
+    }
+    unsigned long duration = ::pulseIn(pin, val ? HIGH : LOW, timeout);
+    pushUInt32((uint32_t)duration);
+}
+
+// === shiftOut : dataPin clockPin bitOrder value → ===
+// R2L: value → bitOrder → clockPin → dataPin → shiftOut
+void shiftOutWord() {
+    uint8_t dataPin, clockPin, bitOrder, value;
+    if (!popUInt8(value) || !popUInt8(bitOrder) ||
+        !popUInt8(clockPin) || !popUInt8(dataPin)) {
+        pushBool(false);
+        return;
+    }
+    ::shiftOut(dataPin, clockPin, bitOrder, value);
+    pushBool(true);
+}
+
+
+
+void gpioInit() {
+    focusTo("gpio");
+    addInternalWord("pinMode",      pinModeWord);
+    addInternalWord("digitalWrite", digitalWriteWord);
+    addInternalWord("analogWrite",  analogWriteWord);
+    addInternalWord("digitalRead",  digitalReadWord);
+    addInternalWord("analogRead",   analogReadWord);
+//    addInternalWord("amv",          amvWord);
+    addInternalWord("pulseIn",      pulseInFunc);
+    addInternalWord("shiftOut",     shiftOutWord);
+    addInternalWord("LOW",          lowWord);
+    addInternalWord("HIGH",         highWord);
+    addInternalWord("INPUT",        inputWord);
+    addInternalWord("OUTPUT",       outputWord);
+    addInternalWord("INPUT_PULLUP", inputPullupWord);
+    addInternalWord("LSBFIRST",     lsbfirstWord);
+    addInternalWord("MSBFIRST",     msbfirstWord);
+    focusTo("main");
+
+    focusTo("io");
+    addInternalWord("CR",    crWord);
+    addInternalWord("LF",    lfWord);
+    addInternalWord("CRLF",  crlfWord);
+    addInternalWord("CRLF2", crlf2Word);
+    focusTo("main");
+}
+#else
+void gpioInit() {}
+#endif // HDL_ENABLE_GPIO
+
+// ============================================================
+// === БЛОК 6: I2C (Wire) ===
+// ============================================================
+#ifdef HDL_ENABLE_I2C
+#include <Wire.h>
 static bool i2cInitialized = false;
 
 void i2cInitFunc() {
     uint8_t scl, sda;
     if (!popUInt8(scl) || !popUInt8(sda) || sda == scl) { pushBool(false); return; }
-    Wire.begin(sda, scl);
-    Wire.setClock(100000);
-    i2cInitialized = true;
-    pushBool(true);
+    Wire.begin(sda, scl); Wire.setClock(100000);
+    i2cInitialized = true; pushBool(true);
 }
-
 void i2cInitClokFunc() {
-    uint32_t freq;
-    uint8_t scl, sda;
+    uint32_t freq; uint8_t scl, sda;
     if (!popUInt32(freq) || !popUInt8(scl) || !popUInt8(sda) || sda == scl) { pushBool(false); return; }
     if (freq == 0) freq = 100000;
-    Wire.begin(sda, scl);
-    Wire.setClock(freq);
-    i2cInitialized = true;
+    Wire.begin(sda, scl); Wire.setClock(freq);
+    i2cInitialized = true; pushBool(true);
+}
+void i2cWriteFunc() {
+    uint8_t dev;
+    if (!popUInt8(dev) || !i2cInitialized || stack_is_empty()) { pushBool(false); return; }
+    uint8_t* top = &stack_mem[stack_ptr];
+    const uint8_t* ptr = nullptr; uint16_t len = 0, sz = 0;
+    if (!extractPayload(top, ptr, len, sz)) { pushBool(false); return; }
+    stack_ptr += sz;
+    const uint16_t CHUNK = 128; uint16_t sent = 0;
+    while (sent < len) {
+        uint16_t chunk = (len - sent > CHUNK) ? CHUNK : (len - sent);
+        Wire.beginTransmission(dev);
+        Wire.write(ptr + sent, chunk);
+        if (Wire.endTransmission(true) != 0) { pushBool(false); return; }
+        sent += chunk;
+    }
     pushBool(true);
 }
-
-void i2cWriteFunc() {
-  uint8_t dev;
-  if (!popUInt8(dev) || !i2cInitialized || stack_is_empty()) { pushBool(false); return; }
-
-  uint8_t* top = &stack_mem[stack_ptr];
-  const uint8_t* ptr = nullptr;
-  uint16_t len = 0, sz = 0;
-
-  if (!extractPayload(top, ptr, len, sz)) { pushBool(false); return; }
-  stack_ptr += sz;
-
-  // Разбиение на куски по 128 байт (аппаратное ограничение Wire)
-  const uint16_t CHUNK = 128;
-  uint16_t sent = 0;
-  while (sent < len) {
-    uint16_t chunk = (len - sent > CHUNK) ? CHUNK : (len - sent);
-    Wire.beginTransmission(dev);
-    Wire.write(ptr + sent, chunk);
-    if (Wire.endTransmission(true) != 0) { pushBool(false); return; }
-    sent += chunk;
-  }
-  pushBool(true);
-}
 void i2cWriteRegFunc() {
-  uint8_t val, reg, dev;
-  if (!popUInt8(dev) || !popUInt8(reg) || !popUInt8(val) ) { pushBool(false); return; }
-  if (!i2cInitialized) { pushBool(false); return; }
-  
-  Wire.beginTransmission(dev);
-  Wire.write(reg);
-  Wire.write(val);
-  pushBool(Wire.endTransmission(true) == 0);
+    uint8_t val, reg, dev;
+    if (!popUInt8(dev) || !popUInt8(reg) || !popUInt8(val)) { pushBool(false); return; }
+    if (!i2cInitialized) { pushBool(false); return; }
+    Wire.beginTransmission(dev); Wire.write(reg); Wire.write(val);
+    pushBool(Wire.endTransmission(true) == 0);
 }
 void i2cReadFunc() {
-    uint16_t a, l;
-    uint8_t dev;
-    if (!popUInt8(dev)  || !popAddrInfo(a, l) ) { pushBool(false); return; }
+    uint16_t a, l; uint8_t dev;
+    if (!popUInt8(dev) || !popAddrInfo(a, l)) { pushBool(false); return; }
     if (!i2cInitialized || a + l > DATA_POOL_SIZE || l == 0) { pushBool(false); return; }
     Wire.requestFrom((uint8_t)dev, (uint8_t)l);
     uint16_t cnt = 0;
-    while (Wire.available() && cnt < l) {
-        data_pool[a + cnt] = Wire.read();
-        cnt++;
-    }
+    while (Wire.available() && cnt < l) { data_pool[a + cnt] = Wire.read(); cnt++; }
     pushBool(cnt == l);
 }
-
 void i2cReadRegFunc() {
-    uint16_t a, l;
-    uint8_t reg, dev;
-    if (!popUInt8(dev) || !popUInt8(reg) || !popAddrInfo(a, l) ) { pushBool(false); return; }
+    uint16_t a, l; uint8_t reg, dev;
+    if (!popUInt8(dev) || !popUInt8(reg) || !popAddrInfo(a, l)) { pushBool(false); return; }
     if (!i2cInitialized || a + l > DATA_POOL_SIZE || l == 0) { pushBool(false); return; }
-    Wire.beginTransmission(dev);
-    Wire.write(reg);
+    Wire.beginTransmission(dev); Wire.write(reg);
     if (Wire.endTransmission(false) != 0) { pushBool(false); return; }
-    
-    // ИСПРАВЛЕНО: явное приведение типов для ESP8266
     if (Wire.requestFrom((uint8_t)dev, (uint8_t)l) < l) { pushBool(false); return; }
-    
     for (uint8_t i = 0; i < l; i++) data_pool[a + i] = Wire.read();
     pushBool(true);
 }
@@ -531,12 +529,15 @@ void i2cScanFunc() {
 
 void i2cInit() {
     focusTo("i2c");
-    addInternalWord("i2c.Init",     i2cInitFunc);      // sda scl → BOOL.
-    addInternalWord("i2c.Initclok", i2cInitClokFunc);  // sda scl freq → BOOL.
-    addInternalWord("i2c.Write",    i2cWriteFunc);     // array dev → BOOL.
+    addInternalWord("i2c.Init",     i2cInitFunc);
+    addInternalWord("i2c.Initclok", i2cInitClokFunc);
+    addInternalWord("i2c.Write",    i2cWriteFunc);
     addInternalWord("i2c.WriteReg", i2cWriteRegFunc);
-    addInternalWord("i2c.Read",     i2cReadFunc);      // array dev → BOOL.
-    addInternalWord("i2c.ReadReg",  i2cReadRegFunc);   // array reg dev → BOOL.
-    addInternalWord("i2c.Scan",     i2cScanFunc);      // array → u8 (количество найденных).
+    addInternalWord("i2c.Read",     i2cReadFunc);
+    addInternalWord("i2c.ReadReg",  i2cReadRegFunc);
+    addInternalWord("i2c.Scan",     i2cScanFunc);
     focusTo("main");
 }
+#else
+void i2cInit() {}
+#endif // HDL_ENABLE_I2C

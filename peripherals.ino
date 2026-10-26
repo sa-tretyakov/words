@@ -1,17 +1,30 @@
-// === peripherals.ino — RMT + I2S периферия ===
-// Работает на: ESP32, S3, C3, C5, C6, H2
-// НЕ работает на: ESP8266 (нет аппаратной поддержки RMT/I2S)
+// === peripherals.ino — RMT + I2S + BLE периферия ===
+// Работает на: ESP32, S2, S3, C3, C5, C6, H2
+// НЕ работает на: ESP8266 (нет аппаратной поддержки RMT/I2S/BLE)
 //
-// 🔒 Условная компиляция: на ESP8266 файл становится пустым,
-// но функции rmtModuleInit() и i2sInit() остаются доступными (ничего не делают).
+// 🔒 УСЛОВНАЯ КОМПИЛЯЦИЯ через #ifdef:
+// По умолчанию ВСЕ блоки ВКЛЮЧЕНЫ (строки раскомментированы).
+// Чтобы ОТКЛЮЧИТЬ ненужный блок — закомментируйте соответствующую строку:
 
+//#define HDL_ENABLE_RMT       // RMT периферия (TX/RX, энкодеры, carrier)
+#define HDL_ENABLE_I2S       // I2S аудио (TX/RX, PDM, формат)
+//#define HDL_ENABLE_BLE       // BLE NUS (Nordic UART Service)
+
+#include <Arduino.h>
+
+// ============================================================
+// === БЛОК 1: RMT ПЕРИФЕРИЯ ===
+// ============================================================
+// Работает только на ESP32 (все семейства).
+// На ESP8266 функция rmtModuleInit() существует, но ничего не делает.
+#ifdef HDL_ENABLE_RMT
 #if defined(ESP32)
 // ============================================================
-// === ВЕСЬ КОД RMT + I2S — ТОЛЬКО ДЛЯ ESP32 ===
+// === ВЕСЬ КОД RMT — ТОЛЬКО ДЛЯ ESP32 ===
 // ============================================================
-
 #include "driver/rmt_tx.h"
 #include "driver/rmt_rx.h"
+
 // 🔧 FIX: rmt_symbol_word → rmt_symbol_word_t (ESP-IDF 5.x)
 using rmt_symbol_word = rmt_symbol_word_t;
 
@@ -41,15 +54,15 @@ static rmt_encoder_handle_t rmt_copy_enc[8]  = {};
 
 // === RX буферы и состояние ===
 #define RMT_RX_BUF_SYMBOLS 128
-static rmt_symbol_word_t* rmt_rx_buf[8] = {nullptr};  // ← указатели вместо массивов
+static rmt_symbol_word_t* rmt_rx_buf[8] = {nullptr};
 static size_t rmt_rx_received[8] = {};
 static bool   rmt_rx_ready[8]    = {};
 
 // === RX callback ===
 static bool IRAM_ATTR rmt_rx_done_cb(rmt_channel_handle_t chan,
-    const rmt_rx_done_event_data_t *edata, void *) {
+                                     const rmt_rx_done_event_data_t *edata, void *) {
     for (int i = 0; i < 8; i++) {
-        if (rmt_rx_chan[i] == chan && rmt_rx_buf[i]) {  // ← проверка на nullptr
+        if (rmt_rx_chan[i] == chan && rmt_rx_buf[i]) {
             size_t n = edata->num_symbols;
             if (n > RMT_RX_BUF_SYMBOLS) n = RMT_RX_BUF_SYMBOLS;
             memcpy(rmt_rx_buf[i], edata->received_symbols, n * sizeof(rmt_symbol_word_t));
@@ -69,7 +82,7 @@ void nullArrayFunc() {
 
 // === Пересоздание bytes-encoder ===
 static void _rebuild_bytes_encoder(uint8_t ch) {
-    if (!rmt_bind[ch]) return;  // ← проверка на nullptr
+    if (!rmt_bind[ch]) return;
     if (rmt_bytes_enc[ch]) {
         rmt_del_encoder(rmt_bytes_enc[ch]);
         rmt_bytes_enc[ch] = nullptr;
@@ -88,33 +101,30 @@ static void _rebuild_bytes_encoder(uint8_t ch) {
 void rtmSetProtoFunc() {
     uint8_t ch; uint16_t a, l;
     if (!popUInt8(ch) || ch >= 8 || !popAddrInfo(a, l)) { pushBool(false); return; }
-    if (!rmt_bind[ch]) { pushBool(false); return; }  // ← проверка
+    if (!rmt_bind[ch]) { pushBool(false); return; }
     rmt_bind[ch]->proto_addr = a; rmt_bind[ch]->proto_len = l;
     rmt_proto_addr[ch] = a;
     if (rtmInstalled[ch]) _rebuild_bytes_encoder(ch);
     pushBool(true);
 }
-
 void rtmSetHeaderFunc() {
     uint8_t ch; uint16_t a, l;
     if (!popUInt8(ch) || ch >= 8 || !popAddrInfo(a, l)) { pushBool(false); return; }
-    if (!rmt_bind[ch]) { pushBool(false); return; }  // ← проверка
+    if (!rmt_bind[ch]) { pushBool(false); return; }
     rmt_bind[ch]->hdr_addr = a; rmt_bind[ch]->hdr_len = l;
     pushBool(true);
 }
-
 void rtmSetFooterFunc() {
     uint8_t ch; uint16_t a, l;
     if (!popUInt8(ch) || ch >= 8 || !popAddrInfo(a, l)) { pushBool(false); return; }
-    if (!rmt_bind[ch]) { pushBool(false); return; }  // ← проверка
+    if (!rmt_bind[ch]) { pushBool(false); return; }
     rmt_bind[ch]->ftr_addr = a; rmt_bind[ch]->ftr_len = l;
     pushBool(true);
 }
-
 void rtmSetDataFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch >= 8) { pushBool(false); return; }
-    if (!rmt_bind[ch]) { pushBool(false); return; }  // ← проверка
+    if (!rmt_bind[ch]) { pushBool(false); return; }
     uint8_t buf[8];
     uint16_t sz = stack_pop(buf, sizeof(buf));
     if (sz < 2) { pushBool(false); return; }
@@ -154,24 +164,23 @@ void rtmSendBeginFunc() {
     esp_err_t err = ESP_OK;
     if (b->hdr_addr && b->hdr_len && rmt_copy_enc[ch]) {
         err = rmt_transmit(rmt_tx_chan[ch], rmt_copy_enc[ch],
-            &data_pool[b->hdr_addr],
-            b->hdr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
+                           &data_pool[b->hdr_addr],
+                           b->hdr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
         if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
     }
     if (err == ESP_OK) {
         err = rmt_transmit(rmt_tx_chan[ch], rmt_bytes_enc[ch],
-            &data_pool[b->data_addr], b->data_len, &tx_cfg);
+                           &data_pool[b->data_addr], b->data_len, &tx_cfg);
         if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
     }
     if (err == ESP_OK && b->ftr_addr && b->ftr_len && rmt_copy_enc[ch]) {
         err = rmt_transmit(rmt_tx_chan[ch], rmt_copy_enc[ch],
-            &data_pool[b->ftr_addr],
-            b->ftr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
+                           &data_pool[b->ftr_addr],
+                           b->ftr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
         if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
     }
     pushBool(err == ESP_OK);
 }
-
 void rtmAllBeginFunc() {
     bool started = false;
     for (uint8_t ch = 0; ch < 8; ch++) {
@@ -183,19 +192,19 @@ void rtmAllBeginFunc() {
         esp_err_t err = ESP_OK;
         if (b->hdr_addr && b->hdr_len && rmt_copy_enc[ch]) {
             err = rmt_transmit(rmt_tx_chan[ch], rmt_copy_enc[ch],
-                &data_pool[b->hdr_addr],
-                b->hdr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
+                               &data_pool[b->hdr_addr],
+                               b->hdr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
             if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
         }
         if (err == ESP_OK) {
             err = rmt_transmit(rmt_tx_chan[ch], rmt_bytes_enc[ch],
-                &data_pool[b->data_addr], b->data_len, &tx_cfg);
+                               &data_pool[b->data_addr], b->data_len, &tx_cfg);
             if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
         }
         if (err == ESP_OK && b->ftr_addr && b->ftr_len && rmt_copy_enc[ch]) {
             err = rmt_transmit(rmt_tx_chan[ch], rmt_copy_enc[ch],
-                &data_pool[b->ftr_addr],
-                b->ftr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
+                               &data_pool[b->ftr_addr],
+                               b->ftr_len * sizeof(rmt_symbol_word_t), &tx_cfg);
             if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
         }
         if (err == ESP_OK) started = true;
@@ -209,11 +218,10 @@ void rtmInitFunc() {
     if (!popUInt8(ch) || ch >= 8 || !popUInt8(gpio) ||
         !popUInt8(mode) || mode > 1) { pushBool(false); return; }
     if (rtmInstalled[ch]) { pushBool(false); return; }
-    // 🔧 ДИНАМИЧЕСКОЕ ВЫДЕЛЕНИЕ: создаём binding только при необходимости
     if (!rmt_bind[ch]) {
         rmt_bind[ch] = (RmtBinding*)malloc(sizeof(RmtBinding));
         if (!rmt_bind[ch]) { pushBool(false); return; }
-        *rmt_bind[ch] = RmtBinding();  // Инициализация по умолчанию
+        *rmt_bind[ch] = RmtBinding();
     }
     esp_err_t err = ESP_FAIL;
     if (mode == 0) {
@@ -231,7 +239,6 @@ void rtmInitFunc() {
             err = rmt_new_copy_encoder(&copy_cfg, &rmt_copy_enc[ch]);
         }
     } else {
-        // 🔧 ДИНАМИЧЕСКОЕ ВЫДЕЛЕНИЕ: RX-буфер только для RX-режима
         if (!rmt_rx_buf[ch]) {
             rmt_rx_buf[ch] = (rmt_symbol_word_t*)malloc(RMT_RX_BUF_SYMBOLS * sizeof(rmt_symbol_word_t));
             if (!rmt_rx_buf[ch]) { pushBool(false); return; }
@@ -252,13 +259,12 @@ void rtmInitFunc() {
             rxcfg.signal_range_min_ns = 0;
             rxcfg.signal_range_max_ns = 10000000;
             rmt_receive(rmt_rx_chan[ch], rmt_rx_buf[ch],
-                RMT_RX_BUF_SYMBOLS * sizeof(rmt_symbol_word_t), &rxcfg);
+                        RMT_RX_BUF_SYMBOLS * sizeof(rmt_symbol_word_t), &rxcfg);
         }
     }
     if (err == ESP_OK) rtmInstalled[ch] = true;
     pushBool(err == ESP_OK);
 }
-
 void rtmClkFunc() {
     uint8_t ch, div;
     if (!popUInt8(ch) || ch >= 8 || !rtmInstalled[ch] || !rmt_bind[ch] ||
@@ -267,7 +273,6 @@ void rtmClkFunc() {
     rmt_bind[ch]->resolution_hz = new_res;
     pushBool(true);
 }
-
 void rtmMemFunc() {
     uint8_t blocks, ch;
     if (!popUInt8(blocks) || blocks == 0 || blocks > 8 ||
@@ -275,7 +280,6 @@ void rtmMemFunc() {
     rmt_bind[ch]->mem_block_symbols = (uint32_t)blocks * 48;
     pushBool(true);
 }
-
 void rtmCarrierFunc() {
     uint8_t ch, enable, levelVal = 0;
     if (!popUInt8(ch) || ch >= 8 || !rtmInstalled[ch] ||
@@ -303,7 +307,6 @@ void rtmCarrierFunc() {
         pushBool(rmt_apply_carrier(rmt_tx_chan[ch], nullptr) == ESP_OK);
     }
 }
-
 void rtmIdleFunc() {
     uint8_t ch, enable, levelVal;
     if (!popUInt8(ch) || ch >= 8 || !rtmInstalled[ch] ||
@@ -312,21 +315,18 @@ void rtmIdleFunc() {
     }
     pushBool(true);
 }
-
 void rtmLoopFunc() {
     uint8_t enable, ch;
     if (!popUInt8(enable) || enable > 1 || !popUInt8(ch) ||
         ch >= 8 || !rtmInstalled[ch]) { pushBool(false); return; }
     pushBool(true);
 }
-
 void rtmFilterFunc() {
     uint8_t thresh, enable, ch;
     if (!popUInt8(thresh) || !popUInt8(enable) || enable > 1 ||
         !popUInt8(ch) || ch >= 8 || !rtmInstalled[ch]) { pushBool(false); return; }
     pushBool(true);
 }
-
 void rtmDeinitFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch >= 8 || !rtmInstalled[ch]) { pushBool(false); return; }
@@ -335,7 +335,6 @@ void rtmDeinitFunc() {
     if (rmt_rx_chan[ch])   { if (rmt_del_channel(rmt_rx_chan[ch])   == ESP_OK) rmt_rx_chan[ch]   = nullptr; else err = ESP_FAIL; }
     if (rmt_bytes_enc[ch]) { if (rmt_del_encoder(rmt_bytes_enc[ch]) == ESP_OK) rmt_bytes_enc[ch] = nullptr; else err = ESP_FAIL; }
     if (rmt_copy_enc[ch])  { if (rmt_del_encoder(rmt_copy_enc[ch])  == ESP_OK) rmt_copy_enc[ch]  = nullptr; else err = ESP_FAIL; }
-    // 🔧 ОСВОБОЖДЕНИЕ ДИНАМИЧЕСКОЙ ПАМЯТИ
     if (rmt_rx_buf[ch]) { free(rmt_rx_buf[ch]); rmt_rx_buf[ch] = nullptr; }
     if (rmt_bind[ch]) { free(rmt_bind[ch]); rmt_bind[ch] = nullptr; }
     if (err == ESP_OK) rtmInstalled[ch] = false;
@@ -356,20 +355,18 @@ void rtmWriteFunc() {
     if (err == ESP_OK) rmt_tx_wait_all_done(rmt_tx_chan[ch], pdMS_TO_TICKS(1000));
     pushBool(err == ESP_OK);
 }
-
 void rtmAvailableFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch >= 8 || !rtmInstalled[ch]) { pushUInt16(0); return; }
     pushUInt16(rmt_rx_ready[ch] ? (uint16_t)rmt_rx_received[ch] : 0);
 }
-
 void rtmReadFunc() {
     uint16_t maxLen, daddr;
     uint8_t ch;
     if (!popUInt16(maxLen) || !popUInt16(daddr) || !popUInt8(ch) ||
         ch >= 8 || !rtmInstalled[ch]) { pushUInt16(0); return; }
     if (daddr >= DATA_POOL_SIZE || daddr + maxLen > DATA_POOL_SIZE) { pushUInt16(0); return; }
-    if (!rmt_rx_ready[ch] || !rmt_rx_buf[ch]) { pushUInt16(0); return; }  // ← проверка
+    if (!rmt_rx_ready[ch] || !rmt_rx_buf[ch]) { pushUInt16(0); return; }
     size_t avail_bytes = rmt_rx_received[ch] * sizeof(rmt_symbol_word_t);
     size_t toCopy = (avail_bytes > maxLen) ? maxLen : avail_bytes;
     memcpy(&data_pool[daddr], rmt_rx_buf[ch], toCopy);
@@ -379,13 +376,50 @@ void rtmReadFunc() {
         rxcfg.signal_range_min_ns = 0;
         rxcfg.signal_range_max_ns = 10000000;
         rmt_receive(rmt_rx_chan[ch], rmt_rx_buf[ch],
-            RMT_RX_BUF_SYMBOLS * sizeof(rmt_symbol_word_t), &rxcfg);
+                    RMT_RX_BUF_SYMBOLS * sizeof(rmt_symbol_word_t), &rxcfg);
     }
     pushUInt16(toCopy);
 }
 
+// === РЕГИСТРАЦИЯ СЛОВ RMT ===
+void rmtModuleInit() {
+    executeLine("rmt cont");
+    addInternalWord("rmt.Init",      rtmInitFunc);
+    addInternalWord("rmt.Clk",       rtmClkFunc);
+    addInternalWord("rmt.Mem",       rtmMemFunc);
+    addInternalWord("rmt.Carrier",   rtmCarrierFunc);
+    addInternalWord("rmt.Idle",      rtmIdleFunc);
+    addInternalWord("rmt.Loop",      rtmLoopFunc);
+    addInternalWord("rmt.Filter",    rtmFilterFunc);
+    addInternalWord("rmt.Deinit",    rtmDeinitFunc);
+    addInternalWord("rmt.Write",     rtmWriteFunc);
+    addInternalWord("rmt.Available", rtmAvailableFunc);
+    addInternalWord("rmt.Read",      rtmReadFunc);
+    addInternalWord("rmt.SetProto",  rtmSetProtoFunc);
+    addInternalWord("rmt.SetHeader", rtmSetHeaderFunc);
+    addInternalWord("rmt.SetFooter", rtmSetFooterFunc);
+    addInternalWord("rmt.SetData",   rtmSetDataFunc);
+    addInternalWord("rmt.SendBegin", rtmSendBeginFunc);
+    addInternalWord("rmt.AllBegin",  rtmAllBeginFunc);
+    addInternalWord("nullArray",     nullArrayFunc);
+    executeLine("main");
+}
+#else
+void rmtModuleInit() {}  // заглушка для ESP8266
+#endif // ESP32
+#else
+void rmtModuleInit() {}  // заглушка когда RMT отключён
+#endif // HDL_ENABLE_RMT
+
 // ============================================================
-// === I2S ПЕРИФЕРИЯ ===
+// === БЛОК 2: I2S ПЕРИФЕРИЯ ===
+// ============================================================
+// Работает только на ESP32 (все семейства).
+// На ESP8266 функция i2sInit() существует, но ничего не делает.
+#ifdef HDL_ENABLE_I2S
+#if defined(ESP32)
+// ============================================================
+// === ВЕСЬ КОД I2S — ТОЛЬКО ДЛЯ ESP32 ===
 // ============================================================
 #include "driver/i2s.h"
 
@@ -397,10 +431,9 @@ struct I2sBinding {
     uint16_t data_len  = 0;
     uint8_t  bps       = 16;       // bits per sample (8/16/24/32)
     uint8_t  channels  = 2;        // 1 = mono, 2 = stereo
-    uint32_t rate      = 44100;    // 🔑 сохраняем частоту для i2s_set_clk
+    uint32_t rate      = 44100;
     bool     ready     = false;
 };
-
 static I2sBinding i2s_bind[2];
 
 // 🔧 Вспомогательная: получить числовой код bits_per_sample
@@ -414,9 +447,6 @@ static inline int _i2s_bps_code(uint8_t bps) {
     }
 }
 
-// =========================================================
-// i2s.Init : channel mode sample_rate bits → BOOL
-// =========================================================
 void i2sInitFunc() {
     uint8_t ch, mode, bits;
     uint32_t rate;
@@ -469,9 +499,6 @@ void i2sInitFunc() {
     pushBool(err == ESP_OK);
 }
 
-// =========================================================
-// i2s.Pins : channel bck ws dout din → BOOL
-// =========================================================
 void i2sPinsFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
@@ -498,9 +525,6 @@ void i2sPinsFunc() {
     pushBool(i2s_set_pin((i2s_port_t)ch, &pin_cfg) == ESP_OK);
 }
 
-// =========================================================
-// i2s.SetData : channel array → BOOL
-// =========================================================
 void i2sSetDataFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1) { pushBool(false); return; }
@@ -530,9 +554,6 @@ void i2sSetDataFunc() {
     pushBool(true);
 }
 
-// =========================================================
-// i2s.Write : channel → written_bytes
-// =========================================================
 void i2sWriteFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch] || !i2s_bind[ch].ready) {
@@ -540,16 +561,13 @@ void i2sWriteFunc() {
     }
     size_t written = 0;
     i2s_write((i2s_port_t)ch,
-        &data_pool[i2s_bind[ch].data_addr],
-        i2s_bind[ch].data_len,
-        &written,
-        portMAX_DELAY);
+              &data_pool[i2s_bind[ch].data_addr],
+              i2s_bind[ch].data_len,
+              &written,
+              portMAX_DELAY);
     pushUInt16((uint16_t)written);
 }
 
-// =========================================================
-// i2s.WriteRaw : channel ADDRINFO → written_bytes
-// =========================================================
 void i2sWriteRawFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushUInt16(0); return; }
@@ -561,9 +579,6 @@ void i2sWriteRawFunc() {
     pushUInt16((uint16_t)written);
 }
 
-// =========================================================
-// i2s.Read : channel → read_bytes (блокирующее)
-// =========================================================
 void i2sReadFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch] || !i2s_bind[ch].ready) {
@@ -571,16 +586,13 @@ void i2sReadFunc() {
     }
     size_t read_bytes = 0;
     i2s_read((i2s_port_t)ch,
-        &data_pool[i2s_bind[ch].data_addr],
-        i2s_bind[ch].data_len,
-        &read_bytes,
-        portMAX_DELAY);
+             &data_pool[i2s_bind[ch].data_addr],
+             i2s_bind[ch].data_len,
+             &read_bytes,
+             portMAX_DELAY);
     pushUInt16((uint16_t)read_bytes);
 }
 
-// =========================================================
-// 🆕 i2s.ReadNB : channel [timeout_ms] → read_bytes
-// =========================================================
 void i2sReadNBFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch] || !i2s_bind[ch].ready) {
@@ -602,43 +614,31 @@ void i2sReadNBFunc() {
     TickType_t ticks = (timeout_ms == 0) ? 0 : pdMS_TO_TICKS(timeout_ms);
     size_t read_bytes = 0;
     i2s_read((i2s_port_t)ch,
-        &data_pool[i2s_bind[ch].data_addr],
-        i2s_bind[ch].data_len,
-        &read_bytes,
-        ticks);
+             &data_pool[i2s_bind[ch].data_addr],
+             i2s_bind[ch].data_len,
+             &read_bytes,
+             ticks);
     pushUInt16((uint16_t)read_bytes);
 }
 
-// =========================================================
-// i2s.Zero : channel → BOOL
-// =========================================================
 void i2sZeroFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
     pushBool(i2s_zero_dma_buffer((i2s_port_t)ch) == ESP_OK);
 }
 
-// =========================================================
-// i2s.Start : channel → BOOL
-// =========================================================
 void i2sStartFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
     pushBool(i2s_start((i2s_port_t)ch) == ESP_OK);
 }
 
-// =========================================================
-// i2s.Stop : channel → BOOL
-// =========================================================
 void i2sStopFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
     pushBool(i2s_stop((i2s_port_t)ch) == ESP_OK);
 }
 
-// =========================================================
-// i2s.Rate : channel rate → BOOL
-// =========================================================
 void i2sRateFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
@@ -654,9 +654,6 @@ void i2sRateFunc() {
     pushBool(err == ESP_OK);
 }
 
-// =========================================================
-// i2s.Deinit : channel → BOOL
-// =========================================================
 void i2sDeinitFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
@@ -668,9 +665,6 @@ void i2sDeinitFunc() {
     pushBool(err == ESP_OK);
 }
 
-// =========================================================
-// i2s.Available : channel → bytes_capacity
-// =========================================================
 void i2sAvailableFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushUInt32(0); return; }
@@ -678,9 +672,6 @@ void i2sAvailableFunc() {
     pushUInt32((uint32_t)avail);
 }
 
-// =========================================================
-// i2s.Pdm : channel → BOOL
-// =========================================================
 void i2sPdmFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) {
@@ -704,9 +695,6 @@ void i2sPdmFunc() {
 #endif
 }
 
-// =========================================================
-// i2s.Format : channel fmt → BOOL
-// =========================================================
 void i2sFormatFunc() {
     uint8_t ch, fmt;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
@@ -723,35 +711,29 @@ void i2sFormatFunc() {
         default: pushBool(false); return;
     }
     esp_err_t err = i2s_set_clk((i2s_port_t)ch,
-        i2s_bind[ch].rate,
-        (uint32_t)_i2s_bps_code(i2s_bind[ch].bps),
-        (i2s_channel_t)ch_mode);
+                                i2s_bind[ch].rate,
+                                (uint32_t)_i2s_bps_code(i2s_bind[ch].bps),
+                                (i2s_channel_t)ch_mode);
     if (err == ESP_OK) {
         i2s_bind[ch].channels = new_channels;
     }
     pushBool(err == ESP_OK);
 }
 
-// =========================================================
-// i2s.Mono : channel side → BOOL
-// =========================================================
 void i2sMonoFunc() {
     uint8_t ch, side;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch]) { pushBool(false); return; }
     if (!popUInt8(side) || side > 1) { pushBool(false); return; }
     esp_err_t err = i2s_set_clk((i2s_port_t)ch,
-        i2s_bind[ch].rate,
-        (uint32_t)_i2s_bps_code(i2s_bind[ch].bps),
-        I2S_CHANNEL_MONO);
+                                i2s_bind[ch].rate,
+                                (uint32_t)_i2s_bps_code(i2s_bind[ch].bps),
+                                I2S_CHANNEL_MONO);
     if (err == ESP_OK) {
         i2s_bind[ch].channels = 1;
     }
     pushBool(err == ESP_OK);
 }
 
-// =========================================================
-// i2s.Samples : channel → u32
-// =========================================================
 void i2sSamplesFunc() {
     uint8_t ch;
     if (!popUInt8(ch) || ch > 1 || !i2sInstalled[ch] || !i2s_bind[ch].ready) {
@@ -767,42 +749,8 @@ void i2sSamplesFunc() {
     pushUInt32(samples);
 }
 
-#endif // ESP32 — конец блока RMT + I2S кода
-
-// ============================================================
-// === РЕГИСТРАЦИЯ СЛОВ — ВСЕГДА ДОСТУПНА ===
-// ============================================================
-// На ESP8266 функции существуют, но ничего не делают.
-// Это позволяет вызывать rmtModuleInit() и i2sInit() из setup() без условной компиляции.
-
-void rmtModuleInit() {
-#if defined(ESP32)
-    executeLine("rmt cont");
-    addInternalWord("rmt.Init",      rtmInitFunc);
-    addInternalWord("rmt.Clk",       rtmClkFunc);
-    addInternalWord("rmt.Mem",       rtmMemFunc);
-    addInternalWord("rmt.Carrier",   rtmCarrierFunc);
-    addInternalWord("rmt.Idle",      rtmIdleFunc);
-    addInternalWord("rmt.Loop",      rtmLoopFunc);
-    addInternalWord("rmt.Filter",    rtmFilterFunc);
-    addInternalWord("rmt.Deinit",    rtmDeinitFunc);
-    addInternalWord("rmt.Write",     rtmWriteFunc);
-    addInternalWord("rmt.Available", rtmAvailableFunc);
-    addInternalWord("rmt.Read",      rtmReadFunc);
-    addInternalWord("rmt.SetProto",  rtmSetProtoFunc);
-    addInternalWord("rmt.SetHeader", rtmSetHeaderFunc);
-    addInternalWord("rmt.SetFooter", rtmSetFooterFunc);
-    addInternalWord("rmt.SetData",   rtmSetDataFunc);
-    addInternalWord("rmt.SendBegin", rtmSendBeginFunc);
-    addInternalWord("rmt.AllBegin",  rtmAllBeginFunc);
-    addInternalWord("nullArray",     nullArrayFunc);
-    executeLine("main");
-#endif
-    // На ESP8266 — просто выходим, ничего не регистрируя.
-}
-
+// === РЕГИСТРАЦИЯ СЛОВ I2S ===
 void i2sInit() {
-#if defined(ESP32)
     executeLine("i2s cont");
     addInternalWord("i2s.Init",       i2sInitFunc);
     addInternalWord("i2s.Pins",       i2sPinsFunc);
@@ -822,29 +770,50 @@ void i2sInit() {
     addInternalWord("i2s.Mono",       i2sMonoFunc);
     addInternalWord("i2s.Samples",    i2sSamplesFunc);
     executeLine("main");
-#endif
-    // На ESP8266 — просто выходим, ничего не регистрируя.
 }
+#else
+void i2sInit() {}  // заглушка для ESP8266
+#endif // ESP32
+#else
+void i2sInit() {}  // заглушка когда I2S отключён
+#endif // HDL_ENABLE_I2S
 
-// === BLE: один ключ HDL_ENABLE_BLE (задаётся в words.ino) ===
+// ============================================================
+// === БЛОК 3: BLE (Bluetooth Low Energy) ===
+// ============================================================
+// Работает на ESP32 (кроме ESP32-S2, у которого нет BLE).
+// На ESP8266 и ESP32-S2 функция btInit() существует, но ничего не делает.
+// bt_stream_write() существует ВСЕГДА (возвращает false на неподдерживаемых платформах).
+
 // HDL_HAS_BLE = 1 только если:
-//   • HDL_ENABLE_BLE == 1
+//   • HDL_ENABLE_BLE определён (блок не отключён)
 //   • платформа НЕ ESP8266 и НЕ ESP32-S2
-#ifndef HDL_ENABLE_BLE
-  #define HDL_ENABLE_BLE 1
-#endif
-
-#if HDL_ENABLE_BLE && !defined(ESP8266) && !defined(CONFIG_IDF_TARGET_ESP32S2)
-  #define HDL_HAS_BLE 1
+#ifdef HDL_ENABLE_BLE
+  #if !defined(ESP8266) && !defined(CONFIG_IDF_TARGET_ESP32S2)
+    #define HDL_HAS_BLE 1
+  #else
+    #define HDL_HAS_BLE 0
+  #endif
 #else
   #define HDL_HAS_BLE 0
 #endif
+
+// === МОСТ ДЛЯ HDLStream — ВСЕГДА ДОСТУПЕН ===
+// Используется в words.ino в HDLStream::flush() для T_BLE.
+bool bt_stream_write(uint8_t ch, const uint8_t* data, size_t len) {
+#if HDL_HAS_BLE
+    extern bool _bt_stream_write_impl(uint8_t ch, const uint8_t* data, size_t len);
+    return _bt_stream_write_impl(ch, data, len);
+#else
+    (void)ch; (void)data; (void)len;
+    return false;
+#endif
+}
 
 #if HDL_HAS_BLE
 // ============================================================
 // === ВЕСЬ КОД BLE — ТОЛЬКО ДЛЯ ПОДДЕРЖИВАЕМЫХ ПЛАТФОРМ ===
 // ============================================================
-
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -858,7 +827,6 @@ struct BtChannel {
     BLEService* pService = nullptr;
     BLECharacteristic* pTxCharacteristic = nullptr;
     BLECharacteristic* pRxCharacteristic = nullptr;
-    
     uint8_t* rx_buf = nullptr;
     volatile uint16_t rx_head = 0;
     volatile uint16_t rx_tail = 0;
@@ -880,7 +848,6 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
             }
         }
         if (ch == -1) return;
-        
         String rxValue = pCharacteristic->getValue();
         if (rxValue.length() > 0) {
             for (size_t i = 0; i < rxValue.length(); i++) {
@@ -915,7 +882,6 @@ void btInitFunc() {
     uint8_t ch; String name;
     if (!popUInt8(ch) || ch >= MAX_BT_CHANNELS || !popString(name)) { pushBool(false); return; }
     if (bt_channels[ch].installed) { pushBool(false); return; }
-    
     if (!ble_global_initialized) {
         if (!BLEDevice::init(name.c_str())) { pushBool(false); return; }
         pGlobalServer = BLEDevice::createServer();
@@ -927,12 +893,10 @@ void btInitFunc() {
         pAdvertising->setMinPreferred(0x12);
         ble_global_initialized = true;
     }
-    
     if (!bt_channels[ch].rx_buf) {
         bt_channels[ch].rx_buf = (uint8_t*)malloc(512);
         if (!bt_channels[ch].rx_buf) { pushBool(false); return; }
     }
-    
     char svc_uuid[37], rx_uuid[37], tx_uuid[37];
     if (ch == 0) {
         strcpy(svc_uuid, "6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
@@ -943,22 +907,17 @@ void btInitFunc() {
         snprintf(rx_uuid,  sizeof(rx_uuid),  "6E400002-B5A3-F393-E0A9-E50E24DCCA9%X", ch);
         snprintf(tx_uuid,  sizeof(tx_uuid),  "6E400003-B5A3-F393-E0A9-E50E24DCCA9%X", ch);
     }
-    
     BLEService* pService = pGlobalServer->createService(svc_uuid);
     if (!pService) { pushBool(false); return; }
-    
     bt_channels[ch].pTxCharacteristic = pService->createCharacteristic(
         tx_uuid, BLECharacteristic::PROPERTY_NOTIFY);
     bt_channels[ch].pTxCharacteristic->addDescriptor(new BLE2902());
-    
     bt_channels[ch].pRxCharacteristic = pService->createCharacteristic(
         rx_uuid, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
     bt_channels[ch].pRxCharacteristic->setCallbacks(new MyRxCallbacks());
-    
     pService->start();
     BLEDevice::getAdvertising()->addServiceUUID(svc_uuid);
     BLEDevice::startAdvertising();
-    
     bt_channels[ch].installed = true;
     if (currentOutput) currentOutput->printf("BLE channel %d started: %s\n", ch, name.c_str());
     pushBool(true);
@@ -976,7 +935,6 @@ void btReadFunc() {
     if (!popUInt8(ch) || ch >= MAX_BT_CHANNELS) { pushUInt16(0); return; }
     if (!popAddrInfo(base, max_len)) { pushUInt16(0); return; }
     if (!bt_channels[ch].installed || base + max_len > DATA_POOL_SIZE || bt_channels[ch].rx_count == 0) { pushUInt16(0); return; }
-    
     uint16_t to_read = (bt_channels[ch].rx_count > max_len) ? max_len : bt_channels[ch].rx_count;
     for (uint16_t i = 0; i < to_read; i++) {
         data_pool[base + i] = bt_channels[ch].rx_buf[bt_channels[ch].rx_tail];
@@ -994,13 +952,11 @@ void btSendFunc() {
         pushBool(false); return;
     }
     if (stack_is_empty()) { pushBool(false); return; }
-    
     uint8_t* data_ptr = &stack_mem[stack_ptr];
     uint8_t tag = data_ptr[0];
     uint16_t data_sz = elem_size(data_ptr);
     bool success = false;
     String txValue;
-    
     if (tag == 0x0E || tag == 0x0D) {
         uint8_t len = data_ptr[1];
         txValue = String((char*)&data_ptr[2], len);
@@ -1029,7 +985,6 @@ void btSendFunc() {
         }
     }
     stack_ptr += data_sz;
-    
     if (success && txValue.length() > 0) {
         bt_channels[ch].pTxCharacteristic->setValue(txValue);
         bt_channels[ch].pTxCharacteristic->notify();
@@ -1077,10 +1032,8 @@ void btRssiFunc() {
     pushInt32(rssi);
 }
 
-#endif // HDL_HAS_BLE — конец блока BLE-кода
-// === МОСТ ДЛЯ HDLStream ===
-bool bt_stream_write(uint8_t ch, const uint8_t* data, size_t len) {
-#if HDL_HAS_BLE
+// === РЕАЛИЗАЦИЯ МОСТА ДЛЯ HDLStream ===
+bool _bt_stream_write_impl(uint8_t ch, const uint8_t* data, size_t len) {
     if (ch >= MAX_BT_CHANNELS || !bt_channels[ch].installed ||
         !bt_channels[ch].connected || !bt_channels[ch].pTxCharacteristic) {
         return false;
@@ -1094,19 +1047,10 @@ bool bt_stream_write(uint8_t ch, const uint8_t* data, size_t len) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     return true;
-#else
-    (void)ch; (void)data; (void)len;
-    return false;
-#endif
 }
 
-// ============================================================
-// === РЕГИСТРАЦИЯ СЛОВ — ВСЕГДА ДОСТУПНА ===
-// ============================================================
-// На неподдерживаемых платформах функция существует, но ничего не делает.
-// Это позволяет вызывать btInit() из setup() без условной компиляции.
+// === РЕГИСТРАЦИЯ СЛОВ BLE ===
 void btInit() {
-#if HDL_HAS_BLE
     focusTo("bt");
     addInternalWord("bt.Init",      btInitFunc);
     addInternalWord("bt.Available", btAvailableFunc);
@@ -1117,7 +1061,7 @@ void btInit() {
     addInternalWord("bt.Mac",       btMacFunc);
     addInternalWord("bt.RSSI",      btRssiFunc);
     focusTo("main");
-#endif
-    // На ESP8266 / ESP32-S2 — просто выходим, ничего не регистрируя.
-    // Слова bt.* не будут доступны в словаре, но сборка пройдёт успешно.
 }
+#else
+void btInit() {}  // заглушка когда BLE отключён или платформа не поддерживается
+#endif // HDL_HAS_BLE

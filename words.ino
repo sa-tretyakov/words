@@ -1,5 +1,6 @@
-#define ETH_ENC28J60_ENABLED 1
-#define HDL_ENABLE_BLE 1   // 1 = включить BLE (если платформа позволяет), 0 = выключить
+#define ETH_ENC28J60_ENABLED 0
+#define DATA_POOL_STATIC 1
+
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -536,11 +537,20 @@ uint8_t ws_len = 0;
 #define DATA_POOL_SIZE  32768  // было 32768 (×2)
 #define RSTACK_SIZE     1024    // было 512   (×2)
 #define MAX_STACK_PRINT 32
+// 🔧 ПЕРЕНЕСТИ data_pool В СТАТИКУ?
+// 0 = выделять в heap (по умолчанию, для ESP32-C5 и других с большим heap)
+// 1 = статический массив в .bss (для классического ESP32, где не хватает heap)
 
 // === УКАЗАТЕЛИ НА ПУЛЫ (выделяются в heap при старте) ===
 uint8_t* stack_mem = nullptr;
 uint8_t* dict_pool = nullptr;
+#if DATA_POOL_STATIC
+static uint8_t g_data_pool_static[DATA_POOL_SIZE];
+uint8_t* data_pool = g_data_pool_static;
+#else
 uint8_t* data_pool = nullptr;
+#endif
+
 uint8_t* rstack_mem = nullptr;
 
 uint16_t stack_ptr = STACK_SIZE;
@@ -589,36 +599,39 @@ struct OutputGuard {
 // Выделяет память динамически → не занимает .bss → нет dram0_0_seg overflow.
 // Возвращает false при ошибке (не хватает heap).
 static bool init_pools() {
-    // Выравнивание 4 байта критично для uint16_t/uint32_t операций.
-    // malloc на ESP32 и так даёт 4-байтное выравнивание, но явно — надёжнее.
     stack_mem = (uint8_t*)malloc(STACK_SIZE);
     dict_pool = (uint8_t*)malloc(DICT_POOL_SIZE);
+#if !DATA_POOL_STATIC
     data_pool = (uint8_t*)malloc(DATA_POOL_SIZE);
+#endif
     rstack_mem = (uint8_t*)malloc(RSTACK_SIZE);
 
+#if DATA_POOL_STATIC
+    if (!stack_mem || !dict_pool || !rstack_mem) {
+        free(stack_mem); free(dict_pool); free(rstack_mem);
+        stack_mem = dict_pool = rstack_mem = nullptr;
+        return false;
+    }
+#else
     if (!stack_mem || !dict_pool || !data_pool || !rstack_mem) {
-        // Очистка частично выделенного
         free(stack_mem); free(dict_pool); free(data_pool); free(rstack_mem);
         stack_mem = dict_pool = data_pool = rstack_mem = nullptr;
         return false;
     }
+#endif
 
-    // Начальные значения указателей стеков
     stack_ptr = STACK_SIZE;
     rstack_ptr = RSTACK_SIZE;
     dict_ptr = 0;
     dict_last = 0xFFFF;
     data_ptr = 0;
 
-    // Обнуление (важно для стабильности)
     memset(stack_mem, 0, STACK_SIZE);
     memset(dict_pool, 0, DICT_POOL_SIZE);
     memset(data_pool, 0, DATA_POOL_SIZE);
     memset(rstack_mem, 0, RSTACK_SIZE);
-
     return true;
 }
-
 // === РЕЕСТР ТИПОВ ===
 enum { CAT_NONE, CAT_UINT, CAT_INT, CAT_FLOAT, CAT_TEXT, CAT_ADDR, CAT_LIST, CAT_STRUCT, CAT_REF };
 struct TypeInfo {
@@ -8238,6 +8251,22 @@ void word_json_star_frame() {
     if (json_len == 0) return;
     send_ws_frame_header(json_len);
 }
+// chip.id — уникальный ID чипа
+void chipIdFunc() {
+#if defined(ESP8266)
+    uint32_t id = ESP.getChipId();
+    char buf[9];
+    snprintf(buf, sizeof(buf), "%08X", id);
+#else
+    uint64_t id = ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL;
+    char buf[13];
+    snprintf(buf, sizeof(buf), "%012llX", (unsigned long long)id);
+#endif
+    pushStringRaw(buf);
+}
+void chipWord() {
+    pushStringRaw(getChipName());
+}
 void setup() {  
     Serial.begin(115200);
   // 3. ЖДЁМ ПОДКЛЮЧЕНИЯ ТЕРМИНАЛА (КРИТИЧНО ДЛЯ USB CDC)
@@ -8256,9 +8285,16 @@ void setup() {
             (unsigned)ESP.getFreeHeap());
         while (true) { delay(1000); }  // зависаем — дальше работать нельзя
     }
-    Serial.printf("pools allocated: %u bytes from heap (free: %u)\n",
-        (unsigned)(STACK_SIZE + DICT_POOL_SIZE + DATA_POOL_SIZE + RSTACK_SIZE),
-        (unsigned)ESP.getFreeHeap());
+#if DATA_POOL_STATIC
+Serial.printf("pools allocated: %u bytes from heap + %u static (free heap: %u)\n",
+    (unsigned)(STACK_SIZE + DICT_POOL_SIZE + RSTACK_SIZE),
+    (unsigned)DATA_POOL_SIZE,
+    (unsigned)ESP.getFreeHeap());
+#else
+Serial.printf("pools allocated: %u bytes from heap (free: %u)\n",
+    (unsigned)(STACK_SIZE + DICT_POOL_SIZE + DATA_POOL_SIZE + RSTACK_SIZE),
+    (unsigned)ESP.getFreeHeap());
+#endif
 
   stack_clear();
   if (!FILESYSTEM.begin()) currentOutput->println("FS Mount Failed");
@@ -8291,6 +8327,8 @@ void setup() {
 
   addInternalWord("all", word_words_all);   // ← ДОБАВИТЬ
   addInternalWord("exec", word_exec);
+  addInternalWord("chip",         chipWord);
+  addInternalWord("chip.id",      chipIdFunc);
   addInternalWord("sha1",  sha1Func);
   addInternalWord("base64>", base64Func);
   addInternalWord("uuid5", uuid5Func);
@@ -8308,7 +8346,8 @@ void setup() {
   executeLine("focus as cont");  
   addInternalWord("const", word_const);          // Помечает последнее созданное слово как константу (запрет на изменение).
   executeLine("? as help"); 
-  addInternalWord("print", word_print);
+  addInternalWord(".", word_print);
+  executeLine(". as print"); 
   // === УПРАВЛЕНИЕ ПОТОКОМ ИСПОЛНЕНИЯ ===
   addInternalWord("if", word_if);                // Ветвление: если верх стека истинен, исполняет тело, иначе перепрыгивает на адрес после '}'.
   addInternalWord("while", word_while);          // Цикл: проверяет условие на стеке. Если истинно, исполняет тело и возвращается к проверке.
@@ -8451,20 +8490,41 @@ void setup() {
   addInternalWord("write",   word_write);
   create_self_address_word("file");
 
-
-
-
-  gpioInit();
+//
+//Serial.println(">> 1 gpioInit");    gpioInit();
+//Serial.println(">> 2 ethInit");     ethInit();
+//Serial.println(">> 3 wifiInit");    wifiInit();
+//Serial.println(">> 4 webInit");     webInit();
+//Serial.println(">> 5 udpInit");     udpInit();
+//Serial.println(">> 6 tcpInit");     tcpInit();
+//Serial.println(">> 7 owInit");      owModuleInit();
+//Serial.println(">> 8 rmtInit");     rmtModuleInit();
+//Serial.println(">> 9 i2sInit");     i2sInit();
+//Serial.println(">> 10 i2cInit");    i2cInit();
+//Serial.println(">> 11 btInit");     btInit();
+//Serial.println(">> ALL DONE");
+//
   ethInit(); 
   wifiInit();
   webInit();
   udpInit();
   tcpInit();
-  owModuleInit();
-  rmtModuleInit();
-  i2sInit();
-  i2cInit();
-  btInit();
+  btInit();  
+
+
+
+gpioInit();
+
+
+
+owModuleInit();
+rmtModuleInit();
+i2sInit();
+
+i2cInit();
+
+
+
 
 #if ENABLE_TERM_LAYER
   addInternalWord("term", word_term);

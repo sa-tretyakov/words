@@ -159,19 +159,7 @@ void macEthFunc() {
 #endif
 }
 
-// chip.id — уникальный ID чипа
-void chipIdFunc() {
-#if defined(ESP8266)
-    uint32_t id = ESP.getChipId();
-    char buf[9];
-    snprintf(buf, sizeof(buf), "%08X", id);
-#else
-    uint64_t id = ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL;
-    char buf[13];
-    snprintf(buf, sizeof(buf), "%012llX", (unsigned long long)id);
-#endif
-    pushStringRaw(buf);
-}
+
 // === АВТО-ГЕНЕРАЦИЯ MAC ДЛЯ ENC28J60 ===
 // Использует уникальный MAC чипа ESP32 с префиксом 0x02 (Locally Administered)
 #if ETH_ENC28J60_ENABLED
